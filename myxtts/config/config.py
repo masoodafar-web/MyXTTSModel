@@ -18,7 +18,7 @@ class ModelConfig:
     text_encoder_dim: int = 512
     text_encoder_layers: int = 6
     text_encoder_heads: int = 8
-    text_vocab_size: int = 256
+    text_vocab_size: int = 256_256  # Updated for NLLB-200 tokenizer
     
     # Audio encoder settings (for voice conditioning)
     audio_encoder_dim: int = 512
@@ -44,6 +44,10 @@ class ModelConfig:
     # Language support
     languages: List[str] = None
     max_text_length: int = 500
+    
+    # Tokenizer settings
+    tokenizer_type: str = "nllb"  # "custom" or "nllb"
+    tokenizer_model: str = "facebook/nllb-200-distilled-600M"
     
     def __post_init__(self):
         if self.languages is None:

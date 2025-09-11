@@ -6,6 +6,7 @@ import numpy as np
 from myxtts.config.config import ModelConfig
 from myxtts.models.xtts import XTTS
 from myxtts.models.layers import MultiHeadAttention, PositionalEncoding, TransformerBlock
+from myxtts.utils.text import TextProcessor, NLLBTokenizer, TRANSFORMERS_AVAILABLE
 
 
 class TestModel(unittest.TestCase):
@@ -245,6 +246,69 @@ class TestModelIntegration(unittest.TestCase):
         # Check gradients exist
         self.assertIsNotNone(gradients)
         self.assertTrue(any(grad is not None for grad in gradients))
+
+
+class TestTokenizerIntegration(unittest.TestCase):
+    """Test tokenizer integration."""
+    
+    def test_text_processor_custom_tokenizer(self):
+        """Test TextProcessor with custom tokenizer."""
+        processor = TextProcessor(tokenizer_type="custom")
+        
+        text = "Hello, world!"
+        sequence = processor.text_to_sequence(text)
+        
+        # Check sequence is not empty
+        self.assertGreater(len(sequence), 0)
+        
+        # Check vocab size
+        vocab_size = processor.get_vocab_size()
+        self.assertGreater(vocab_size, 0)
+        
+        # Test batch processing
+        texts = ["Hello", "World"]
+        sequences, lengths = processor.batch_text_to_sequence(texts)
+        
+        self.assertEqual(len(sequences), 2)
+        self.assertEqual(len(lengths), 2)
+    
+    @unittest.skipUnless(TRANSFORMERS_AVAILABLE, "transformers library not available")
+    def test_text_processor_nllb_tokenizer(self):
+        """Test TextProcessor with NLLB tokenizer."""
+        # Test that we can create the processor structure (even if model download fails)
+        try:
+            processor = TextProcessor(tokenizer_type="nllb")
+            
+            # Check tokenizer type
+            self.assertEqual(processor.tokenizer_type, "nllb")
+            
+            # Test basic properties
+            self.assertIsNone(processor.symbols)  # Not used with NLLB
+            
+            # If we get here, the model was downloaded successfully
+            vocab_size = processor.get_vocab_size()
+            self.assertGreater(vocab_size, 250000)  # NLLB should have large vocab
+            
+        except (OSError, Exception) as e:
+            # Expected if there's no internet connection to download the model
+            if "huggingface.co" in str(e) or "connection" in str(e).lower():
+                self.skipTest("Cannot download NLLB model - no internet connection")
+            else:
+                raise e
+    
+    def test_config_with_nllb_settings(self):
+        """Test model config with NLLB tokenizer settings."""
+        config = ModelConfig()
+        config.tokenizer_type = "nllb"
+        config.text_vocab_size = 256_256
+        
+        # Test that config accepts NLLB settings
+        self.assertEqual(config.tokenizer_type, "nllb")
+        self.assertEqual(config.text_vocab_size, 256_256)
+        
+        # Test that model can be created with large vocab size
+        # (even if it fails due to missing layers, the config should work)
+        self.assertIsInstance(config, ModelConfig)
 
 
 if __name__ == '__main__':

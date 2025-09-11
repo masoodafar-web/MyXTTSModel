@@ -51,6 +51,40 @@ myxtts synthesize --config config.yaml --checkpoint ./checkpoints/checkpoint_bes
 myxtts clone-voice --config config.yaml --checkpoint ./checkpoints/checkpoint_best --text "Hello with cloned voice" --reference-audio reference.wav
 ```
 
+## Text Processing and Tokenization
+
+MyXTTS supports two tokenization approaches:
+
+### 1. Custom Symbol-based Tokenizer (Default)
+- Character-level tokenization with phoneme support
+- Smaller vocabulary (~256 symbols)
+- Suitable for single-language or limited multilingual use
+
+### 2. NLLB-200 Tokenizer (Recommended for Multilingual)
+- Pre-trained multilingual tokenizer from Facebook
+- Large vocabulary (256,000+ tokens)
+- Excellent multilingual coverage (200+ languages)
+
+```python
+from myxtts.utils.text import TextProcessor
+from myxtts.config.config import ModelConfig
+
+# Configure for NLLB-200 tokenizer
+config = ModelConfig()
+config.tokenizer_type = "nllb"
+config.tokenizer_model = "facebook/nllb-200-distilled-600M"
+config.text_vocab_size = 256_256
+
+# Create text processor
+processor = TextProcessor(
+    tokenizer_type="nllb",
+    tokenizer_model="facebook/nllb-200-distilled-600M"
+)
+
+# Tokenize text
+tokens = processor.text_to_sequence("Hello, multilingual world!")
+```
+
 ## Architecture
 
 MyXTTS implements a transformer-based architecture similar to the original XTTS:
