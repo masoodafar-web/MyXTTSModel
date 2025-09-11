@@ -1,0 +1,112 @@
+# MyXTTS Configuration Example
+# This file shows all available configuration options for MyXTTS
+
+model:
+  # Text encoder settings
+  text_encoder_dim: 512
+  text_encoder_layers: 6
+  text_encoder_heads: 8
+  text_vocab_size: 256
+  
+  # Audio encoder settings (for voice conditioning)
+  audio_encoder_dim: 512
+  audio_encoder_layers: 6
+  audio_encoder_heads: 8
+  
+  # Decoder settings
+  decoder_dim: 1024
+  decoder_layers: 12
+  decoder_heads: 16
+  
+  # Mel spectrogram settings
+  n_mels: 80
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  sample_rate: 22050
+  
+  # Voice conditioning
+  speaker_embedding_dim: 256
+  use_voice_conditioning: true
+  
+  # Language support
+  languages:
+    - en
+    - es
+    - fr
+    - de
+    - it
+    - pt
+    - pl
+    - tr
+    - ru
+    - nl
+    - cs
+    - ar
+    - zh
+    - ja
+    - hu
+    - ko
+  max_text_length: 500
+
+data:
+  # Dataset paths
+  dataset_path: "./data/ljspeech"
+  dataset_name: "ljspeech"
+  
+  # Audio processing
+  sample_rate: 22050
+  trim_silence: true
+  normalize_audio: true
+  
+  # Text processing
+  text_cleaners:
+    - "english_cleaners"
+  language: "en"
+  add_blank: true
+  
+  # Training data
+  train_split: 0.9
+  val_split: 0.1
+  batch_size: 32
+  num_workers: 4
+  
+  # Voice conditioning
+  reference_audio_length: 3.0  # seconds
+  min_audio_length: 1.0
+  max_audio_length: 11.0
+
+training:
+  # Training parameters
+  epochs: 1000
+  learning_rate: 0.0001
+  warmup_steps: 4000
+  weight_decay: 0.000001
+  gradient_clip_norm: 1.0
+  
+  # Optimizer
+  optimizer: "adamw"
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1.0e-8
+  
+  # Scheduler
+  scheduler: "noam"
+  scheduler_params: {}
+  
+  # Loss weights
+  mel_loss_weight: 45.0
+  kl_loss_weight: 1.0
+  duration_loss_weight: 1.0
+  
+  # Checkpointing
+  save_step: 25000
+  checkpoint_dir: "./checkpoints"
+  
+  # Validation
+  val_step: 5000
+  
+  # Logging
+  log_step: 100
+  use_wandb: false
+  wandb_project: "myxtts"
