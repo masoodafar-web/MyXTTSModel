@@ -62,6 +62,10 @@ class DataConfig:
     dataset_path: str = ""
     dataset_name: str = "ljspeech"
     
+    # Custom metadata file paths (optional)
+    metadata_train_file: Optional[str] = None  # Custom path for train metadata
+    metadata_eval_file: Optional[str] = None   # Custom path for eval/val metadata
+    
     # Audio processing
     sample_rate: int = 22050
     trim_silence: bool = True

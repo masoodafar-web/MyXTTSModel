@@ -34,6 +34,10 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(config.batch_size, 32)
         self.assertTrue(config.normalize_audio)
         self.assertIsInstance(config.text_cleaners, list)
+        
+        # Test metadata file defaults
+        self.assertIsNone(config.metadata_train_file)
+        self.assertIsNone(config.metadata_eval_file)
     
     def test_training_config_defaults(self):
         """Test TrainingConfig default values."""
@@ -93,6 +97,46 @@ class TestConfig(unittest.TestCase):
         self.assertIn('text_encoder_dim', config_dict['model'])
         self.assertIn('sample_rate', config_dict['data'])
         self.assertIn('learning_rate', config_dict['training'])
+    
+    def test_custom_metadata_file_paths(self):
+        """Test custom metadata file path configuration."""
+        # Test custom metadata files
+        config = DataConfig(
+            metadata_train_file="metadata_train.csv",
+            metadata_eval_file="metadata_eval.csv"
+        )
+        
+        self.assertEqual(config.metadata_train_file, "metadata_train.csv")
+        self.assertEqual(config.metadata_eval_file, "metadata_eval.csv")
+        
+        # Test absolute paths
+        config_abs = DataConfig(
+            metadata_train_file="/path/to/metadata_train.csv",
+            metadata_eval_file="/path/to/metadata_eval.csv"
+        )
+        
+        self.assertEqual(config_abs.metadata_train_file, "/path/to/metadata_train.csv")
+        self.assertEqual(config_abs.metadata_eval_file, "/path/to/metadata_eval.csv")
+        
+        # Test YAML serialization with custom metadata files
+        full_config = XTTSConfig()
+        full_config.data.metadata_train_file = "custom_train.csv"
+        full_config.data.metadata_eval_file = "custom_eval.csv"
+        
+        # Save and load
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml_path = f.name
+        
+        try:
+            full_config.to_yaml(yaml_path)
+            loaded_config = XTTSConfig.from_yaml(yaml_path)
+            
+            self.assertEqual(loaded_config.data.metadata_train_file, "custom_train.csv")
+            self.assertEqual(loaded_config.data.metadata_eval_file, "custom_eval.csv")
+        
+        finally:
+            if os.path.exists(yaml_path):
+                os.unlink(yaml_path)
 
 
 if __name__ == '__main__':

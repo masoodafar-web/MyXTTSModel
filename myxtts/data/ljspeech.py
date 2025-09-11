@@ -77,7 +77,9 @@ class LJSpeechDataset:
         # Dataset paths
         self.dataset_dir = self.data_path / "LJSpeech-1.1"
         self.wavs_dir = self.dataset_dir / "wavs"
-        self.metadata_file = self.dataset_dir / "metadata.csv"
+        
+        # Set metadata file path based on subset and configuration
+        self.metadata_file = self._get_metadata_file_path(subset)
         
         # Processed data paths
         self.processed_dir = self.data_path / "processed"
@@ -95,6 +97,34 @@ class LJSpeechDataset:
         self.items = self.splits[self.subset]
         
         print(f"Loaded {len(self.items)} items for {subset} subset")
+    
+    def _get_metadata_file_path(self, subset: str) -> Path:
+        """
+        Get metadata file path based on subset and configuration.
+        
+        Args:
+            subset: Dataset subset ("train", "val", "test")
+            
+        Returns:
+            Path to metadata file
+        """
+        if subset == "train" and self.config.metadata_train_file:
+            # Use custom train metadata file
+            metadata_path = Path(self.config.metadata_train_file)
+            if not metadata_path.is_absolute():
+                # Relative path - make it relative to dataset directory
+                return self.dataset_dir / metadata_path
+            return metadata_path
+        elif subset in ["val", "test"] and self.config.metadata_eval_file:
+            # Use custom eval metadata file for validation and test
+            metadata_path = Path(self.config.metadata_eval_file)
+            if not metadata_path.is_absolute():
+                # Relative path - make it relative to dataset directory
+                return self.dataset_dir / metadata_path
+            return metadata_path
+        else:
+            # Use default metadata.csv file
+            return self.dataset_dir / "metadata.csv"
     
     def _prepare_dataset(self):
         """Download and extract dataset if necessary."""

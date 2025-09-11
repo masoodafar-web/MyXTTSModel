@@ -61,7 +61,9 @@ def create_default_config(
     epochs: int = 100,
     learning_rate: float = 1e-4,
     sample_rate: int = 22050,
-    checkpoint_dir: str = "./checkpoints"
+    checkpoint_dir: str = "./checkpoints",
+    metadata_train_file: Optional[str] = None,
+    metadata_eval_file: Optional[str] = None
 ) -> XTTSConfig:
     """
     Create a default configuration programmatically without requiring YAML.
@@ -74,6 +76,8 @@ def create_default_config(
         learning_rate: Learning rate for optimizer
         sample_rate: Audio sample rate
         checkpoint_dir: Directory to save checkpoints
+        metadata_train_file: Custom train metadata file path (optional)
+        metadata_eval_file: Custom eval metadata file path (optional)
     
     Returns:
         XTTSConfig: Configured XTTS configuration object
@@ -85,6 +89,12 @@ def create_default_config(
     config.data.language = language
     config.data.batch_size = batch_size
     config.data.sample_rate = sample_rate
+    
+    # Configure custom metadata file paths if provided
+    if metadata_train_file:
+        config.data.metadata_train_file = metadata_train_file
+    if metadata_eval_file:
+        config.data.metadata_eval_file = metadata_eval_file
     
     # Configure model settings
     config.model.sample_rate = sample_rate
@@ -252,6 +262,10 @@ def main():
     parser.add_argument("--sample-rate", type=int, default=22050, help="Audio sample rate")
     parser.add_argument("--checkpoint-dir", default="./checkpoints", help="Checkpoint directory")
     
+    # Custom metadata file options
+    parser.add_argument("--metadata-train-file", help="Custom train metadata file path (e.g., metadata_train.csv)")
+    parser.add_argument("--metadata-eval-file", help="Custom eval metadata file path (e.g., metadata_eval.csv)")
+    
     # Training options
     parser.add_argument("--resume-from", help="Resume training from checkpoint")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -285,6 +299,11 @@ def main():
                 config.training.learning_rate = args.learning_rate
             if args.checkpoint_dir != "./checkpoints":
                 config.training.checkpoint_dir = args.checkpoint_dir
+            # Override metadata file paths if provided
+            if args.metadata_train_file:
+                config.data.metadata_train_file = args.metadata_train_file
+            if args.metadata_eval_file:
+                config.data.metadata_eval_file = args.metadata_eval_file
         else:
             if args.config:
                 print(f"Warning: Configuration file {args.config} not found, using programmatic config")
@@ -296,7 +315,9 @@ def main():
                 epochs=args.epochs,
                 learning_rate=args.learning_rate,
                 sample_rate=args.sample_rate,
-                checkpoint_dir=args.checkpoint_dir
+                checkpoint_dir=args.checkpoint_dir,
+                metadata_train_file=args.metadata_train_file,
+                metadata_eval_file=args.metadata_eval_file
             )
         
         train_model(config, resume_checkpoint=args.resume_from)
@@ -326,7 +347,9 @@ def main():
             epochs=args.epochs,
             learning_rate=args.learning_rate,
             sample_rate=args.sample_rate,
-            checkpoint_dir=args.checkpoint_dir
+            checkpoint_dir=args.checkpoint_dir,
+            metadata_train_file=args.metadata_train_file,
+            metadata_eval_file=args.metadata_eval_file
         )
 
 
