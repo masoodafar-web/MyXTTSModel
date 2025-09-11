@@ -1,0 +1,561 @@
+"""
+XTTS Training Pipeline.
+
+This module implements the training pipeline for MyXTTS including
+data loading, model training, validation, and checkpointing.
+"""
+
+import os
+import time
+from typing import Dict, Optional, Tuple, Any
+import numpy as np
+import tensorflow as tf
+from tqdm import tqdm
+import wandb
+
+from ..models.xtts import XTTS
+from ..data.ljspeech import LJSpeechDataset
+from ..config.config import XTTSConfig
+from ..utils.commons import (
+    save_checkpoint, 
+    load_checkpoint, 
+    find_latest_checkpoint,
+    setup_logging,
+    EarlyStopping,
+    get_device
+)
+from .losses import XTTSLoss, create_stop_targets
+
+
+class XTTSTrainer:
+    """
+    XTTS model trainer with support for distributed training,
+    checkpointing, and various optimization strategies.
+    """
+    
+    def __init__(
+        self,
+        config: XTTSConfig,
+        model: Optional[XTTS] = None,
+        resume_checkpoint: Optional[str] = None
+    ):
+        """
+        Initialize XTTS trainer.
+        
+        Args:
+            config: Training configuration
+            model: Pre-initialized model (creates new if None)
+            resume_checkpoint: Path to checkpoint for resuming training
+        """
+        self.config = config
+        self.logger = setup_logging()
+        
+        # Setup device and mixed precision
+        self.device = get_device()
+        self.logger.info(f"Using device: {self.device}")
+        
+        if self.device == "GPU":
+            # Enable mixed precision for faster training
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            self.logger.info("Mixed precision enabled")
+        
+        # Initialize model
+        if model is None:
+            self.model = XTTS(config.model)
+        else:
+            self.model = model
+        
+        # Initialize optimizer
+        self.optimizer = self._create_optimizer()
+        
+        # Initialize loss function
+        self.criterion = XTTSLoss(
+            mel_loss_weight=config.training.mel_loss_weight,
+            stop_loss_weight=1.0,
+            attention_loss_weight=config.training.kl_loss_weight,
+            duration_loss_weight=config.training.duration_loss_weight
+        )
+        
+        # Initialize learning rate scheduler
+        self.lr_scheduler = self._create_lr_scheduler()
+        
+        # Training state
+        self.current_step = 0
+        self.current_epoch = 0
+        self.best_val_loss = float('inf')
+        
+        # Early stopping
+        self.early_stopping = EarlyStopping(
+            patience=20,
+            min_delta=0.001,
+            restore_best_weights=True
+        )
+        
+        # Initialize wandb if configured
+        if config.training.use_wandb:
+            wandb.init(
+                project=config.training.wandb_project,
+                config=config.to_dict(),
+                name=f"xtts_run_{int(time.time())}"
+            )
+        
+        # Resume from checkpoint if specified
+        if resume_checkpoint:
+            self._load_checkpoint(resume_checkpoint)
+    
+    def _create_optimizer(self) -> tf.keras.optimizers.Optimizer:
+        """Create optimizer based on configuration."""
+        config = self.config.training
+        
+        if config.optimizer.lower() == "adam":
+            return tf.keras.optimizers.Adam(
+                learning_rate=config.learning_rate,
+                beta_1=config.beta1,
+                beta_2=config.beta2,
+                epsilon=config.eps
+            )
+        elif config.optimizer.lower() == "adamw":
+            return tf.keras.optimizers.AdamW(
+                learning_rate=config.learning_rate,
+                beta_1=config.beta1,
+                beta_2=config.beta2,
+                epsilon=config.eps,
+                weight_decay=config.weight_decay
+            )
+        else:
+            raise ValueError(f"Unknown optimizer: {config.optimizer}")
+    
+    def _create_lr_scheduler(self) -> Optional[tf.keras.optimizers.schedules.LearningRateSchedule]:
+        """Create learning rate scheduler."""
+        config = self.config.training
+        
+        if config.scheduler == "noam":
+            return NoamSchedule(
+                self.config.model.text_encoder_dim,
+                warmup_steps=config.warmup_steps
+            )
+        elif config.scheduler == "cosine":
+            return tf.keras.optimizers.schedules.CosineDecay(
+                initial_learning_rate=config.learning_rate,
+                decay_steps=config.epochs * 1000,  # Approximate
+                **config.scheduler_params
+            )
+        elif config.scheduler == "exponential":
+            return tf.keras.optimizers.schedules.ExponentialDecay(
+                initial_learning_rate=config.learning_rate,
+                decay_steps=config.scheduler_params.get("decay_steps", 10000),
+                decay_rate=config.scheduler_params.get("decay_rate", 0.96)
+            )
+        else:
+            return None
+    
+    def prepare_datasets(
+        self,
+        train_data_path: str,
+        val_data_path: Optional[str] = None
+    ) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
+        """
+        Prepare training and validation datasets.
+        
+        Args:
+            train_data_path: Path to training data
+            val_data_path: Path to validation data (uses train path if None)
+            
+        Returns:
+            Tuple of (train_dataset, val_dataset)
+        """
+        # Create training dataset
+        train_dataset = LJSpeechDataset(
+            data_path=train_data_path,
+            config=self.config.data,
+            subset="train",
+            download=True
+        )
+        
+        # Create validation dataset
+        val_data_path = val_data_path or train_data_path
+        val_dataset = LJSpeechDataset(
+            data_path=val_data_path,
+            config=self.config.data,
+            subset="val",
+            download=False
+        )
+        
+        # Convert to TensorFlow datasets
+        train_tf_dataset = train_dataset.create_tf_dataset(
+            batch_size=self.config.data.batch_size,
+            shuffle=True,
+            repeat=True,
+            prefetch=True
+        )
+        
+        val_tf_dataset = val_dataset.create_tf_dataset(
+            batch_size=self.config.data.batch_size,
+            shuffle=False,
+            repeat=False,
+            prefetch=True
+        )
+        
+        self.logger.info(f"Training samples: {len(train_dataset)}")
+        self.logger.info(f"Validation samples: {len(val_dataset)}")
+        
+        return train_tf_dataset, val_tf_dataset
+    
+    @tf.function
+    def train_step(
+        self,
+        text_sequences: tf.Tensor,
+        mel_spectrograms: tf.Tensor,
+        text_lengths: tf.Tensor,
+        mel_lengths: tf.Tensor
+    ) -> Dict[str, tf.Tensor]:
+        """
+        Single training step.
+        
+        Args:
+            text_sequences: Text token sequences [batch, text_len]
+            mel_spectrograms: Target mel spectrograms [batch, mel_len, n_mels]
+            text_lengths: Text sequence lengths [batch]
+            mel_lengths: Mel sequence lengths [batch]
+            
+        Returns:
+            Dictionary with loss values
+        """
+        with tf.GradientTape() as tape:
+            # Forward pass
+            outputs = self.model(
+                text_inputs=text_sequences,
+                mel_inputs=mel_spectrograms,
+                text_lengths=text_lengths,
+                mel_lengths=mel_lengths,
+                training=True
+            )
+            
+            # Prepare targets
+            stop_targets = create_stop_targets(
+                mel_lengths, 
+                tf.shape(mel_spectrograms)[1]
+            )
+            
+            y_true = {
+                "mel_target": mel_spectrograms,
+                "stop_target": stop_targets,
+                "text_lengths": text_lengths,
+                "mel_lengths": mel_lengths
+            }
+            
+            y_pred = {
+                "mel_output": outputs["mel_output"],
+                "stop_tokens": outputs["stop_tokens"]
+            }
+            
+            # Compute loss
+            loss = self.criterion(y_true, y_pred)
+            
+            # Scale loss for mixed precision
+            if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
+                loss = self.optimizer.get_scaled_loss(loss)
+        
+        # Compute gradients
+        gradients = tape.gradient(loss, self.model.trainable_variables)
+        
+        # Scale gradients for mixed precision
+        if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
+            gradients = self.optimizer.get_unscaled_gradients(gradients)
+        
+        # Clip gradients
+        if self.config.training.gradient_clip_norm > 0:
+            gradients, _ = tf.clip_by_global_norm(
+                gradients, 
+                self.config.training.gradient_clip_norm
+            )
+        
+        # Apply gradients
+        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+        
+        # Get individual losses
+        individual_losses = self.criterion.get_losses()
+        
+        return {
+            "total_loss": loss,
+            **individual_losses
+        }
+    
+    @tf.function
+    def validation_step(
+        self,
+        text_sequences: tf.Tensor,
+        mel_spectrograms: tf.Tensor,
+        text_lengths: tf.Tensor,
+        mel_lengths: tf.Tensor
+    ) -> Dict[str, tf.Tensor]:
+        """
+        Single validation step.
+        
+        Args:
+            text_sequences: Text token sequences [batch, text_len]
+            mel_spectrograms: Target mel spectrograms [batch, mel_len, n_mels]  
+            text_lengths: Text sequence lengths [batch]
+            mel_lengths: Mel sequence lengths [batch]
+            
+        Returns:
+            Dictionary with loss values
+        """
+        # Forward pass
+        outputs = self.model(
+            text_inputs=text_sequences,
+            mel_inputs=mel_spectrograms,
+            text_lengths=text_lengths,
+            mel_lengths=mel_lengths,
+            training=False
+        )
+        
+        # Prepare targets
+        stop_targets = create_stop_targets(
+            mel_lengths,
+            tf.shape(mel_spectrograms)[1]
+        )
+        
+        y_true = {
+            "mel_target": mel_spectrograms,
+            "stop_target": stop_targets,
+            "text_lengths": text_lengths,
+            "mel_lengths": mel_lengths
+        }
+        
+        y_pred = {
+            "mel_output": outputs["mel_output"],
+            "stop_tokens": outputs["stop_tokens"]
+        }
+        
+        # Compute loss
+        loss = self.criterion(y_true, y_pred)
+        
+        # Get individual losses
+        individual_losses = self.criterion.get_losses()
+        
+        return {
+            "total_loss": loss,
+            **individual_losses
+        }
+    
+    def train(
+        self,
+        train_dataset: tf.data.Dataset,
+        val_dataset: tf.data.Dataset,
+        epochs: Optional[int] = None,
+        steps_per_epoch: Optional[int] = None
+    ):
+        """
+        Main training loop.
+        
+        Args:
+            train_dataset: Training dataset
+            val_dataset: Validation dataset
+            epochs: Number of epochs (uses config if None)
+            steps_per_epoch: Steps per epoch (auto-calculated if None)
+        """
+        epochs = epochs or self.config.training.epochs
+        
+        self.logger.info(f"Starting training for {epochs} epochs")
+        self.logger.info(f"Current step: {self.current_step}")
+        
+        # Training loop
+        for epoch in range(self.current_epoch, epochs):
+            self.current_epoch = epoch
+            
+            # Training phase
+            train_losses = self._train_epoch(train_dataset, steps_per_epoch)
+            
+            # Validation phase
+            if epoch % (self.config.training.val_step // 1000) == 0:
+                val_losses = self._validate_epoch(val_dataset)
+                
+                # Early stopping check
+                if self.early_stopping(val_losses["total_loss"], self.model):
+                    self.logger.info("Early stopping triggered")
+                    break
+                
+                # Save best model
+                if val_losses["total_loss"] < self.best_val_loss:
+                    self.best_val_loss = val_losses["total_loss"]
+                    self._save_checkpoint(is_best=True)
+            
+            # Regular checkpointing
+            if (self.current_step % self.config.training.save_step == 0):
+                self._save_checkpoint()
+            
+            # Log epoch results
+            self.logger.info(f"Epoch {epoch}: Train Loss = {train_losses['total_loss']:.4f}")
+            
+            # Wandb logging
+            if self.config.training.use_wandb:
+                wandb.log({
+                    "epoch": epoch,
+                    "step": self.current_step,
+                    **{f"train_{k}": v for k, v in train_losses.items()},
+                    "learning_rate": self.optimizer.learning_rate.numpy() 
+                    if hasattr(self.optimizer.learning_rate, 'numpy') 
+                    else self.optimizer.learning_rate
+                })
+        
+        self.logger.info("Training completed")
+    
+    def _train_epoch(
+        self,
+        train_dataset: tf.data.Dataset,
+        steps_per_epoch: Optional[int] = None
+    ) -> Dict[str, float]:
+        """Train for one epoch."""
+        train_losses = {}
+        num_batches = 0
+        
+        # Use tqdm for progress bar
+        dataset_iter = iter(train_dataset)
+        if steps_per_epoch:
+            pbar = tqdm(range(steps_per_epoch), desc=f"Epoch {self.current_epoch}")
+        else:
+            pbar = tqdm(dataset_iter, desc=f"Epoch {self.current_epoch}")
+        
+        try:
+            for step in pbar:
+                if steps_per_epoch and step >= steps_per_epoch:
+                    break
+                
+                # Get batch
+                if steps_per_epoch:
+                    batch = next(dataset_iter)
+                else:
+                    batch = step
+                
+                text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
+                
+                # Training step
+                step_losses = self.train_step(
+                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                )
+                
+                # Accumulate losses
+                for key, value in step_losses.items():
+                    if key not in train_losses:
+                        train_losses[key] = 0.0
+                    train_losses[key] += float(value)
+                
+                num_batches += 1
+                self.current_step += 1
+                
+                # Update progress bar
+                pbar.set_postfix({
+                    "loss": f"{float(step_losses['total_loss']):.4f}",
+                    "step": self.current_step
+                })
+                
+                # Log step results
+                if self.current_step % self.config.training.log_step == 0:
+                    step_log = {k: float(v) for k, v in step_losses.items()}
+                    self.logger.debug(f"Step {self.current_step}: {step_log}")
+                    
+                    if self.config.training.use_wandb:
+                        wandb.log({f"step_{k}": v for k, v in step_log.items()})
+        
+        except tf.errors.OutOfRangeError:
+            # End of dataset reached
+            pass
+        
+        # Average losses
+        if num_batches > 0:
+            train_losses = {k: v / num_batches for k, v in train_losses.items()}
+        
+        return train_losses
+    
+    def _validate_epoch(self, val_dataset: tf.data.Dataset) -> Dict[str, float]:
+        """Validate for one epoch."""
+        val_losses = {}
+        num_batches = 0
+        
+        for batch in tqdm(val_dataset, desc="Validation"):
+            text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
+            
+            # Validation step
+            step_losses = self.validation_step(
+                text_sequences, mel_spectrograms, text_lengths, mel_lengths
+            )
+            
+            # Accumulate losses
+            for key, value in step_losses.items():
+                if key not in val_losses:
+                    val_losses[key] = 0.0
+                val_losses[key] += float(value)
+            
+            num_batches += 1
+        
+        # Average losses
+        if num_batches > 0:
+            val_losses = {k: v / num_batches for k, v in val_losses.items()}
+            
+            self.logger.info(f"Validation: {val_losses}")
+            
+            if self.config.training.use_wandb:
+                wandb.log({f"val_{k}": v for k, v in val_losses.items()})
+        
+        return val_losses
+    
+    def _save_checkpoint(self, is_best: bool = False):
+        """Save model checkpoint."""
+        checkpoint_name = "best" if is_best else str(self.current_step)
+        checkpoint_path = os.path.join(
+            self.config.training.checkpoint_dir, 
+            f"checkpoint_{checkpoint_name}"
+        )
+        
+        save_checkpoint(
+            self.model,
+            self.optimizer,
+            self.config.training.checkpoint_dir,
+            self.current_step,
+            self.best_val_loss,
+            config=self.config.to_dict()
+        )
+        
+        self.logger.info(f"Saved checkpoint: {checkpoint_path}")
+    
+    def _load_checkpoint(self, checkpoint_path: str):
+        """Load model checkpoint."""
+        if os.path.isdir(checkpoint_path):
+            # Find latest checkpoint in directory
+            checkpoint_path = find_latest_checkpoint(checkpoint_path)
+            if checkpoint_path is None:
+                raise FileNotFoundError(f"No checkpoints found in {checkpoint_path}")
+        
+        metadata = load_checkpoint(self.model, self.optimizer, checkpoint_path)
+        
+        self.current_step = metadata.get("step", 0)
+        self.current_epoch = self.current_step // 1000  # Approximate
+        self.best_val_loss = metadata.get("loss", float('inf'))
+        
+        self.logger.info(f"Resumed from checkpoint: {checkpoint_path}")
+        self.logger.info(f"Step: {self.current_step}, Best loss: {self.best_val_loss}")
+
+
+class NoamSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    """
+    Noam learning rate schedule from "Attention is All You Need".
+    """
+    
+    def __init__(self, d_model: int, warmup_steps: int = 4000):
+        super().__init__()
+        self.d_model = tf.cast(d_model, tf.float32)
+        self.warmup_steps = warmup_steps
+    
+    def __call__(self, step):
+        step = tf.cast(step, tf.float32)
+        arg1 = tf.math.rsqrt(step)
+        arg2 = step * (self.warmup_steps ** -1.5)
+        return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+    
+    def get_config(self):
+        return {
+            "d_model": int(self.d_model),
+            "warmup_steps": self.warmup_steps
+        }
