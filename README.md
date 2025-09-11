@@ -29,6 +29,32 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+### Alternative: Using trainTestFile.py (Flexible Configuration)
+
+For even more flexibility, you can use the `trainTestFile.py` script in the root directory, which allows both programmatic configuration (without YAML files) and optional YAML-based configuration:
+
+#### 1. **Train with Programmatic Configuration** (No YAML required):
+```bash
+python trainTestFile.py --mode train --data-path ./data/ljspeech --epochs 100 --batch-size 16
+```
+
+#### 2. **Create and Use YAML Configuration**:
+```bash
+# Create a configuration file
+python trainTestFile.py --mode create-config --output my_config.yaml --epochs 200 --language es
+
+# Train using the configuration file
+python trainTestFile.py --mode train --config my_config.yaml
+
+# Override specific parameters from YAML
+python trainTestFile.py --mode train --config my_config.yaml --epochs 50 --batch-size 8
+```
+
+#### 3. **Test/Inference Mode**:
+```bash
+python trainTestFile.py --mode test --checkpoint ./checkpoints/best.ckpt --text "Hello world"
+```
+
 ### Basic Usage
 
 1. **Create Configuration**:
