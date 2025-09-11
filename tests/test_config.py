@@ -19,6 +19,11 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(config.use_voice_conditioning)
         self.assertIsInstance(config.languages, list)
         self.assertIn("en", config.languages)
+        
+        # Test NLLB tokenizer defaults
+        self.assertEqual(config.text_vocab_size, 256_256)
+        self.assertEqual(config.tokenizer_type, "nllb")
+        self.assertEqual(config.tokenizer_model, "facebook/nllb-200-distilled-600M")
     
     def test_data_config_defaults(self):
         """Test DataConfig default values."""
