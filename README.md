@@ -136,6 +136,59 @@ dataset/
     └── ...
 ```
 
+### Custom Metadata File Paths
+
+MyXTTS now supports custom metadata file paths for different dataset splits, allowing you to use separate files for training and evaluation:
+
+```
+dataset/
+├── metadata_train.csv    # Training data metadata
+├── metadata_eval.csv     # Evaluation/validation data metadata  
+└── wavs/
+    ├── audio1.wav
+    ├── audio2.wav
+    └── ...
+```
+
+#### Configuration Options:
+
+**1. Programmatic Configuration:**
+```python
+from myxtts.config.config import XTTSConfig
+
+config = XTTSConfig()
+config.data.metadata_train_file = "metadata_train.csv"
+config.data.metadata_eval_file = "metadata_eval.csv"
+```
+
+**2. YAML Configuration:**
+```yaml
+data:
+  dataset_path: "./data/my_dataset"
+  metadata_train_file: "metadata_train.csv"
+  metadata_eval_file: "metadata_eval.csv"
+```
+
+**3. Command Line:**
+```bash
+# Create config with custom metadata files
+python trainTestFile.py --mode create-config --output config.yaml \
+    --metadata-train-file metadata_train.csv \
+    --metadata-eval-file metadata_eval.csv
+
+# Train directly with custom metadata files
+python trainTestFile.py --mode train \
+    --data-path ./data/my_dataset \
+    --metadata-train-file metadata_train.csv \
+    --metadata-eval-file metadata_eval.csv
+```
+
+**File Path Resolution:**
+- Relative paths are resolved relative to the dataset directory
+- Absolute paths are used as-is
+- If custom metadata files are not specified, the default `metadata.csv` is used
+- Train subset uses `metadata_train_file`, val/test subsets use `metadata_eval_file`
+
 ## Configuration
 
 All model aspects are configurable through YAML files:
