@@ -66,6 +66,10 @@ class DataConfig:
     metadata_train_file: Optional[str] = None  # Custom path for train metadata
     metadata_eval_file: Optional[str] = None   # Custom path for eval/val metadata
     
+    # Custom wav directories (optional, used with custom metadata files)
+    wavs_train_dir: Optional[str] = None       # Custom path for train wav files
+    wavs_eval_dir: Optional[str] = None        # Custom path for eval wav files
+    
     # Audio processing
     sample_rate: int = 22050
     trim_silence: bool = True

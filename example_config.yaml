@@ -15,6 +15,13 @@ data:
   train_split: 0.9
   trim_silence: true
   val_split: 0.1
+  # Custom metadata and wav directory options (optional)
+  # If both metadata_train_file and metadata_eval_file are set, 
+  # they will be used with potentially different wav directories
+  # metadata_train_file: ./data/custom_train/metadata_train.csv
+  # metadata_eval_file: ./data/custom_eval/metadata_eval.csv
+  # wavs_train_dir: ./data/custom_train/wavs
+  # wavs_eval_dir: ./data/custom_eval/wavs
 model:
   audio_encoder_dim: 512
   audio_encoder_heads: 8

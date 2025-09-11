@@ -63,7 +63,9 @@ def create_default_config(
     sample_rate: int = 22050,
     checkpoint_dir: str = "./checkpoints",
     metadata_train_file: Optional[str] = None,
-    metadata_eval_file: Optional[str] = None
+    metadata_eval_file: Optional[str] = None,
+    wavs_train_dir: Optional[str] = None,
+    wavs_eval_dir: Optional[str] = None
 ) -> XTTSConfig:
     """
     Create a default configuration programmatically without requiring YAML.
@@ -78,6 +80,8 @@ def create_default_config(
         checkpoint_dir: Directory to save checkpoints
         metadata_train_file: Custom train metadata file path (optional)
         metadata_eval_file: Custom eval metadata file path (optional)
+        wavs_train_dir: Custom train wav files directory (optional)
+        wavs_eval_dir: Custom eval wav files directory (optional)
     
     Returns:
         XTTSConfig: Configured XTTS configuration object
@@ -95,6 +99,12 @@ def create_default_config(
         config.data.metadata_train_file = metadata_train_file
     if metadata_eval_file:
         config.data.metadata_eval_file = metadata_eval_file
+    
+    # Configure custom wav directories if provided
+    if wavs_train_dir:
+        config.data.wavs_train_dir = wavs_train_dir
+    if wavs_eval_dir:
+        config.data.wavs_eval_dir = wavs_eval_dir
     
     # Configure model settings
     config.model.sample_rate = sample_rate
@@ -266,6 +276,10 @@ def main():
     parser.add_argument("--metadata-train-file", help="Custom train metadata file path (e.g., metadata_train.csv)")
     parser.add_argument("--metadata-eval-file", help="Custom eval metadata file path (e.g., metadata_eval.csv)")
     
+    # Custom wav directory options
+    parser.add_argument("--wavs-train-dir", help="Custom train wav files directory path")
+    parser.add_argument("--wavs-eval-dir", help="Custom eval wav files directory path")
+    
     # Training options
     parser.add_argument("--resume-from", help="Resume training from checkpoint")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
@@ -304,6 +318,11 @@ def main():
                 config.data.metadata_train_file = args.metadata_train_file
             if args.metadata_eval_file:
                 config.data.metadata_eval_file = args.metadata_eval_file
+            # Override wav directory paths if provided
+            if args.wavs_train_dir:
+                config.data.wavs_train_dir = args.wavs_train_dir
+            if args.wavs_eval_dir:
+                config.data.wavs_eval_dir = args.wavs_eval_dir
         else:
             if args.config:
                 print(f"Warning: Configuration file {args.config} not found, using programmatic config")
@@ -317,7 +336,9 @@ def main():
                 sample_rate=args.sample_rate,
                 checkpoint_dir=args.checkpoint_dir,
                 metadata_train_file=args.metadata_train_file,
-                metadata_eval_file=args.metadata_eval_file
+                metadata_eval_file=args.metadata_eval_file,
+                wavs_train_dir=args.wavs_train_dir,
+                wavs_eval_dir=args.wavs_eval_dir
             )
         
         train_model(config, resume_checkpoint=args.resume_from)
@@ -349,7 +370,9 @@ def main():
             sample_rate=args.sample_rate,
             checkpoint_dir=args.checkpoint_dir,
             metadata_train_file=args.metadata_train_file,
-            metadata_eval_file=args.metadata_eval_file
+            metadata_eval_file=args.metadata_eval_file,
+            wavs_train_dir=args.wavs_train_dir,
+            wavs_eval_dir=args.wavs_eval_dir
         )
 
 

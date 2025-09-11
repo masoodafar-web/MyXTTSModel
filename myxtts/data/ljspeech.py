@@ -78,8 +78,14 @@ class LJSpeechDataset:
         self.dataset_dir = self.data_path / "LJSpeech-1.1"
         self.wavs_dir = self.dataset_dir / "wavs"
         
-        # Set metadata file path based on subset and configuration
-        self.metadata_file = self._get_metadata_file_path(subset)
+        # Determine if we're using custom metadata files with potentially different wav directories
+        self.use_custom_metadata = (
+            (subset == "train" and config.metadata_train_file) or
+            (subset in ["val", "test"] and config.metadata_eval_file)
+        )
+        
+        # Set metadata file path and wav directory based on subset and configuration
+        self.metadata_file, self.wavs_dir = self._get_metadata_and_wavs_path(subset)
         
         # Processed data paths
         self.processed_dir = self.data_path / "processed"
@@ -89,42 +95,71 @@ class LJSpeechDataset:
         self._prepare_dataset()
         self.metadata = self._load_metadata()
         
-        # Create splits if they don't exist
-        if not self.splits_file.exists():
-            self._create_splits()
-        
-        self.splits = self._load_splits()
-        self.items = self.splits[self.subset]
+        # Handle splits differently based on whether custom metadata files are used
+        if self.use_custom_metadata:
+            # When using custom metadata files, each subset uses its own metadata file directly
+            # No need for splits.json as train/eval data come from different files
+            self.items = list(range(len(self.metadata)))
+        else:
+            # Default behavior: use single metadata file with percentage-based splits
+            # Create splits if they don't exist
+            if not self.splits_file.exists():
+                self._create_splits()
+            
+            self.splits = self._load_splits()
+            self.items = self.splits[self.subset]
         
         print(f"Loaded {len(self.items)} items for {subset} subset")
     
-    def _get_metadata_file_path(self, subset: str) -> Path:
+    def _get_metadata_and_wavs_path(self, subset: str) -> Tuple[Path, Path]:
         """
-        Get metadata file path based on subset and configuration.
+        Get metadata file path and wav directory based on subset and configuration.
         
         Args:
             subset: Dataset subset ("train", "val", "test")
             
         Returns:
-            Path to metadata file
+            Tuple of (metadata_file_path, wavs_directory_path)
         """
         if subset == "train" and self.config.metadata_train_file:
             # Use custom train metadata file
             metadata_path = Path(self.config.metadata_train_file)
             if not metadata_path.is_absolute():
                 # Relative path - make it relative to dataset directory
-                return self.dataset_dir / metadata_path
-            return metadata_path
+                metadata_path = self.dataset_dir / metadata_path
+            
+            # Use custom train wav directory if provided, otherwise use metadata file's directory
+            if self.config.wavs_train_dir:
+                wavs_path = Path(self.config.wavs_train_dir)
+                if not wavs_path.is_absolute():
+                    wavs_path = self.dataset_dir / wavs_path
+            else:
+                # Default to wavs directory in same location as metadata file
+                wavs_path = metadata_path.parent / "wavs"
+            
+            return metadata_path, wavs_path
+            
         elif subset in ["val", "test"] and self.config.metadata_eval_file:
             # Use custom eval metadata file for validation and test
             metadata_path = Path(self.config.metadata_eval_file)
             if not metadata_path.is_absolute():
                 # Relative path - make it relative to dataset directory
-                return self.dataset_dir / metadata_path
-            return metadata_path
+                metadata_path = self.dataset_dir / metadata_path
+            
+            # Use custom eval wav directory if provided, otherwise use metadata file's directory
+            if self.config.wavs_eval_dir:
+                wavs_path = Path(self.config.wavs_eval_dir)
+                if not wavs_path.is_absolute():
+                    wavs_path = self.dataset_dir / wavs_path
+            else:
+                # Default to wavs directory in same location as metadata file
+                wavs_path = metadata_path.parent / "wavs"
+            
+            return metadata_path, wavs_path
+            
         else:
-            # Use default metadata.csv file
-            return self.dataset_dir / "metadata.csv"
+            # Use default metadata.csv file and wavs directory
+            return self.dataset_dir / "metadata.csv", self.dataset_dir / "wavs"
     
     def _prepare_dataset(self):
         """Download and extract dataset if necessary."""
@@ -172,7 +207,7 @@ class LJSpeechDataset:
             quoting=csv.QUOTE_NONE
         )
         
-        # Add audio file paths
+        # Add audio file paths using the correct wavs directory
         df['audio_path'] = df['id'].apply(
             lambda x: str(self.wavs_dir / f"{x}.wav")
         )
@@ -248,7 +283,13 @@ class LJSpeechDataset:
                 - audio_length: Audio length in samples
                 - text_length: Text sequence length
         """
-        item_idx = self.items[idx]
+        if self.use_custom_metadata:
+            # When using custom metadata, use direct indexing
+            item_idx = idx
+        else:
+            # When using single metadata with splits, use split indices
+            item_idx = self.items[idx]
+            
         row = self.metadata.iloc[item_idx]
         
         # Get text data

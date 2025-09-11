@@ -136,58 +136,81 @@ dataset/
     └── ...
 ```
 
-### Custom Metadata File Paths
+## Flexible Data Path Configuration
 
-MyXTTS now supports custom metadata file paths for different dataset splits, allowing you to use separate files for training and evaluation:
+MyXTTS supports two data organization scenarios:
+
+### Scenario A: Separate Train and Evaluation Data (Different Paths)
+
+Use this when you have separate training and evaluation datasets with potentially different directory structures:
+
+```
+project/
+├── train_data/
+│   ├── metadata_train.csv
+│   └── wavs/
+│       ├── train_001.wav
+│       └── train_002.wav
+└── eval_data/
+    ├── metadata_eval.csv  
+    └── audio/  # Different directory name
+        ├── eval_001.wav
+        └── eval_002.wav
+```
+
+**Configuration:**
+```bash
+python trainTestFile.py --mode train \
+    --metadata-train-file ./train_data/metadata_train.csv \
+    --metadata-eval-file ./eval_data/metadata_eval.csv \
+    --wavs-train-dir ./train_data/wavs \
+    --wavs-eval-dir ./eval_data/audio
+```
+
+**YAML Configuration:**
+```yaml
+data:
+  metadata_train_file: ./train_data/metadata_train.csv
+  metadata_eval_file: ./eval_data/metadata_eval.csv
+  wavs_train_dir: ./train_data/wavs
+  wavs_eval_dir: ./eval_data/audio
+```
+
+### Scenario B: Single Dataset with Percentage Splits (Default)
+
+Use this for traditional single-dataset training where train/validation/test splits are created automatically:
 
 ```
 dataset/
-├── metadata_train.csv    # Training data metadata
-├── metadata_eval.csv     # Evaluation/validation data metadata  
+├── metadata.csv          # Single metadata file
 └── wavs/
     ├── audio1.wav
     ├── audio2.wav
     └── ...
 ```
 
-#### Configuration Options:
-
-**1. Programmatic Configuration:**
-```python
-from myxtts.config.config import XTTSConfig
-
-config = XTTSConfig()
-config.data.metadata_train_file = "metadata_train.csv"
-config.data.metadata_eval_file = "metadata_eval.csv"
+**Configuration:**
+```bash
+python trainTestFile.py --mode train \
+    --data-path ./dataset
 ```
 
-**2. YAML Configuration:**
+**YAML Configuration:**
 ```yaml
 data:
-  dataset_path: "./data/my_dataset"
-  metadata_train_file: "metadata_train.csv"
-  metadata_eval_file: "metadata_eval.csv"
+  dataset_path: ./dataset
+  train_split: 0.8  # 80% for training
+  val_split: 0.1    # 10% for validation
+  # test split is automatically: 1 - train_split - val_split = 0.1 (10%)
 ```
 
-**3. Command Line:**
-```bash
-# Create config with custom metadata files
-python trainTestFile.py --mode create-config --output config.yaml \
-    --metadata-train-file metadata_train.csv \
-    --metadata-eval-file metadata_eval.csv
+### Path Resolution Rules
 
-# Train directly with custom metadata files
-python trainTestFile.py --mode train \
-    --data-path ./data/my_dataset \
-    --metadata-train-file metadata_train.csv \
-    --metadata-eval-file metadata_eval.csv
-```
-
-**File Path Resolution:**
-- Relative paths are resolved relative to the dataset directory
-- Absolute paths are used as-is
-- If custom metadata files are not specified, the default `metadata.csv` is used
-- Train subset uses `metadata_train_file`, val/test subsets use `metadata_eval_file`
+1. **Custom metadata files provided**: Each subset (train/val/test) uses its specific metadata file and wav directory
+2. **No custom metadata files**: Single `metadata.csv` file is split into train/val/test by percentages
+3. **Relative paths**: Resolved relative to the dataset directory
+4. **Absolute paths**: Used as-is
+5. **Wav directory fallback**: If not specified, defaults to `{metadata_file_directory}/wavs`
 
 ## Configuration
 
