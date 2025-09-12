@@ -22,6 +22,9 @@ data:
   # metadata_eval_file: ./data/custom_eval/metadata_eval.csv
   # wavs_train_dir: ./data/custom_train/wavs
   # wavs_eval_dir: ./data/custom_eval/wavs
+  
+  # Dataset preprocessing control
+  preprocessing_mode: auto     # "auto", "precompute", "runtime"
 model:
   audio_encoder_dim: 512
   audio_encoder_heads: 8

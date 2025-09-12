@@ -109,9 +109,17 @@ class DataConfig:
     pin_memory: bool = True  # Pin memory for faster GPU transfer
     persistent_workers: bool = True  # Keep workers alive between epochs
     
+    # Dataset preprocessing control
+    preprocessing_mode: str = "auto"  # "auto", "precompute", "runtime"
+    
     def __post_init__(self):
         if self.text_cleaners is None:
             self.text_cleaners = ["english_cleaners"]
+        
+        # Validate preprocessing_mode
+        valid_modes = ["auto", "precompute", "runtime"]
+        if self.preprocessing_mode not in valid_modes:
+            raise ValueError(f"preprocessing_mode must be one of {valid_modes}, got '{self.preprocessing_mode}'")
 
 
 @dataclass
