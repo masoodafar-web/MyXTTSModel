@@ -592,17 +592,14 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # Training step: use appropriate method based on strategy
-                if isinstance(self.strategy, tf.distribute.MirroredStrategy):
-                    # For MirroredStrategy, use the distributed training step
+                # Training step: always use strategy.run-backed path for proper replica context
+                # This avoids Keras optimizers requiring a replica context (e.g., AdamW weight decay)
+                if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.OneDeviceStrategy)):
                     step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
                 else:
-                    # Single device training (OneDeviceStrategy or default strategy)
-                    # Execute within strategy scope for proper gradient application
-                    with self.strategy.scope():
-                        step_losses = self.train_step(
-                            text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                        )
+                    step_losses = self.train_step(
+                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                    )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
@@ -665,17 +662,13 @@ class XTTSTrainer:
         for batch in tqdm(val_dataset, desc="Validation"):
             text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
             
-            # Use appropriate validation method based on strategy
-            if isinstance(self.strategy, tf.distribute.MirroredStrategy):
-                # For MirroredStrategy, use the distributed validation step
+            # Use strategy-backed validation when strategy provides replica context
+            if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.OneDeviceStrategy)):
                 step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
             else:
-                # Single device validation (OneDeviceStrategy or default strategy)
-                # Execute within strategy scope for proper gradient operations
-                with self.strategy.scope():
-                    step_losses = self.validation_step(
-                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                    )
+                step_losses = self.validation_step(
+                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                )
             
             # Accumulate losses
             for key, value in step_losses.items():
