@@ -598,9 +598,11 @@ class XTTSTrainer:
                     step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
                 else:
                     # Single device training (OneDeviceStrategy or default strategy)
-                    step_losses = self.train_step(
-                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                    )
+                    # Execute within strategy scope for proper gradient application
+                    with self.strategy.scope():
+                        step_losses = self.train_step(
+                            text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                        )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
@@ -669,9 +671,11 @@ class XTTSTrainer:
                 step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
             else:
                 # Single device validation (OneDeviceStrategy or default strategy)
-                step_losses = self.validation_step(
-                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                )
+                # Execute within strategy scope for proper gradient operations
+                with self.strategy.scope():
+                    step_losses = self.validation_step(
+                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                    )
             
             # Accumulate losses
             for key, value in step_losses.items():
