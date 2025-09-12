@@ -72,9 +72,26 @@ def main():
     except FileNotFoundError:
         print("   (example_config.yaml not found, but YAML loading functionality is preserved)")
     
+    print("\n4. GPU Strategy Control:")
+    print("   Configure single vs multi-GPU training:")
+    
+    # Single GPU (default)
+    single_gpu_config = XTTSConfig(multi_gpu=False)
+    print(f"   Single GPU mode: multi_gpu={single_gpu_config.training.multi_gpu}")
+    
+    # Multi-GPU enabled
+    multi_gpu_config = XTTSConfig(multi_gpu=True)
+    print(f"   Multi-GPU mode: multi_gpu={multi_gpu_config.training.multi_gpu}")
+    
+    # Control specific GPUs
+    specific_gpu_config = XTTSConfig(multi_gpu=True, visible_gpus="0,1")
+    print(f"   Specific GPUs: visible_gpus='{specific_gpu_config.training.visible_gpus}'")
+    print("   → This controls whether to use MirroredStrategy or OneDeviceStrategy")
+    
     print("\n=== Summary ===")
     print("✓ Direct parameter passing to XTTSConfig constructor works!")
     print("✓ Parameters are automatically distributed to appropriate config sections")
+    print("✓ GPU strategy control available via multi_gpu parameter")
     print("✓ Backward compatibility with existing code is maintained")
     print("✓ YAML loading functionality is preserved")
     print("✓ All existing tests pass")
