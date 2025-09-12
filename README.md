@@ -29,24 +29,31 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-### Alternative: Using trainTestFile.py (Flexible Configuration)
+### Alternative: Using trainTestFile.py (Maximum Flexibility)
 
-For even more flexibility, you can use the `trainTestFile.py` script in the root directory, which allows both programmatic configuration (without YAML files) and optional YAML-based configuration:
+For maximum control and flexibility, you can use the `trainTestFile.py` script in the root directory. This script supports:
+- **Pure programmatic configuration** (no YAML files required)
+- **YAML-based configuration** with CLI parameter overrides
+- **Smart dataset detection** (automatically skips download if dataset exists)
 
-#### 1. **Train with Programmatic Configuration** (No YAML required):
+#### 1. **Train with Direct Parameters** (No YAML required):
 ```bash
+# Train immediately with just CLI parameters - no config file needed
 python trainTestFile.py --mode train --data-path ./data/ljspeech --epochs 100 --batch-size 16
+
+# Works with existing datasets - automatically detects and skips download
+python trainTestFile.py --mode train --data-path ./my_existing_dataset --epochs 200
 ```
 
 #### 2. **Create and Use YAML Configuration**:
 ```bash
-# Create a configuration file
+# Create a configuration file with your preferred settings
 python trainTestFile.py --mode create-config --output my_config.yaml --epochs 200 --language es
 
 # Train using the configuration file
 python trainTestFile.py --mode train --config my_config.yaml
 
-# Override specific parameters from YAML
+# Override specific parameters from YAML config
 python trainTestFile.py --mode train --config my_config.yaml --epochs 50 --batch-size 8
 ```
 
@@ -55,7 +62,17 @@ python trainTestFile.py --mode train --config my_config.yaml --epochs 50 --batch
 python trainTestFile.py --mode test --checkpoint ./checkpoints/best.ckpt --text "Hello world"
 ```
 
+**Key Benefits of trainTestFile.py:**
+- ✅ **No config file required** - set all parameters via CLI
+- ✅ **Smart dataset detection** - skips download if dataset exists
+- ✅ **Flexible parameter mixing** - combine YAML config with CLI overrides
+- ✅ **Self-contained** - works even without full dependency installation for config creation
+
 ### Basic Usage
+
+MyXTTS provides flexible configuration options - you can use either configuration files or direct CLI parameters:
+
+#### Option 1: Using Configuration Files (Recommended)
 
 1. **Create Configuration**:
 ```bash
@@ -64,17 +81,49 @@ myxtts create-config --output config.yaml --language en --dataset-path ./data/lj
 
 2. **Train Model**:
 ```bash
-myxtts train --config config.yaml --data-path ./data/ljspeech
+myxtts train --config config.yaml
 ```
 
-3. **Synthesize Speech**:
+3. **Train with Parameter Overrides**:
+```bash
+# Override specific parameters from the config file
+myxtts train --config config.yaml --epochs 500 --batch-size 16
+```
+
+#### Option 2: Direct CLI Parameters (No Config File Required)
+
+```bash
+# Train directly with CLI parameters
+myxtts train --data-path ./data/ljspeech --epochs 100 --batch-size 32 --learning-rate 1e-4
+```
+
+#### Inference and Voice Cloning
+
+4. **Synthesize Speech**:
 ```bash
 myxtts synthesize --config config.yaml --checkpoint ./checkpoints/checkpoint_best --text "Hello, this is MyXTTS!"
 ```
 
-4. **Clone Voice**:
+5. **Clone Voice**:
 ```bash
 myxtts clone-voice --config config.yaml --checkpoint ./checkpoints/checkpoint_best --text "Hello with cloned voice" --reference-audio reference.wav
+```
+
+## Smart Dataset Detection
+
+MyXTTS automatically detects existing datasets and **skips downloading** if your dataset is already available:
+
+- **Custom dataset structure**: If you have `metadata.csv` and `wavs/` directly in your provided path, MyXTTS will use them
+- **LJSpeech structure**: If your dataset follows the standard LJSpeech-1.1 structure, that works too
+- **No unnecessary downloads**: If dataset files exist at the provided path, download is automatically skipped
+
+```bash
+# If ./my_dataset/ contains metadata.csv and wavs/, no download occurs
+myxtts train --data-path ./my_dataset --epochs 100
+
+# Works with both structures:
+# ./my_dataset/metadata.csv + ./my_dataset/wavs/
+# ./my_dataset/LJSpeech-1.1/metadata.csv + ./my_dataset/LJSpeech-1.1/wavs/
 ```
 
 ## Text Processing and Tokenization

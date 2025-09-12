@@ -74,18 +74,14 @@ class LJSpeechDataset:
             add_blank=config.add_blank
         )
         
-        # Dataset paths
-        self.dataset_dir = self.data_path / "LJSpeech-1.1"
-        self.wavs_dir = self.dataset_dir / "wavs"
-        
         # Determine if we're using custom metadata files with potentially different wav directories
         self.use_custom_metadata = (
             (subset == "train" and config.metadata_train_file) or
             (subset in ["val", "test"] and config.metadata_eval_file)
         )
         
-        # Set metadata file path and wav directory based on subset and configuration
-        self.metadata_file, self.wavs_dir = self._get_metadata_and_wavs_path(subset)
+        # First determine dataset directory and metadata paths - this is done together now
+        self.dataset_dir, self.metadata_file, self.wavs_dir = self._determine_dataset_paths(subset)
         
         # Processed data paths
         self.processed_dir = self.data_path / "processed"
@@ -111,70 +107,123 @@ class LJSpeechDataset:
         
         print(f"Loaded {len(self.items)} items for {subset} subset")
     
-    def _get_metadata_and_wavs_path(self, subset: str) -> Tuple[Path, Path]:
+    def _determine_dataset_paths(self, subset: str) -> Tuple[Path, Path, Path]:
         """
-        Get metadata file path and wav directory based on subset and configuration.
+        Determine dataset directory, metadata file, and wavs directory paths.
+        
+        This supports both:
+        1. Custom datasets where files are directly in the provided path
+        2. Downloaded LJSpeech datasets in the LJSpeech-1.1 subdirectory
+        3. Custom metadata files with potentially different wav directories
         
         Args:
             subset: Dataset subset ("train", "val", "test")
             
         Returns:
-            Tuple of (metadata_file_path, wavs_directory_path)
+            Tuple of (dataset_directory, metadata_file_path, wavs_directory_path)
         """
+        # Handle custom metadata files first
         if subset == "train" and self.config.metadata_train_file:
             # Use custom train metadata file
             metadata_path = Path(self.config.metadata_train_file)
             if not metadata_path.is_absolute():
-                # Relative path - make it relative to dataset directory
-                metadata_path = self.dataset_dir / metadata_path
+                # Try relative to data_path first
+                if (self.data_path / metadata_path).exists():
+                    metadata_path = self.data_path / metadata_path
+                else:
+                    # Fall back to LJSpeech-1.1 subdirectory for backward compatibility
+                    metadata_path = self.data_path / "LJSpeech-1.1" / metadata_path
             
             # Use custom train wav directory if provided, otherwise use metadata file's directory
             if self.config.wavs_train_dir:
                 wavs_path = Path(self.config.wavs_train_dir)
                 if not wavs_path.is_absolute():
-                    wavs_path = self.dataset_dir / wavs_path
+                    if (self.data_path / wavs_path).exists():
+                        wavs_path = self.data_path / wavs_path
+                    else:
+                        wavs_path = self.data_path / "LJSpeech-1.1" / wavs_path
             else:
                 # Default to wavs directory in same location as metadata file
                 wavs_path = metadata_path.parent / "wavs"
             
-            return metadata_path, wavs_path
+            dataset_dir = metadata_path.parent
+            return dataset_dir, metadata_path, wavs_path
             
         elif subset in ["val", "test"] and self.config.metadata_eval_file:
             # Use custom eval metadata file for validation and test
             metadata_path = Path(self.config.metadata_eval_file)
             if not metadata_path.is_absolute():
-                # Relative path - make it relative to dataset directory
-                metadata_path = self.dataset_dir / metadata_path
+                # Try relative to data_path first
+                if (self.data_path / metadata_path).exists():
+                    metadata_path = self.data_path / metadata_path
+                else:
+                    # Fall back to LJSpeech-1.1 subdirectory for backward compatibility
+                    metadata_path = self.data_path / "LJSpeech-1.1" / metadata_path
             
             # Use custom eval wav directory if provided, otherwise use metadata file's directory
             if self.config.wavs_eval_dir:
                 wavs_path = Path(self.config.wavs_eval_dir)
                 if not wavs_path.is_absolute():
-                    wavs_path = self.dataset_dir / wavs_path
+                    if (self.data_path / wavs_path).exists():
+                        wavs_path = self.data_path / wavs_path
+                    else:
+                        wavs_path = self.data_path / "LJSpeech-1.1" / wavs_path
             else:
                 # Default to wavs directory in same location as metadata file
                 wavs_path = metadata_path.parent / "wavs"
             
-            return metadata_path, wavs_path
+            dataset_dir = metadata_path.parent
+            return dataset_dir, metadata_path, wavs_path
             
         else:
-            # Use default metadata.csv file and wavs directory
-            return self.dataset_dir / "metadata.csv", self.dataset_dir / "wavs"
+            # Handle default behavior - check if dataset files exist directly in provided path
+            direct_metadata = self.data_path / "metadata.csv"
+            direct_wavs = self.data_path / "wavs"
+            
+            if direct_metadata.exists() and direct_wavs.exists():
+                # Dataset files found directly in provided path
+                return self.data_path, direct_metadata, direct_wavs
+            
+            # Fall back to the traditional LJSpeech-1.1 subdirectory structure
+            ljspeech_dir = self.data_path / "LJSpeech-1.1"
+            return ljspeech_dir, ljspeech_dir / "metadata.csv", ljspeech_dir / "wavs"
     
     def _prepare_dataset(self):
         """Download and extract dataset if necessary."""
-        if not self.dataset_dir.exists() and self.download_flag:
-            print("Downloading LJSpeech dataset...")
-            self._download_dataset()
+        # Check if we have the essential files rather than just the directory
+        essential_files_exist = self._check_essential_files_exist()
         
-        if not self.dataset_dir.exists():
+        if not essential_files_exist and self.download_flag:
+            print("Dataset files not found. Downloading LJSpeech dataset...")
+            self._download_dataset()
+            # Re-determine paths after download
+            self.dataset_dir, self.metadata_file, self.wavs_dir = self._determine_dataset_paths(self.subset)
+        
+        # Final check that essential files exist
+        if not self._check_essential_files_exist():
+            missing_files = []
+            if not self.metadata_file.exists():
+                missing_files.append(str(self.metadata_file))
+            if not self.wavs_dir.exists():
+                missing_files.append(str(self.wavs_dir))
+            
             raise FileNotFoundError(
-                f"LJSpeech dataset not found at {self.dataset_dir}. "
-                "Set download=True to download automatically."
+                f"Dataset files not found: {missing_files}. "
+                f"Expected metadata at {self.metadata_file} and wavs at {self.wavs_dir}. "
+                "Set download=True to download LJSpeech automatically, or provide correct dataset paths."
             )
         
         # Create processed directory
         self.processed_dir.mkdir(parents=True, exist_ok=True)
+    
+    def _check_essential_files_exist(self) -> bool:
+        """
+        Check if the essential dataset files exist.
+        
+        Returns:
+            True if both metadata file and wavs directory exist, False otherwise
+        """
+        return self.metadata_file.exists() and self.wavs_dir.exists()
     
     def _download_dataset(self):
         """Download and extract LJSpeech dataset."""
