@@ -156,7 +156,7 @@ class XTTSTrainer:
         val_data_path: Optional[str] = None
     ) -> Tuple[tf.data.Dataset, tf.data.Dataset]:
         """
-        Prepare training and validation datasets.
+        Prepare training and validation datasets with smart dataset handling.
         
         Args:
             train_data_path: Path to training data
@@ -165,12 +165,20 @@ class XTTSTrainer:
         Returns:
             Tuple of (train_dataset, val_dataset)
         """
+        # Smart dataset handling: check if dataset exists locally
+        should_download = not os.path.exists(os.path.join(train_data_path, "LJSpeech-1.1"))
+        
+        if should_download:
+            self.logger.info(f"Dataset not found at {train_data_path}. Will download automatically.")
+        else:
+            self.logger.info(f"Dataset found at local path: {train_data_path}")
+        
         # Create training dataset
         train_dataset = LJSpeechDataset(
             data_path=train_data_path,
             config=self.config.data,
             subset="train",
-            download=True
+            download=should_download
         )
         
         # Create validation dataset
@@ -179,7 +187,7 @@ class XTTSTrainer:
             data_path=val_data_path,
             config=self.config.data,
             subset="val",
-            download=False
+            download=False  # Don't download again for validation
         )
         
         # Convert to TensorFlow datasets
