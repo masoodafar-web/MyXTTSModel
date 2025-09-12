@@ -6,7 +6,7 @@ training parameters, and data processing settings, similar to XTTS configuration
 """
 
 import yaml
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, fields
 from typing import List, Dict, Any, Optional
 
 
@@ -147,13 +147,107 @@ class XTTSConfig:
     data: DataConfig = None
     training: TrainingConfig = None
     
-    def __post_init__(self):
-        if self.model is None:
-            self.model = ModelConfig()
-        if self.data is None:
-            self.data = DataConfig()
-        if self.training is None:
-            self.training = TrainingConfig()
+    def __init__(self, model: ModelConfig = None, data: DataConfig = None, training: TrainingConfig = None, **kwargs):
+        """Initialize XTTSConfig with optional direct parameter passing.
+        
+        Args:
+            model: ModelConfig instance
+            data: DataConfig instance 
+            training: TrainingConfig instance
+            **kwargs: Direct parameters that will be distributed to appropriate sub-configs
+                     based on parameter names
+        """
+        # Set defaults if not provided
+        if model is None:
+            model = ModelConfig()
+        if data is None:
+            data = DataConfig()
+        if training is None:
+            training = TrainingConfig()
+            
+        # If kwargs provided, distribute them to appropriate configs
+        if kwargs:
+            model_kwargs, data_kwargs, training_kwargs = self._distribute_kwargs(kwargs)
+            
+            # Update configs with kwargs
+            if model_kwargs:
+                # Create new ModelConfig with updated parameters
+                model_dict = asdict(model)
+                model_dict.update(model_kwargs)
+                model = ModelConfig(**model_dict)
+                
+            if data_kwargs:
+                # Create new DataConfig with updated parameters
+                data_dict = asdict(data)
+                data_dict.update(data_kwargs)
+                data = DataConfig(**data_dict)
+                
+            if training_kwargs:
+                # Create new TrainingConfig with updated parameters
+                training_dict = asdict(training)
+                training_dict.update(training_kwargs)
+                training = TrainingConfig(**training_dict)
+        
+        self.model = model
+        self.data = data
+        self.training = training
+    
+    @staticmethod
+    def _distribute_kwargs(kwargs: Dict[str, Any]) -> tuple:
+        """Distribute kwargs to appropriate config classes based on field names.
+        
+        Args:
+            kwargs: Dictionary of parameters to distribute
+            
+        Returns:
+            Tuple of (model_kwargs, data_kwargs, training_kwargs)
+        """
+        # Get field names for each config class
+        model_fields = {f.name for f in fields(ModelConfig)}
+        data_fields = {f.name for f in fields(DataConfig)}
+        training_fields = {f.name for f in fields(TrainingConfig)}
+        
+        model_kwargs = {}
+        data_kwargs = {}
+        training_kwargs = {}
+        
+        for key, value in kwargs.items():
+            # Handle parameters that might belong to multiple configs
+            if key in model_fields and key in data_fields:
+                # Parameter exists in both configs, set in both
+                model_kwargs[key] = value
+                data_kwargs[key] = value
+            elif key in model_fields and key in training_fields:
+                # Parameter exists in both configs, set in both
+                model_kwargs[key] = value
+                training_kwargs[key] = value
+            elif key in data_fields and key in training_fields:
+                # Parameter exists in both configs, set in both
+                data_kwargs[key] = value
+                training_kwargs[key] = value
+            elif key in model_fields:
+                model_kwargs[key] = value
+            elif key in data_fields:
+                data_kwargs[key] = value
+            elif key in training_fields:
+                training_kwargs[key] = value
+            else:
+                # For convenience, handle some common parameter name variations
+                if key == "batch_size":
+                    data_kwargs[key] = value
+                elif key == "epochs":
+                    training_kwargs[key] = value
+                elif key == "learning_rate":
+                    training_kwargs[key] = value
+                elif key == "metadata_train_file":
+                    data_kwargs[key] = value
+                elif key == "metadata_eval_file":
+                    data_kwargs[key] = value
+                else:
+                    raise ValueError(f"Unknown parameter: {key}. "
+                                   f"Valid parameters are: {sorted(model_fields | data_fields | training_fields)}")
+        
+        return model_kwargs, data_kwargs, training_kwargs
     
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'XTTSConfig':
