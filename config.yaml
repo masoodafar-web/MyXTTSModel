@@ -18,7 +18,7 @@ model:
 training:
   epochs: 1000
   learning_rate: 1e-4
-  batch_size: 32
+  batch_size: 48                # Increased for better GPU utilization
   optimizer: adamw
   scheduler: noam
   
@@ -30,7 +30,7 @@ training:
   save_step: 25000
   val_step: 5000
   checkpoint_dir: "./checkpoints"
-  
+
 data:
   dataset_path: "./data/ljspeech"
   dataset_name: "ljspeech"
@@ -48,4 +48,12 @@ data:
   # Training splits
   train_split: 0.9
   val_split: 0.1
-  batch_size: 32
+  batch_size: 48               # Increased for better GPU utilization
+  num_workers: 12              # Increased for better CPU utilization
+  
+  # GPU optimization settings
+  prefetch_buffer_size: 8      # Increased for better GPU utilization
+  shuffle_buffer_multiplier: 20
+  enable_xla: true             # Enable XLA compilation
+  mixed_precision: true        # Enable mixed precision
+  pin_memory: true             # Pin memory for faster GPU transfer
