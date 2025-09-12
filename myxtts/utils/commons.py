@@ -26,12 +26,57 @@ def get_device() -> str:
             # Enable memory growth to avoid allocating all GPU memory at once
             for gpu in gpus:
                 tf.config.experimental.set_memory_growth(gpu, True)
+            
+            # Set up logical GPU devices for optimal utilization
+            logical_gpus = tf.config.list_logical_devices('GPU')
+            print(f"Physical GPUs: {len(gpus)}, Logical GPUs: {len(logical_gpus)}")
             return "GPU"
         except RuntimeError as e:
             print(f"GPU setup error: {e}")
             return "CPU"
     else:
         return "CPU"
+
+
+def setup_gpu_strategy():
+    """
+    Set up GPU distribution strategy for optimal GPU utilization.
+    
+    Returns:
+        tf.distribute.Strategy for training
+    """
+    gpus = tf.config.list_physical_devices('GPU')
+    
+    if len(gpus) == 0:
+        print("No GPUs available, using CPU strategy")
+        return tf.distribute.get_strategy()  # Default strategy for CPU
+    elif len(gpus) == 1:
+        # Single GPU strategy with optimizations
+        print("Using single GPU strategy")
+        with tf.device('/GPU:0'):
+            strategy = tf.distribute.OneDeviceStrategy("/gpu:0")
+        return strategy
+    else:
+        # Multi-GPU strategy
+        print(f"Using multi-GPU strategy with {len(gpus)} GPUs")
+        strategy = tf.distribute.MirroredStrategy()
+        return strategy
+
+
+def ensure_gpu_placement(tensor):
+    """
+    Ensure a tensor is placed on GPU if available.
+    
+    Args:
+        tensor: TensorFlow tensor
+        
+    Returns:
+        Tensor placed on GPU if available, otherwise CPU
+    """
+    if tf.config.list_physical_devices('GPU'):
+        with tf.device('/GPU:0'):
+            return tf.identity(tensor)
+    return tensor
 
 
 def setup_mixed_precision():
