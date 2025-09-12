@@ -84,12 +84,18 @@ class DataConfig:
     train_split: float = 0.9
     val_split: float = 0.1
     batch_size: int = 32
-    num_workers: int = 4
+    num_workers: int = 8  # Increased for better CPU utilization
     
     # Voice conditioning
     reference_audio_length: float = 3.0  # seconds
     min_audio_length: float = 1.0
     max_audio_length: float = 11.0
+    
+    # Performance optimization settings
+    prefetch_buffer_size: int = 4  # Number of batches to prefetch
+    shuffle_buffer_multiplier: int = 10  # Multiplier for shuffle buffer size
+    enable_memory_mapping: bool = True  # Use memory mapping for cache files
+    cache_verification: bool = True  # Verify cache integrity on startup
     
     def __post_init__(self):
         if self.text_cleaners is None:
