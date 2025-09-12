@@ -9,6 +9,7 @@ A comprehensive TensorFlow implementation of XTTS (eXtreme Text-To-Speech) with 
 - 🎭 **Voice Cloning**: Clone voices from reference audio samples
 - 📊 **LJSpeech Compatible**: Ready-to-use dataset generator for LJSpeech format
 - ⚡ **TensorFlow 2.x**: Optimized for modern TensorFlow with mixed precision training
+- 🚀 **GPU Strategy Control**: Configure single-GPU vs multi-GPU distributed training
 - 🛠️ **Production Ready**: Complete training and inference pipelines
 - 📱 **CLI Interface**: Easy-to-use command-line tools
 - 🔧 **Configurable**: Extensive configuration system for all model aspects
@@ -232,7 +233,32 @@ training:
   epochs: 1000
   learning_rate: 1e-4
   checkpoint_dir: "./checkpoints"
+  multi_gpu: false       # Enable multi-GPU distributed training
+  visible_gpus: "0,1"    # Control which GPUs to use
 ```
+
+### GPU Strategy Control
+
+MyXTTS supports both single-GPU and multi-GPU distributed training:
+
+```python
+# Single GPU (default - for stability and debugging)
+config = XTTSConfig(multi_gpu=False)
+
+# Multi-GPU distributed training
+config = XTTSConfig(multi_gpu=True)
+
+# Control specific GPUs
+config = XTTSConfig(multi_gpu=True, visible_gpus="0,1,2")
+```
+
+**Strategy Selection:**
+- `multi_gpu=False`: Uses OneDeviceStrategy (first GPU only)
+- `multi_gpu=True` + single GPU: Uses OneDeviceStrategy  
+- `multi_gpu=True` + multiple GPUs: Uses MirroredStrategy
+- `visible_gpus`: Controls which GPUs are available to TensorFlow
+
+See `GPU_STRATEGY_CONTROL.md` for detailed configuration options.
 
 ## Python API
 
