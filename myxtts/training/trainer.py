@@ -24,6 +24,7 @@ from ..utils.commons import (
     EarlyStopping,
     get_device
 )
+from ..utils.performance import PerformanceMonitor, time_operation
 from .losses import XTTSLoss, create_stop_targets
 
 
@@ -49,6 +50,9 @@ class XTTSTrainer:
         """
         self.config = config
         self.logger = setup_logging()
+        
+        # Initialize performance monitoring
+        self.performance_monitor = PerformanceMonitor()
         
         # Setup device and mixed precision
         self.device = get_device()
@@ -203,14 +207,16 @@ class XTTSTrainer:
         except Exception as e:
             self.logger.warning(f"Cache filter failed: {e}")
 
-        # Convert to TensorFlow datasets
+        # Convert to TensorFlow datasets with optimized settings
         train_tf_dataset = train_ljs.create_tf_dataset(
             batch_size=self.config.data.batch_size,
             shuffle=True,
             repeat=True,
             prefetch=True,
             use_cache_files=True,
-            memory_cache=False
+            memory_cache=False,
+            num_parallel_calls=self.config.data.num_workers,
+            buffer_size_multiplier=self.config.data.shuffle_buffer_multiplier
         )
         
         val_tf_dataset = val_ljs.create_tf_dataset(
@@ -219,7 +225,9 @@ class XTTSTrainer:
             repeat=False,
             prefetch=True,
             use_cache_files=True,
-            memory_cache=True
+            memory_cache=True,
+            num_parallel_calls=min(self.config.data.num_workers, 4),  # Fewer workers for validation
+            buffer_size_multiplier=2
         )
         
         # Store sizes and default steps per epoch for scheduler/progress
@@ -229,6 +237,10 @@ class XTTSTrainer:
         
         self.logger.info(f"Training samples: {self.train_dataset_size}")
         self.logger.info(f"Validation samples: {self.val_dataset_size}")
+        
+        # Log data loading performance
+        self.logger.info("Data loading performance:")
+        self.logger.info(train_ljs.get_performance_report())
         
         return train_tf_dataset, val_tf_dataset
     
@@ -391,6 +403,9 @@ class XTTSTrainer:
         self.logger.info(f"Starting training for {epochs} epochs")
         self.logger.info(f"Current step: {self.current_step}")
         
+        # Start performance monitoring
+        self.performance_monitor.start_monitoring()
+        
         # Determine steps per epoch if not provided
         if steps_per_epoch is None:
             steps_per_epoch = getattr(self, 'default_steps_per_epoch', None)
@@ -423,6 +438,11 @@ class XTTSTrainer:
             # Log epoch results
             self.logger.info(f"Epoch {epoch}: Train Loss = {train_losses['total_loss']:.4f}")
             
+            # Performance monitoring report every 10 epochs
+            if epoch % 10 == 0:
+                self.logger.info("Performance Report:")
+                self.logger.info(self.performance_monitor.get_summary_report())
+            
             # Wandb logging
             if self.config.training.use_wandb:
                 wandb.log({
@@ -433,6 +453,13 @@ class XTTSTrainer:
                     if hasattr(self.optimizer.learning_rate, 'numpy') 
                     else self.optimizer.learning_rate
                 })
+        
+        # Stop performance monitoring
+        self.performance_monitor.stop_monitoring()
+        
+        # Final performance report
+        self.logger.info("Final Performance Report:")
+        self.logger.info(self.performance_monitor.get_summary_report())
         
         self.logger.info("Training completed")
     
@@ -457,6 +484,9 @@ class XTTSTrainer:
                 if steps_per_epoch and step >= steps_per_epoch:
                     break
                 
+                # Measure data loading time
+                data_start_time = time.perf_counter()
+                
                 # Get batch
                 if steps_per_epoch:
                     batch = next(dataset_iter)
@@ -464,10 +494,23 @@ class XTTSTrainer:
                     batch = step
                 
                 text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
+                data_end_time = time.perf_counter()
+                data_loading_time = data_end_time - data_start_time
+                
+                # Measure model computation time
+                compute_start_time = time.perf_counter()
                 
                 # Training step
                 step_losses = self.train_step(
                     text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                )
+                
+                compute_end_time = time.perf_counter()
+                compute_time = compute_end_time - compute_start_time
+                
+                # Log timing for performance monitoring
+                self.performance_monitor.log_step_timing(
+                    data_loading_time, compute_time, self.config.data.batch_size
                 )
                 
                 # Accumulate losses
@@ -479,10 +522,12 @@ class XTTSTrainer:
                 num_batches += 1
                 self.current_step += 1
                 
-                # Update progress bar with detailed losses if available
+                # Update progress bar with detailed losses and timing info
                 postfix = {
                     "loss": f"{float(step_losses['total_loss']):.4f}",
-                    "step": self.current_step
+                    "step": self.current_step,
+                    "data_ms": f"{data_loading_time*1000:.1f}",
+                    "comp_ms": f"{compute_time*1000:.1f}"
                 }
                 if 'mel_loss' in step_losses:
                     postfix["mel"] = f"{float(step_losses['mel_loss']):.2f}"
@@ -493,6 +538,11 @@ class XTTSTrainer:
                 # Log step results
                 if self.current_step % self.config.training.log_step == 0:
                     step_log = {k: float(v) for k, v in step_losses.items()}
+                    step_log.update({
+                        "data_loading_time": data_loading_time,
+                        "compute_time": compute_time,
+                        "samples_per_second": self.config.data.batch_size / (data_loading_time + compute_time)
+                    })
                     self.logger.debug(f"Step {self.current_step}: {step_log}")
                     
                     if self.config.training.use_wandb:
