@@ -165,40 +165,70 @@ class XTTSTrainer:
         Returns:
             Tuple of (train_dataset, val_dataset)
         """
-        # Create training dataset
-        train_dataset = LJSpeechDataset(
+        # Create training dataset (raw LJSpeechDataset object)
+        train_ljs = LJSpeechDataset(
             data_path=train_data_path,
             config=self.config.data,
             subset="train",
-            download=True
+            download=False
         )
         
         # Create validation dataset
         val_data_path = val_data_path or train_data_path
-        val_dataset = LJSpeechDataset(
+        val_ljs = LJSpeechDataset(
             data_path=val_data_path,
             config=self.config.data,
             subset="val",
             download=False
         )
-        
+
+        # Optional: precompute and cache to disk to avoid CPU bottleneck
+        try:
+            train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=True)
+            val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=True)
+            train_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=True)
+            val_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=True)
+            # Verify caches and auto-fix any invalid files
+            train_report = train_ljs.verify_and_fix_cache(fix=True)
+            val_report = val_ljs.verify_and_fix_cache(fix=True)
+            self.logger.info(f"Cache verify: train {train_report}, val {val_report}")
+        except Exception as e:
+            self.logger.warning(f"Precompute failed: {e}")
+
+        # Filter items to those with valid caches
+        try:
+            n_train = train_ljs.filter_items_by_cache()
+            n_val = val_ljs.filter_items_by_cache()
+            self.logger.info(f"Using cached items - train: {n_train}, val: {n_val}")
+        except Exception as e:
+            self.logger.warning(f"Cache filter failed: {e}")
+
         # Convert to TensorFlow datasets
-        train_tf_dataset = train_dataset.create_tf_dataset(
+        train_tf_dataset = train_ljs.create_tf_dataset(
             batch_size=self.config.data.batch_size,
             shuffle=True,
             repeat=True,
-            prefetch=True
+            prefetch=True,
+            use_cache_files=True,
+            memory_cache=False
         )
         
-        val_tf_dataset = val_dataset.create_tf_dataset(
+        val_tf_dataset = val_ljs.create_tf_dataset(
             batch_size=self.config.data.batch_size,
             shuffle=False,
             repeat=False,
-            prefetch=True
+            prefetch=True,
+            use_cache_files=True,
+            memory_cache=True
         )
         
-        self.logger.info(f"Training samples: {len(train_dataset)}")
-        self.logger.info(f"Validation samples: {len(val_dataset)}")
+        # Store sizes and default steps per epoch for scheduler/progress
+        self.train_dataset_size = len(train_ljs)
+        self.val_dataset_size = len(val_ljs)
+        self.default_steps_per_epoch = max(1, int(np.ceil(self.train_dataset_size / self.config.data.batch_size)))
+        
+        self.logger.info(f"Training samples: {self.train_dataset_size}")
+        self.logger.info(f"Validation samples: {self.val_dataset_size}")
         
         return train_tf_dataset, val_tf_dataset
     
@@ -361,6 +391,10 @@ class XTTSTrainer:
         self.logger.info(f"Starting training for {epochs} epochs")
         self.logger.info(f"Current step: {self.current_step}")
         
+        # Determine steps per epoch if not provided
+        if steps_per_epoch is None:
+            steps_per_epoch = getattr(self, 'default_steps_per_epoch', None)
+        
         # Training loop
         for epoch in range(self.current_epoch, epochs):
             self.current_epoch = epoch
@@ -445,11 +479,16 @@ class XTTSTrainer:
                 num_batches += 1
                 self.current_step += 1
                 
-                # Update progress bar
-                pbar.set_postfix({
+                # Update progress bar with detailed losses if available
+                postfix = {
                     "loss": f"{float(step_losses['total_loss']):.4f}",
                     "step": self.current_step
-                })
+                }
+                if 'mel_loss' in step_losses:
+                    postfix["mel"] = f"{float(step_losses['mel_loss']):.2f}"
+                if 'stop_loss' in step_losses:
+                    postfix["stop"] = f"{float(step_losses['stop_loss']):.3f}"
+                pbar.set_postfix(postfix)
                 
                 # Log step results
                 if self.current_step % self.config.training.log_step == 0:

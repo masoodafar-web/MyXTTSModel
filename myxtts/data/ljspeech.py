@@ -57,6 +57,11 @@ class LJSpeechDataset:
         self.download_flag = download
         self.preprocess_flag = preprocess
         
+        # Simple in-memory cache for tokenized text to avoid recomputation
+        self._text_cache: Dict[str, np.ndarray] = {}
+        # Optional index map when using custom metadata and cache filtering
+        self._custom_index_map: Optional[List[int]] = None
+        
         # Initialize processors
         self.audio_processor = AudioProcessor(
             sample_rate=config.sample_rate,
@@ -71,12 +76,16 @@ class LJSpeechDataset:
         self.text_processor = TextProcessor(
             language=config.language,
             cleaner_names=config.text_cleaners,
-            add_blank=config.add_blank
+            add_blank=config.add_blank,
+            # Disable phonemizer by default to reduce CPU overhead during tokenization
+            use_phonemes=False
         )
         
         # Dataset paths
-        self.dataset_dir = self.data_path / "LJSpeech-1.1"
-        self.wavs_dir = self.dataset_dir / "wavs"
+        self.dataset_dir = self.data_path
+        #/ "LJSpeech-1.1"
+        self.wavs_dir = self.dataset_dir 
+        #/ "wavs"
         
         # Determine if we're using custom metadata files with potentially different wav directories
         self.use_custom_metadata = (
@@ -90,6 +99,14 @@ class LJSpeechDataset:
         # Processed data paths
         self.processed_dir = self.data_path / "processed"
         self.splits_file = self.processed_dir / "splits.json"
+        # Mel cache directory (depends on audio settings to avoid mismatch)
+        self.mel_cache_dir = self.processed_dir / f"mels_sr{self.config.sample_rate}_n{self.audio_processor.n_mels}_hop{self.audio_processor.hop_length}"
+        # Token cache directory (depends on text processing settings)
+        tokenizer_tag = getattr(self.text_processor, 'tokenizer_type', 'custom')
+        phon_tag = 'ph' if getattr(self.text_processor, 'use_phonemes', False) and tokenizer_tag == 'custom' else 'noph'
+        blank_tag = 'blank' if getattr(self.text_processor, 'add_blank', False) and tokenizer_tag == 'custom' else 'noblank'
+        lang_tag = getattr(self.text_processor, 'language', 'xx')
+        self.tokens_cache_dir = self.processed_dir / f"tokens_{tokenizer_tag}_{phon_tag}_{blank_tag}_{lang_tag}"
         
         # Load dataset
         self._prepare_dataset()
@@ -110,6 +127,230 @@ class LJSpeechDataset:
             self.items = self.splits[self.subset]
         
         print(f"Loaded {len(self.items)} items for {subset} subset")
+
+    def _save_npy_atomic(self, path: Path, array: np.ndarray) -> None:
+        """Safely save numpy array atomically to avoid partial files.
+
+        Writes to a temporary file and then atomically replaces the target.
+        """
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = Path(str(path) + ".tmp")
+            np.save(tmp_path, array)
+            os.replace(tmp_path, path)
+        except Exception:
+            # Fall back to direct save if atomic replace fails
+            np.save(path, array)
+
+    def precompute_mels(self, num_workers: int = 1, overwrite: bool = False) -> None:
+        """Precompute and cache mel spectrograms to disk to remove CPU bottleneck.
+
+        Creates numpy files in `processed/mels_.../ID.npy` where each file is
+        shaped [time, n_mels]. Subsequent loads reuse these files.
+
+        Args:
+            num_workers: Placeholder for future parallelism (currently sequential)
+            overwrite: Recompute even if cache file exists
+        """
+        self.mel_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"Precomputing mel spectrograms to {self.mel_cache_dir} (overwrite={overwrite})...")
+        to_process = []
+        for idx in range(len(self.metadata)):
+            row = self.metadata.iloc[idx]
+            cache_path = self.mel_cache_dir / f"{row['id']}.npy"
+            if overwrite or (not cache_path.exists()):
+                to_process.append((row['id'], row['audio_path']))
+
+        if not to_process:
+            print("All mel spectrograms already cached.")
+            return
+
+        if num_workers and num_workers > 1:
+            # Parallel precompute using thread pool
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            def _worker(sample_id: str, audio_path: str):
+                audio = self.audio_processor.load_audio(audio_path)
+                if self.config.normalize_audio:
+                    audio = self.audio_processor.preprocess_audio(audio)
+                mel = self.audio_processor.wav_to_mel(audio).T
+                self._save_npy_atomic(self.mel_cache_dir / f"{sample_id}.npy", mel)
+
+            errors = 0
+            with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                futures = {ex.submit(_worker, sid, ap): sid for sid, ap in to_process}
+                for fut in tqdm(as_completed(futures), total=len(futures), desc=f"Caching mels [{self.subset}]"):
+                    try:
+                        fut.result()
+                    except Exception as e:
+                        errors += 1
+            if errors:
+                print(f"Completed with {errors} error(s)")
+        else:
+            # Sequential precompute
+            for sample_id, audio_path in tqdm(to_process, desc=f"Caching mels [{self.subset}]"):
+                try:
+                    audio = self.audio_processor.load_audio(audio_path)
+                    if self.config.normalize_audio:
+                        audio = self.audio_processor.preprocess_audio(audio)
+                    mel = self.audio_processor.wav_to_mel(audio).T  # [time, n_mels]
+                    self._save_npy_atomic(self.mel_cache_dir / f"{sample_id}.npy", mel)
+                except Exception as e:
+                    print(f"Failed to cache {sample_id}: {e}")
+
+    def precompute_tokens(self, num_workers: int = 1, overwrite: bool = False) -> None:
+        """Precompute and cache tokenized text sequences to disk.
+
+        Creates numpy files in `processed/tokens_.../ID.npy` containing int32
+        arrays of token IDs.
+
+        Args:
+            num_workers: Number of parallel workers (threads)
+            overwrite: Recompute even if cache file exists
+        """
+        self.tokens_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        to_process = []
+        for idx in range(len(self.metadata)):
+            row = self.metadata.iloc[idx]
+            cache_path = self.tokens_cache_dir / f"{row['id']}.npy"
+            if overwrite or (not cache_path.exists()):
+                text_norm = str(row['normalized_transcription'])
+                to_process.append((row['id'], text_norm))
+
+        if not to_process:
+            return
+
+        def _encode_and_save(sample_id: str, text_norm: str):
+            seq = self.text_processor.text_to_sequence(text_norm)
+            arr = np.array(seq, dtype=np.int32)
+            self._save_npy_atomic(self.tokens_cache_dir / f"{sample_id}.npy", arr)
+
+        if num_workers and num_workers > 1:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=num_workers) as ex:
+                futures = {ex.submit(_encode_and_save, sid, txt): sid for sid, txt in to_process}
+                for _ in tqdm(as_completed(futures), total=len(futures), desc=f"Caching tokens [{self.subset}]"):
+                    pass
+        else:
+            for sid, txt in tqdm(to_process, desc=f"Caching tokens [{self.subset}]"):
+                try:
+                    _encode_and_save(sid, txt)
+                except Exception as e:
+                    print(f"Failed to cache tokens for {sid}: {e}")
+
+    def verify_and_fix_cache(self, fix: bool = True, max_errors: int = 20) -> Dict[str, int]:
+        """Verify cache files are readable and have valid shapes; optionally fix.
+
+        Args:
+            fix: If True, try to rebuild invalid/missing caches in-place
+            max_errors: Max number of errors to log in detail
+
+        Returns:
+            Dict with counts: {checked, fixed, failed}
+        """
+        if self.use_custom_metadata:
+            indices = list(range(len(self.metadata)))
+        else:
+            indices = list(self.items)
+
+        errors_logged = 0
+        fixed = 0
+        failed = 0
+        for i in indices:
+            row = self.metadata.iloc[i]
+            sid = str(row['id'])
+            tok_path = self.tokens_cache_dir / f"{sid}.npy"
+            mel_path = self.mel_cache_dir / f"{sid}.npy"
+
+            # Verify tokens
+            tokens_ok = False
+            if tok_path.exists() and os.path.getsize(tok_path) > 0:
+                try:
+                    toks = np.load(tok_path, allow_pickle=False)
+                    tokens_ok = toks.ndim == 1
+                except Exception:
+                    tokens_ok = False
+            if not tokens_ok:
+                if fix:
+                    try:
+                        seq = self.text_processor.text_to_sequence(str(row['normalized_transcription']))
+                        arr = np.array(seq, dtype=np.int32)
+                        self._save_npy_atomic(tok_path, arr)
+                        tokens_ok = True
+                        fixed += 1
+                    except Exception as e:
+                        failed += 1
+                        if errors_logged < max_errors:
+                            print(f"Token cache fix failed for {sid}: {e}")
+                            errors_logged += 1
+                else:
+                    failed += 1
+                    if errors_logged < max_errors:
+                        print(f"Invalid token cache: {tok_path}")
+                        errors_logged += 1
+
+            # Verify mels
+            mel_ok = False
+            if mel_path.exists() and os.path.getsize(mel_path) > 0:
+                try:
+                    mel = np.load(mel_path, allow_pickle=False)
+                    mel_ok = mel.ndim == 2 and mel.shape[1] == self.audio_processor.n_mels
+                except Exception:
+                    mel_ok = False
+            if not mel_ok:
+                if fix:
+                    try:
+                        audio = self.audio_processor.load_audio(str(row['audio_path']))
+                        if self.config.normalize_audio:
+                            audio = self.audio_processor.preprocess_audio(audio)
+                        mel = self.audio_processor.wav_to_mel(audio).T
+                        self._save_npy_atomic(mel_path, mel)
+                        mel_ok = True
+                        fixed += 1
+                    except Exception as e:
+                        failed += 1
+                        if errors_logged < max_errors:
+                            print(f"Mel cache fix failed for {sid}: {e}")
+                            errors_logged += 1
+                else:
+                    failed += 1
+                    if errors_logged < max_errors:
+                        print(f"Invalid mel cache: {mel_path}")
+                        errors_logged += 1
+
+        return {"checked": len(indices), "fixed": fixed, "failed": failed}
+
+    def filter_items_by_cache(self) -> int:
+        """Filter dataset items to those with valid cache files.
+
+        Returns:
+            Number of remaining items after filtering
+        """
+        if self.use_custom_metadata:
+            selected_indices = list(range(len(self.metadata)))
+        else:
+            selected_indices = list(self.items)
+
+        valid = []
+        for i in selected_indices:
+            row = self.metadata.iloc[i]
+            sid = str(row['id'])
+            tok_path = self.tokens_cache_dir / f"{sid}.npy"
+            mel_path = self.mel_cache_dir / f"{sid}.npy"
+            if tok_path.exists() and mel_path.exists() and os.path.getsize(tok_path) > 0 and os.path.getsize(mel_path) > 0:
+                valid.append(i)
+
+        if not valid:
+            print("Warning: No valid cached items found; falling back to original selection")
+            return len(selected_indices)
+
+        if self.use_custom_metadata:
+            self._custom_index_map = valid
+        else:
+            self.items = valid
+        return len(valid)
     
     def _get_metadata_and_wavs_path(self, subset: str) -> Tuple[Path, Path]:
         """
@@ -194,35 +435,97 @@ class LJSpeechDataset:
         print("Dataset downloaded and extracted successfully")
     
     def _load_metadata(self) -> pd.DataFrame:
-        """Load metadata from CSV file."""
+        """Load metadata from CSV file robustly.
+
+        Handles lines with extra '|' characters inside text by splitting on the
+        first and last separator, skips obvious header lines, and ignores empty
+        or malformed rows. Expects logical format: id|transcription|normalized.
+        """
         if not self.metadata_file.exists():
             raise FileNotFoundError(f"Metadata file not found: {self.metadata_file}")
-        
-        # LJSpeech metadata format: ID|transcription|normalized_transcription
-        df = pd.read_csv(
-            self.metadata_file,
-            sep='|',
-            header=None,
-            names=['id', 'transcription', 'normalized_transcription'],
-            quoting=csv.QUOTE_NONE
-        )
-        
+
+        rows = []
+        skipped = 0
+        header_skipped = 0
+
+        with open(self.metadata_file, 'r', encoding='utf-8', errors='replace') as f:
+            for line_no, raw in enumerate(f, 1):
+                line = raw.strip()
+                if not line:
+                    continue
+
+                # Remove potential BOM and check for header-like first token
+                candidate = line.lstrip('\ufeff')
+
+                # Skip common header variants (e.g., "id|transcription|normalized_transcription")
+                lower = candidate.lower()
+                if lower.startswith('id|') or lower.startswith('fileid|') or lower.startswith('wav_id|'):
+                    header_skipped += 1
+                    continue
+
+                # Use first and last '|' as field boundaries to be robust to extra '|' in middle
+                first = candidate.find('|')
+                last = candidate.rfind('|')
+
+                id_, trans, norm = None, None, None
+                if first == -1:
+                    # Not enough separators; try splitting normally or skip
+                    parts = candidate.split('|')
+                    if len(parts) == 3:
+                        id_, trans, norm = parts
+                    elif len(parts) == 2:
+                        id_, trans = parts
+                        norm = trans
+                    else:
+                        skipped += 1
+                        continue
+                elif first == last:
+                    # Only one separator; duplicate transcription as normalized
+                    id_ = candidate[:first]
+                    trans = candidate[first + 1:]
+                    norm = trans
+                else:
+                    # Normal or with extra separators inside transcription
+                    id_ = candidate[:first]
+                    trans = candidate[first + 1:last]
+                    norm = candidate[last + 1:]
+
+                id_ = (id_ or '').strip()
+                trans = (trans or '').strip()
+                norm = (norm or '').strip()
+
+                # Basic validation
+                if not id_:
+                    skipped += 1
+                    continue
+
+                rows.append({
+                    'id': id_,
+                    'transcription': trans,
+                    'normalized_transcription': norm
+                })
+
+        if header_skipped:
+            print(f"Info: skipped {header_skipped} header line(s) in {self.metadata_file}")
+        if skipped:
+            print(f"Warning: skipped {skipped} malformed/empty metadata line(s)")
+
+        df = pd.DataFrame(rows, columns=['id', 'transcription', 'normalized_transcription'])
+
         # Add audio file paths using the correct wavs directory
-        df['audio_path'] = df['id'].apply(
-            lambda x: str(self.wavs_dir / f"{x}.wav")
-        )
-        
+        df['audio_path'] = df['id'].apply(lambda x: str(self.wavs_dir / f"{x}.wav"))
+
         # Verify audio files exist
         missing_files = []
-        for idx, row in df.iterrows():
+        for _, row in df.iterrows():
             if not Path(row['audio_path']).exists():
                 missing_files.append(row['audio_path'])
-        
+
         if missing_files:
             print(f"Warning: {len(missing_files)} audio files are missing")
             # Remove missing files from dataframe
             df = df[df['audio_path'].apply(lambda x: Path(x).exists())]
-        
+
         return df
     
     def _create_splits(self):
@@ -264,6 +567,8 @@ class LJSpeechDataset:
     
     def __len__(self) -> int:
         """Get dataset size."""
+        if self.use_custom_metadata and self._custom_index_map is not None:
+            return len(self._custom_index_map)
         return len(self.items)
     
     def __getitem__(self, idx: int) -> Dict[str, any]:
@@ -284,8 +589,11 @@ class LJSpeechDataset:
                 - text_length: Text sequence length
         """
         if self.use_custom_metadata:
-            # When using custom metadata, use direct indexing
-            item_idx = idx
+            # When using custom metadata, optionally use filtered index map
+            if self._custom_index_map is not None:
+                item_idx = self._custom_index_map[idx]
+            else:
+                item_idx = idx
         else:
             # When using single metadata with splits, use split indices
             item_idx = self.items[idx]
@@ -296,31 +604,70 @@ class LJSpeechDataset:
         text = row['transcription']
         text_normalized = row['normalized_transcription']
         
-        # Process text
-        text_sequence = self.text_processor.text_to_sequence(text_normalized)
+        # Process text with cache and on-disk token cache
+        cache_key = str(row['id'])
+        tokens_cache_path = self.tokens_cache_dir / f"{cache_key}.npy"
+        if cache_key in self._text_cache:
+            text_sequence = self._text_cache[cache_key]
+        elif tokens_cache_path.exists():
+            try:
+                text_sequence = np.load(tokens_cache_path)
+                self._text_cache[cache_key] = text_sequence
+            except Exception:
+                text_sequence = self.text_processor.text_to_sequence(text_normalized)
+                text_sequence = np.array(text_sequence, dtype=np.int32)
+                try:
+                    self._save_npy_atomic(tokens_cache_path, text_sequence)
+                except Exception:
+                    pass
+                self._text_cache[cache_key] = text_sequence
+        else:
+            text_sequence = self.text_processor.text_to_sequence(text_normalized)
+            text_sequence = np.array(text_sequence, dtype=np.int32)
+            try:
+                self._save_npy_atomic(tokens_cache_path, text_sequence)
+            except Exception:
+                pass
+            self._text_cache[cache_key] = text_sequence
         
         # Get audio path
         audio_path = row['audio_path']
         
-        # Load and process audio
-        audio = self.audio_processor.load_audio(audio_path)
-        if self.config.normalize_audio:
-            audio = self.audio_processor.preprocess_audio(audio)
+        # Prefer mel cache to avoid audio I/O and STFT CPU work
+        mel_cache_path = self.mel_cache_dir / f"{row['id']}.npy"
+        mel_spec = None
+        if mel_cache_path.exists():
+            try:
+                mel_spec = np.load(mel_cache_path, mmap_mode=None)
+                if mel_spec.ndim != 2 or mel_spec.shape[1] != self.audio_processor.n_mels:
+                    raise ValueError("Invalid mel cache shape")
+            except Exception:
+                mel_spec = None  # Force recompute
         
-        # Extract mel spectrogram
-        mel_spec = self.audio_processor.wav_to_mel(audio)
+        audio = None
+        if mel_spec is None:
+            # Load audio only if needed
+            audio = self.audio_processor.load_audio(audio_path)
+            if self.config.normalize_audio:
+                audio = self.audio_processor.preprocess_audio(audio)
+            mel_spec = self.audio_processor.wav_to_mel(audio).T  # [time, n_mels]
+            try:
+                self._save_npy_atomic(mel_cache_path, mel_spec)
+            except Exception:
+                pass
         
         return {
             "id": row['id'],
             "text": text,
             "text_normalized": text_normalized,
-            "text_sequence": np.array(text_sequence, dtype=np.int32),
+            "text_sequence": text_sequence.astype(np.int32),
             "audio_path": audio_path,
-            "audio": audio.astype(np.float32),
+            "audio": (audio.astype(np.float32) if audio is not None else np.array([], dtype=np.float32)),
             "mel_spectrogram": mel_spec.astype(np.float32),
-            "audio_length": len(audio),
+            "audio_length": (len(audio) if audio is not None else int(mel_spec.shape[0] * self.audio_processor.hop_length)),
             "text_length": len(text_sequence),
-            "mel_length": mel_spec.shape[1]
+            # Time dimension after transpose is axis 0
+            "mel_length": int(mel_spec.shape[0])
         }
     
     def get_sample_rate(self) -> int:
@@ -336,7 +683,9 @@ class LJSpeechDataset:
         batch_size: Optional[int] = None,
         shuffle: bool = True,
         repeat: bool = True,
-        prefetch: bool = True
+        prefetch: bool = True,
+        use_cache_files: bool = True,
+        memory_cache: bool = False
     ) -> tf.data.Dataset:
         """
         Create TensorFlow dataset.
@@ -352,60 +701,130 @@ class LJSpeechDataset:
         """
         batch_size = batch_size or self.config.batch_size
         
-        def generator():
-            """Data generator function."""
-            indices = list(range(len(self)))
+        if use_cache_files:
+            # Build lists of cache file paths and sources for current subset
+            if self.use_custom_metadata and self._custom_index_map is not None:
+                selected_indices = list(self._custom_index_map)
+            elif self.use_custom_metadata:
+                selected_indices = list(range(len(self.metadata)))
+            else:
+                selected_indices = list(self.items)
+
+            token_paths = []
+            mel_paths = []
+            audio_paths = []
+            norm_texts = []
+            for i in selected_indices:
+                row = self.metadata.iloc[i]
+                sid = str(row['id'])
+                token_paths.append(str(self.tokens_cache_dir / f"{sid}.npy"))
+                mel_paths.append(str(self.mel_cache_dir / f"{sid}.npy"))
+                audio_paths.append(str(row['audio_path']))
+                norm_texts.append(str(row['normalized_transcription']))
+
+            ds = tf.data.Dataset.from_tensor_slices((token_paths, mel_paths, audio_paths, norm_texts))
+
             if shuffle:
-                np.random.shuffle(indices)
-            
-            for idx in indices:
-                item = self[idx]
-                yield (
+                ds = ds.shuffle(buffer_size=max(1000, len(token_paths)))
+
+            def _load_from_cache(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor, audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
+                def _py_loader(tok_path_b, mel_path_b, audio_path_b, norm_text_b):
+                    tok_path = tok_path_b.decode('utf-8') if isinstance(tok_path_b, (bytes, bytearray)) else tok_path_b
+                    mel_path = mel_path_b.decode('utf-8') if isinstance(mel_path_b, (bytes, bytearray)) else mel_path_b
+                    audio_path = audio_path_b.decode('utf-8') if isinstance(audio_path_b, (bytes, bytearray)) else audio_path_b
+                    norm_text = norm_text_b.decode('utf-8') if isinstance(norm_text_b, (bytes, bytearray)) else norm_text_b
+
+                    # Strictly load tokens and mels from cache only
+                    tokens = np.load(tok_path, allow_pickle=False)
+                    mel = np.load(mel_path, allow_pickle=False)
+                    
+                    text_len = np.int32(tokens.shape[0])
+                    mel_len = np.int32(mel.shape[0])
+                    return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
+
+                text_seq, mel_spec, text_len, mel_len = tf.numpy_function(
+                    func=_py_loader,
+                    inp=[tok_path_t, mel_path_t, audio_path_t, norm_text_t],
+                    Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
+                )
+                text_seq.set_shape([None])
+                mel_spec.set_shape([None, None])
+                text_len.set_shape([])
+                mel_len.set_shape([])
+                return text_seq, mel_spec, text_len, mel_len
+
+            dataset = ds.map(_load_from_cache, num_parallel_calls=tf.data.AUTOTUNE)
+        else:
+            # Fallback: Use __getitem__ via py_function (slower)
+            indices = tf.data.Dataset.from_tensor_slices(tf.range(len(self), dtype=tf.int32))
+
+            if shuffle:
+                indices = indices.shuffle(buffer_size=max(1000, len(self)))
+
+            def _py_get(idx: tf.Tensor):
+                i = int(idx.numpy())
+                item = self[i]
+                return (
                     item["text_sequence"],
                     item["mel_spectrogram"],
-                    item["text_length"],
-                    item["mel_length"]
+                    np.int32(item["text_length"]),
+                    np.int32(item["mel_length"]),
                 )
-        
-        # Define output signature
-        output_signature = (
-            tf.TensorSpec(shape=(None,), dtype=tf.int32),  # text_sequence
-            tf.TensorSpec(shape=(None, None), dtype=tf.float32),  # mel_spectrogram
-            tf.TensorSpec(shape=(), dtype=tf.int32),  # text_length
-            tf.TensorSpec(shape=(), dtype=tf.int32)   # mel_length
-        )
-        
-        dataset = tf.data.Dataset.from_generator(
-            generator,
-            output_signature=output_signature
-        )
-        
-        if shuffle:
-            dataset = dataset.shuffle(buffer_size=1000)
-        
+
+            def _map_fn(idx):
+                text_seq, mel_spec, text_len, mel_len = tf.py_function(
+                    func=_py_get,
+                    inp=[idx],
+                    Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
+                )
+                # Set shapes where possible for padding to work
+                text_seq.set_shape([None])
+                mel_spec.set_shape([None, None])
+                text_len.set_shape([])
+                mel_len.set_shape([])
+                return text_seq, mel_spec, text_len, mel_len
+
+            dataset = indices.map(_map_fn, num_parallel_calls=tf.data.AUTOTUNE)
+
+        # Optional in-memory cache to avoid repeated disk I/O
+        if memory_cache:
+            dataset = dataset.cache()
+
         # Pad and batch
         dataset = dataset.padded_batch(
             batch_size,
             padded_shapes=(
-                [None],      # text_sequence
-                [None, None], # mel_spectrogram  
-                [],          # text_length
-                []           # mel_length
+                [None],       # text_sequence
+                [None, None], # mel_spectrogram
+                [],           # text_length
+                []            # mel_length
             ),
             padding_values=(
-                0,    # text_sequence (pad token)
-                0.0,  # mel_spectrogram
-                0,    # text_length
-                0     # mel_length
+                tf.constant(0, dtype=tf.int32),
+                tf.constant(0.0, dtype=tf.float32),
+                tf.constant(0, dtype=tf.int32),
+                tf.constant(0, dtype=tf.int32)
             )
         )
-        
+
         if repeat:
             dataset = dataset.repeat()
-        
+
         if prefetch:
             dataset = dataset.prefetch(tf.data.AUTOTUNE)
-        
+
+        # Try prefetching to GPU if available
+        try:
+            if tf.config.list_logical_devices('GPU'):
+                dataset = dataset.apply(tf.data.experimental.prefetch_to_device('/GPU:0', buffer_size=2))
+        except Exception:
+            pass
+
+        # Allow non-deterministic execution for throughput
+        options = tf.data.Options()
+        options.experimental_deterministic = False
+        dataset = dataset.with_options(options)
+
         return dataset
     
     def get_statistics(self) -> Dict[str, any]:

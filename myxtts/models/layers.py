@@ -334,8 +334,11 @@ class TransformerBlock(tf.keras.layers.Layer):
         ff_output = self.feed_forward(x, training=training)
         ff_output = self.dropout(ff_output, training=training)
         
-        norm_layer = self.norm3 if self.is_decoder else self.norm2
-        output = norm_layer(x + ff_output)
+        # Final normalization: use the third norm layer for decoder blocks,
+        # and for encoder blocks this is the second norm (named "norm2").
+        # We always apply self.norm3, which is constructed as
+        # name="norm3" if decoder else name="norm2".
+        output = self.norm3(x + ff_output)
         
         return output
 
