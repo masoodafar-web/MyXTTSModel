@@ -68,9 +68,13 @@ def get_device() -> str:
         return "CPU"
 
 
-def setup_gpu_strategy():
+def setup_gpu_strategy(enable_multi_gpu: bool = False):
     """
     Set up GPU distribution strategy for optimal GPU utilization.
+    
+    Args:
+        enable_multi_gpu: Whether to enable MirroredStrategy for multi-GPU training.
+                         If False, uses OneDeviceStrategy even with multiple GPUs.
     
     Returns:
         tf.distribute.Strategy for training
@@ -87,10 +91,17 @@ def setup_gpu_strategy():
             strategy = tf.distribute.OneDeviceStrategy("/gpu:0")
         return strategy
     else:
-        # Multi-GPU strategy
-        print(f"Using multi-GPU strategy with {len(gpus)} GPUs")
-        strategy = tf.distribute.MirroredStrategy()
-        return strategy
+        # Multi-GPU available - check if user wants to enable it
+        if enable_multi_gpu:
+            print(f"Using multi-GPU strategy with {len(gpus)} GPUs")
+            strategy = tf.distribute.MirroredStrategy()
+            return strategy
+        else:
+            # Use only first GPU even with multiple GPUs available
+            print(f"Multi-GPU disabled, using single GPU strategy (GPU 0 of {len(gpus)} available)")
+            with tf.device('/GPU:0'):
+                strategy = tf.distribute.OneDeviceStrategy("/gpu:0")
+            return strategy
 
 
 def ensure_gpu_placement(tensor):

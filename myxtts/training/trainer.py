@@ -24,7 +24,8 @@ from ..utils.commons import (
     EarlyStopping,
     get_device,
     configure_gpus,
-    ensure_gpu_placement
+    ensure_gpu_placement,
+    setup_gpu_strategy
 )
 from ..utils.performance import PerformanceMonitor, time_operation
 from .losses import XTTSLoss, create_stop_targets
@@ -67,8 +68,10 @@ class XTTSTrainer:
         self.device = get_device()
         self.logger.info(f"Using device: {self.device}")
         
-        # Use default (no-op) distribution strategy to keep API consistent
-        self.strategy = tf.distribute.get_strategy()
+        # Setup distribution strategy based on configuration
+        self.strategy = setup_gpu_strategy(
+            enable_multi_gpu=getattr(config.training, 'multi_gpu', False)
+        )
         self.logger.info(f"Using strategy: {type(self.strategy).__name__}")
 
         if self.device == "GPU":
@@ -82,22 +85,24 @@ class XTTSTrainer:
                 tf.config.optimizer.set_jit(True)
                 self.logger.info("XLA compilation enabled")
 
-        # Initialize model
-        if model is None:
-            self.model = XTTS(config.model)
-        else:
-            self.model = model
-        
-        # Initialize optimizer
-        self.optimizer = self._create_optimizer()
-        
-        # Initialize loss function
-        self.criterion = XTTSLoss(
-            mel_loss_weight=config.training.mel_loss_weight,
-            stop_loss_weight=1.0,
-            attention_loss_weight=config.training.kl_loss_weight,
-            duration_loss_weight=config.training.duration_loss_weight
-        )
+        # Initialize model and optimizer within strategy scope
+        with self.strategy.scope():
+            # Initialize model
+            if model is None:
+                self.model = XTTS(config.model)
+            else:
+                self.model = model
+            
+            # Initialize optimizer
+            self.optimizer = self._create_optimizer()
+            
+            # Initialize loss function
+            self.criterion = XTTSLoss(
+                mel_loss_weight=config.training.mel_loss_weight,
+                stop_loss_weight=1.0,
+                attention_loss_weight=config.training.kl_loss_weight,
+                duration_loss_weight=config.training.duration_loss_weight
+            )
         
         # Initialize learning rate scheduler
         self.lr_scheduler = self._create_lr_scheduler()
@@ -587,10 +592,15 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # Training step: run non-distributed for stability
-                step_losses = self.train_step(
-                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                )
+                # Training step: use appropriate method based on strategy
+                if isinstance(self.strategy, tf.distribute.MirroredStrategy):
+                    # For MirroredStrategy, use the distributed training step
+                    step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
+                else:
+                    # Single device training (OneDeviceStrategy or default strategy)
+                    step_losses = self.train_step(
+                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                    )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
@@ -651,11 +661,17 @@ class XTTSTrainer:
         num_batches = 0
         
         for batch in tqdm(val_dataset, desc="Validation"):
-            # Always run non-distributed validation step for simplicity/stability
             text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
-            step_losses = self.validation_step(
-                text_sequences, mel_spectrograms, text_lengths, mel_lengths
-            )
+            
+            # Use appropriate validation method based on strategy
+            if isinstance(self.strategy, tf.distribute.MirroredStrategy):
+                # For MirroredStrategy, use the distributed validation step
+                step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
+            else:
+                # Single device validation (OneDeviceStrategy or default strategy)
+                step_losses = self.validation_step(
+                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                )
             
             # Accumulate losses
             for key, value in step_losses.items():
