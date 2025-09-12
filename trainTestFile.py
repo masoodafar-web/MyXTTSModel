@@ -264,7 +264,7 @@ def main():
     )
     
     # Data and model options
-    parser.add_argument("--data-path", default="./data/ljspeech", help="Path to training data")
+    parser.add_argument("--data-path", default="../dataset/dataset_train", help="Path to training data")
     parser.add_argument("--language", default="en", help="Language code")
     parser.add_argument("--batch-size", type=int, default=16, help="Training batch size")
     parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
@@ -273,12 +273,12 @@ def main():
     parser.add_argument("--checkpoint-dir", default="./checkpoints", help="Checkpoint directory")
     
     # Custom metadata file options
-    parser.add_argument("--metadata-train-file", help="Custom train metadata file path (e.g., metadata_train.csv)")
-    parser.add_argument("--metadata-eval-file", help="Custom eval metadata file path (e.g., metadata_eval.csv)")
+    parser.add_argument("--metadata-train-file",default="../dataset/dataset_train/metadata_train.csv", help="Custom train metadata file path (e.g., metadata_train.csv)")
+    parser.add_argument("--metadata-eval-file",default="../dataset/dataset_eval/metadata_eval.csv", help="Custom eval metadata file path (e.g., metadata_eval.csv)")
     
     # Custom wav directory options
-    parser.add_argument("--wavs-train-dir", help="Custom train wav files directory path")
-    parser.add_argument("--wavs-eval-dir", help="Custom eval wav files directory path")
+    parser.add_argument("--wavs-train-dir",default="../dataset/dataset_train/wavs", help="Custom train wav files directory path")
+    parser.add_argument("--wavs-eval-dir",default="../dataset/dataset_train/wavs", help="Custom eval wav files directory path")
     
     # Training options
     parser.add_argument("--resume-from", help="Resume training from checkpoint")
