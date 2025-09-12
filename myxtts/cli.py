@@ -51,28 +51,52 @@ def train_command(args):
     # Set random seed for reproducibility
     set_random_seed(args.seed)
     
-    # Load configuration
-    if not os.path.exists(args.config):
-        logger.error(f"Configuration file not found: {args.config}")
-        sys.exit(1)
-    
-    config = XTTSConfig.from_yaml(args.config)
-    
-    # Override config with command line arguments
-    if args.data_path:
-        config.data.dataset_path = args.data_path
-    
-    if args.checkpoint_dir:
-        config.training.checkpoint_dir = args.checkpoint_dir
-    
-    if args.epochs:
-        config.training.epochs = args.epochs
-    
-    if args.batch_size:
-        config.data.batch_size = args.batch_size
-    
-    if args.learning_rate:
-        config.training.learning_rate = args.learning_rate
+    # Load configuration - make it optional
+    if args.config:
+        if not os.path.exists(args.config):
+            logger.error(f"Configuration file not found: {args.config}")
+            sys.exit(1)
+        
+        logger.info(f"Loading configuration from: {args.config}")
+        config = XTTSConfig.from_yaml(args.config)
+        
+        # Override config with command line arguments if provided
+        if args.data_path:
+            logger.info(f"Overriding dataset path from CLI: {args.data_path}")
+            config.data.dataset_path = args.data_path
+        if args.checkpoint_dir:
+            logger.info(f"Overriding checkpoint directory from CLI: {args.checkpoint_dir}")
+            config.training.checkpoint_dir = args.checkpoint_dir
+        if args.epochs:
+            logger.info(f"Overriding epochs from CLI: {args.epochs}")
+            config.training.epochs = args.epochs
+        if args.batch_size:
+            logger.info(f"Overriding batch size from CLI: {args.batch_size}")
+            config.data.batch_size = args.batch_size
+        if args.learning_rate:
+            logger.info(f"Overriding learning rate from CLI: {args.learning_rate}")
+            config.training.learning_rate = args.learning_rate
+    else:
+        # Create default configuration from CLI arguments
+        logger.info("No configuration file provided, creating default configuration from CLI arguments")
+        config = XTTSConfig()
+        
+        # Apply CLI arguments to default config
+        if args.data_path:
+            config.data.dataset_path = args.data_path
+        if args.checkpoint_dir:
+            config.training.checkpoint_dir = args.checkpoint_dir
+        if args.epochs:
+            config.training.epochs = args.epochs
+        if args.batch_size:
+            config.data.batch_size = args.batch_size
+        if args.learning_rate:
+            config.training.learning_rate = args.learning_rate
+        
+        # Ensure required parameters are set
+        if not config.data.dataset_path:
+            logger.error("Dataset path is required. Please provide either --config with dataset_path or --data-path")
+            sys.exit(1)
     
     # Create model
     model = XTTS(config.model)
@@ -336,8 +360,8 @@ def main():
     
     # Train command
     train_parser = subparsers.add_parser("train", help="Train XTTS model")
-    train_parser.add_argument("--config", "-c", required=True, help="Configuration file")
-    train_parser.add_argument("--data-path", help="Training data path")
+    train_parser.add_argument("--config", "-c", help="Configuration file (optional - parameters can be set via CLI)")
+    train_parser.add_argument("--data-path", help="Training data path (required if no config file)")
     train_parser.add_argument("--val-data-path", help="Validation data path")
     train_parser.add_argument("--checkpoint-dir", help="Checkpoint directory")
     train_parser.add_argument("--resume-from", help="Resume training from checkpoint")
