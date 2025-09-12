@@ -42,11 +42,25 @@ def get_ljspeech_dataset():
     from myxtts.data import LJSpeechDataset
     return LJSpeechDataset
 
-# Core exports
+# Core exports - using lazy imports to avoid heavy dependencies
 __all__ = [
     "XTTSConfig",
-    "get_xtts_model",
-    "get_inference_engine", 
-    "get_trainer",
+    "XTTS",
+    "XTTSTrainer", 
+    "XTTSInference",
     "get_ljspeech_dataset",
 ]
+
+# Provide direct access via module attributes for convenience
+def __getattr__(name):
+    if name == "XTTS":
+        from myxtts.models.xtts import XTTS
+        return XTTS
+    elif name == "XTTSTrainer":
+        from myxtts.training.trainer import XTTSTrainer
+        return XTTSTrainer
+    elif name == "XTTSInference":
+        from myxtts.inference.synthesizer import XTTSInference
+        return XTTSInference
+    else:
+        raise AttributeError(f"module '{__name__}' has no attribute '{name}'")

@@ -138,6 +138,89 @@ class TestConfig(unittest.TestCase):
             if os.path.exists(yaml_path):
                 os.unlink(yaml_path)
 
+    def test_direct_parameter_passing(self):
+        """Test direct parameter passing to XTTSConfig constructor."""
+        # Test basic parameter passing
+        config = XTTSConfig(
+            epochs=100,
+            batch_size=16,
+            learning_rate=1e-5,
+            metadata_train_file="train.csv",
+            metadata_eval_file="eval.csv",
+            sample_rate=16000
+        )
+        
+        # Check that parameters were set correctly
+        self.assertEqual(config.training.epochs, 100)
+        self.assertEqual(config.data.batch_size, 16)
+        self.assertEqual(config.training.learning_rate, 1e-5)
+        self.assertEqual(config.data.metadata_train_file, "train.csv")
+        self.assertEqual(config.data.metadata_eval_file, "eval.csv")
+        # sample_rate appears in both model and data configs, should be set in both
+        self.assertEqual(config.model.sample_rate, 16000)
+        self.assertEqual(config.data.sample_rate, 16000)
+    
+    def test_parameter_distribution(self):
+        """Test that parameters are distributed to correct config sections."""
+        config = XTTSConfig(
+            # Model parameters
+            text_encoder_dim=256,
+            n_mels=128,
+            # Data parameters
+            batch_size=8,
+            normalize_audio=False,
+            # Training parameters
+            epochs=50,
+            optimizer="adam"
+        )
+        
+        # Check model parameters
+        self.assertEqual(config.model.text_encoder_dim, 256)
+        self.assertEqual(config.model.n_mels, 128)
+        
+        # Check data parameters
+        self.assertEqual(config.data.batch_size, 8)
+        self.assertEqual(config.data.normalize_audio, False)
+        
+        # Check training parameters
+        self.assertEqual(config.training.epochs, 50)
+        self.assertEqual(config.training.optimizer, "adam")
+    
+    def test_invalid_parameter_error(self):
+        """Test that invalid parameters raise ValueError."""
+        with self.assertRaises(ValueError) as context:
+            XTTSConfig(invalid_parameter=123)
+        
+        self.assertIn("Unknown parameter: invalid_parameter", str(context.exception))
+    
+    def test_mixed_initialization(self):
+        """Test combining direct parameters with explicit config objects."""
+        # Create custom data config
+        custom_data = DataConfig(batch_size=64)
+        
+        # Pass it along with direct parameters
+        config = XTTSConfig(
+            data=custom_data,
+            epochs=75,  # This should go to training config
+            text_encoder_dim=1024  # This should go to model config
+        )
+        
+        # Check that custom data config was used and updated
+        self.assertEqual(config.data.batch_size, 64)  # From custom_data
+        
+        # Check that direct parameters were applied
+        self.assertEqual(config.training.epochs, 75)
+        self.assertEqual(config.model.text_encoder_dim, 1024)
+    
+    def test_empty_kwargs(self):
+        """Test that XTTSConfig works normally with no kwargs."""
+        config = XTTSConfig()
+        
+        # Should have default values
+        self.assertEqual(config.training.epochs, 1000)
+        self.assertEqual(config.data.batch_size, 32)
+        self.assertEqual(config.model.text_encoder_dim, 512)
+
 
 if __name__ == '__main__':
     unittest.main()
