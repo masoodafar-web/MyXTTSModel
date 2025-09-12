@@ -884,6 +884,15 @@ class LJSpeechDataset:
                 num_parallel_calls=num_parallel_calls,
                 deterministic=False  # Allow non-deterministic for better performance
             )
+
+            # Optionally cap mel frames length to avoid OOM
+            max_frames = getattr(self.config, 'max_mel_frames', None)
+            if max_frames and max_frames > 0:
+                def _cap_lengths(text_seq, mel_spec, text_len, mel_len):
+                    new_mel = mel_spec[:max_frames]
+                    new_mel_len = tf.minimum(mel_len, tf.constant(max_frames, dtype=mel_len.dtype))
+                    return text_seq, new_mel, text_len, new_mel_len
+                dataset = dataset.map(_cap_lengths, num_parallel_calls=tf.data.AUTOTUNE)
             
         else:
             # Fallback: Use __getitem__ via py_function (slower but more compatible)
@@ -924,6 +933,15 @@ class LJSpeechDataset:
                 return text_seq, mel_spec, text_len, mel_len
 
             dataset = indices.map(_py_get, num_parallel_calls=num_parallel_calls)
+
+            # Optionally cap mel frames length to avoid OOM
+            max_frames = getattr(self.config, 'max_mel_frames', None)
+            if max_frames and max_frames > 0:
+                def _cap_lengths(text_seq, mel_spec, text_len, mel_len):
+                    new_mel = mel_spec[:max_frames]
+                    new_mel_len = tf.minimum(mel_len, tf.constant(max_frames, dtype=mel_len.dtype))
+                    return text_seq, new_mel, text_len, new_mel_len
+                dataset = dataset.map(_cap_lengths, num_parallel_calls=tf.data.AUTOTUNE)
 
         # Apply memory caching if requested (use sparingly as it consumes RAM)
         if memory_cache:

@@ -23,7 +23,7 @@ from ..utils.commons import (
     setup_logging,
     EarlyStopping,
     get_device,
-    setup_gpu_strategy,
+    configure_gpus,
     ensure_gpu_placement
 )
 from ..utils.performance import PerformanceMonitor, time_operation
@@ -56,46 +56,51 @@ class XTTSTrainer:
         # Initialize performance monitoring
         self.performance_monitor = PerformanceMonitor()
         
-        # Setup device and GPU strategy
+        # Configure GPUs before any TensorFlow device queries
+        try:
+            vis = getattr(config.training, 'visible_gpus', None)
+            configure_gpus(vis, memory_growth=True)
+        except Exception as e:
+            self.logger.warning(f"GPU visibility configuration failed: {e}")
+
+        # Setup device
         self.device = get_device()
         self.logger.info(f"Using device: {self.device}")
         
-        # Setup distribution strategy for optimal GPU utilization
-        self.strategy = setup_gpu_strategy()
+        # Use default (no-op) distribution strategy to keep API consistent
+        self.strategy = tf.distribute.get_strategy()
         self.logger.info(f"Using strategy: {type(self.strategy).__name__}")
+
+        if self.device == "GPU":
+            # Enable mixed precision for faster training
+            if getattr(config.data, 'mixed_precision', True):
+                policy = tf.keras.mixed_precision.Policy('mixed_float16')
+                tf.keras.mixed_precision.set_global_policy(policy)
+                self.logger.info("Mixed precision enabled")
+            # Enable XLA compilation if requested
+            if getattr(config.data, 'enable_xla', False):
+                tf.config.optimizer.set_jit(True)
+                self.logger.info("XLA compilation enabled")
+
+        # Initialize model
+        if model is None:
+            self.model = XTTS(config.model)
+        else:
+            self.model = model
         
-        with self.strategy.scope():
-            if self.device == "GPU":
-                # Enable mixed precision for faster training
-                if config.data.mixed_precision:
-                    policy = tf.keras.mixed_precision.Policy('mixed_float16')
-                    tf.keras.mixed_precision.set_global_policy(policy)
-                    self.logger.info("Mixed precision enabled")
-                
-                # Enable XLA compilation for better GPU utilization
-                if config.data.enable_xla:
-                    tf.config.optimizer.set_jit(True)
-                    self.logger.info("XLA compilation enabled")
-            
-            # Initialize model
-            if model is None:
-                self.model = XTTS(config.model)
-            else:
-                self.model = model
-            
-            # Initialize optimizer
-            self.optimizer = self._create_optimizer()
-            
-            # Initialize loss function
-            self.criterion = XTTSLoss(
-                mel_loss_weight=config.training.mel_loss_weight,
-                stop_loss_weight=1.0,
-                attention_loss_weight=config.training.kl_loss_weight,
-                duration_loss_weight=config.training.duration_loss_weight
-            )
-            
-            # Initialize learning rate scheduler
-            self.lr_scheduler = self._create_lr_scheduler()
+        # Initialize optimizer
+        self.optimizer = self._create_optimizer()
+        
+        # Initialize loss function
+        self.criterion = XTTSLoss(
+            mel_loss_weight=config.training.mel_loss_weight,
+            stop_loss_weight=1.0,
+            attention_loss_weight=config.training.kl_loss_weight,
+            duration_loss_weight=config.training.duration_loss_weight
+        )
+        
+        # Initialize learning rate scheduler
+        self.lr_scheduler = self._create_lr_scheduler()
         
         # Training state
         self.current_step = 0
@@ -201,10 +206,10 @@ class XTTSTrainer:
 
         # Optional: precompute and cache to disk to avoid CPU bottleneck
         try:
-            train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=True)
-            val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=True)
-            train_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=True)
-            val_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=True)
+            train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
+            val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
+            train_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
+            val_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
             # Verify caches and auto-fix any invalid files
             train_report = train_ljs.verify_and_fix_cache(fix=True)
             val_report = val_ljs.verify_and_fix_cache(fix=True)
@@ -243,18 +248,11 @@ class XTTSTrainer:
             buffer_size_multiplier=2
         )
         
-        # Optimize datasets for GPU training
+        # Optimize datasets for GPU training (prefetch only; avoid distributing dataset here)
         if self.device == "GPU":
-            # Additional optimizations for GPU training
             AUTOTUNE = tf.data.AUTOTUNE
-            
-            # Prefetch to GPU memory for faster training
             train_tf_dataset = train_tf_dataset.prefetch(AUTOTUNE)
             val_tf_dataset = val_tf_dataset.prefetch(AUTOTUNE)
-            
-            # Distribute datasets for multi-GPU training
-            train_tf_dataset = self.strategy.experimental_distribute_dataset(train_tf_dataset)
-            val_tf_dataset = self.strategy.experimental_distribute_dataset(val_tf_dataset)
         
         # Store sizes and default steps per epoch for scheduler/progress
         self.train_dataset_size = len(train_ljs)
@@ -294,7 +292,6 @@ class XTTSTrainer:
             for key, values in per_replica_losses.items()
         }
 
-    @tf.function
     def train_step(
         self,
         text_sequences: tf.Tensor,
@@ -408,7 +405,6 @@ class XTTSTrainer:
             for key, values in per_replica_losses.items()
         }
 
-    @tf.function
     def validation_step(
         self,
         text_sequences: tf.Tensor,
@@ -591,15 +587,10 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # Training step - use distributed or regular based on strategy
-                if isinstance(self.strategy, tf.distribute.Strategy) and not isinstance(self.strategy, tf.distribute.OneDeviceStrategy):
-                    # Multi-GPU distributed training
-                    step_losses = self.distributed_train_step(batch)
-                else:
-                    # Single GPU or CPU training
-                    step_losses = self.train_step(
-                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                    )
+                # Training step: run non-distributed for stability
+                step_losses = self.train_step(
+                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
@@ -660,16 +651,11 @@ class XTTSTrainer:
         num_batches = 0
         
         for batch in tqdm(val_dataset, desc="Validation"):
-            # Validation step - use distributed or regular based on strategy  
-            if isinstance(self.strategy, tf.distribute.Strategy) and not isinstance(self.strategy, tf.distribute.OneDeviceStrategy):
-                # Multi-GPU distributed validation
-                step_losses = self.distributed_validation_step(batch)
-            else:
-                # Single GPU or CPU validation
-                text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
-                step_losses = self.validation_step(
-                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                )
+            # Always run non-distributed validation step for simplicity/stability
+            text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
+            step_losses = self.validation_step(
+                text_sequences, mel_spectrograms, text_lengths, mel_lengths
+            )
             
             # Accumulate losses
             for key, value in step_losses.items():

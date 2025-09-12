@@ -97,6 +97,9 @@ class DataConfig:
     enable_memory_mapping: bool = True  # Use memory mapping for cache files
     cache_verification: bool = True  # Verify cache integrity on startup
     
+    # Sequence length caps to avoid OOM
+    max_mel_frames: int = 512  # Truncate mel length during training
+    
     # GPU-specific optimizations
     enable_xla: bool = True  # Enable XLA compilation for faster training
     enable_tensorrt: bool = False  # Enable TensorRT optimization (requires TensorRT)
@@ -148,6 +151,10 @@ class TrainingConfig:
     log_step: int = 100
     use_wandb: bool = False
     wandb_project: str = "myxtts"
+    
+    # Device / distribution
+    multi_gpu: bool = False            # Enable MirroredStrategy when True
+    visible_gpus: Optional[str] = None # e.g., "0" or "0,1"; None = all visible
     
     def __post_init__(self):
         if self.scheduler_params is None:

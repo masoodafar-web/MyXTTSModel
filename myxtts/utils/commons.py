@@ -9,9 +9,39 @@ import os
 import json
 import pickle
 import tensorflow as tf
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 
+
+def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = True) -> None:
+    """Configure which GPUs are visible and set memory growth.
+
+    Call this before any other TensorFlow GPU operations.
+
+    Args:
+        visible_gpus: Comma-separated GPU indices to make visible (e.g., "0" or "0,1").
+        memory_growth: Whether to enable memory growth on visible GPUs.
+    """
+    try:
+        if visible_gpus is not None:
+            # Map to actual physical devices
+            all_gpus = tf.config.list_physical_devices('GPU')
+            indices = [int(x.strip()) for x in visible_gpus.split(',') if x.strip() != '']
+            selected = []
+            for idx in indices:
+                if idx < 0 or idx >= len(all_gpus):
+                    raise ValueError(f"GPU index {idx} out of range (found {len(all_gpus)} GPUs)")
+                selected.append(all_gpus[idx])
+            tf.config.set_visible_devices(selected, 'GPU')
+        
+        if memory_growth:
+            for gpu in tf.config.list_physical_devices('GPU'):
+                try:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"GPU configuration warning: {e}")
 
 def get_device() -> str:
     """
