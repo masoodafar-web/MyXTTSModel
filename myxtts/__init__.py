@@ -12,6 +12,7 @@ Features:
 - TensorFlow-based architecture
 - Configurable training pipeline
 - Real-time inference capabilities
+- API-based configuration loading
 """
 
 __version__ = "0.1.0"
@@ -20,6 +21,11 @@ __email__ = "contact@myxtts.com"
 
 # Import configuration first (no heavy dependencies)
 from myxtts.config.config import XTTSConfig
+
+# Import main classes directly for easier access
+from myxtts.models.xtts import XTTS
+from myxtts.inference.synthesizer import XTTSInference  
+from myxtts.training.trainer import XTTSTrainer
 
 # Lazy imports for heavy dependencies
 def get_xtts_model():
@@ -45,6 +51,9 @@ def get_ljspeech_dataset():
 # Core exports
 __all__ = [
     "XTTSConfig",
+    "XTTS",
+    "XTTSInference", 
+    "XTTSTrainer",
     "get_xtts_model",
     "get_inference_engine", 
     "get_trainer",

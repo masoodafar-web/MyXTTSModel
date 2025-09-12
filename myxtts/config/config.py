@@ -6,6 +6,8 @@ training parameters, and data processing settings, similar to XTTS configuration
 """
 
 import yaml
+import requests
+import os
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Any, Optional
 
@@ -170,6 +172,64 @@ class XTTSConfig:
             data=data_config,
             training=training_config
         )
+    
+    @classmethod
+    def from_api(cls, api_url: str, api_key: Optional[str] = None, headers: Optional[Dict[str, str]] = None) -> 'XTTSConfig':
+        """
+        Load configuration from API endpoint.
+        
+        Args:
+            api_url: URL of the API endpoint that returns configuration JSON
+            api_key: Optional API key for authentication
+            headers: Optional additional headers to send with the request
+            
+        Returns:
+            XTTSConfig instance loaded from API response
+            
+        Raises:
+            requests.RequestException: If API request fails
+            ValueError: If API response is invalid
+        """
+        # Prepare headers
+        request_headers = headers.copy() if headers else {}
+        if api_key:
+            request_headers['Authorization'] = f'Bearer {api_key}'
+        request_headers.setdefault('Content-Type', 'application/json')
+        
+        try:
+            # Make API request
+            response = requests.get(api_url, headers=request_headers, timeout=30)
+            response.raise_for_status()
+            
+            # Parse response
+            config_dict = response.json()
+            
+            # Validate structure
+            if not isinstance(config_dict, dict):
+                raise ValueError("API response must be a JSON object")
+            
+            # Create configuration objects with smart dataset path handling
+            model_config = ModelConfig(**config_dict.get('model', {}))
+            data_config = DataConfig(**config_dict.get('data', {}))
+            training_config = TrainingConfig(**config_dict.get('training', {}))
+            
+            # Smart dataset handling: check if dataset exists locally
+            if data_config.dataset_path:
+                if not os.path.exists(data_config.dataset_path):
+                    print(f"Dataset path {data_config.dataset_path} does not exist locally. Dataset will be downloaded when needed.")
+                else:
+                    print(f"Dataset found at local path: {data_config.dataset_path}")
+            
+            return cls(
+                model=model_config,
+                data=data_config,
+                training=training_config
+            )
+            
+        except requests.RequestException as e:
+            raise requests.RequestException(f"Failed to load configuration from API: {e}")
+        except (ValueError, KeyError, TypeError) as e:
+            raise ValueError(f"Invalid configuration format from API: {e}")
     
     def to_yaml(self, yaml_path: str) -> None:
         """Save configuration to YAML file."""

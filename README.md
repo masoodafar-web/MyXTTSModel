@@ -29,6 +29,91 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+### Basic Usage
+
+#### Option 1: API-based Configuration (Recommended)
+
+Load configuration from your API endpoint with smart dataset handling:
+
+```python
+from myxtts import XTTS, XTTSConfig, XTTSInference, XTTSTrainer
+
+# Load configuration from API (not YAML file)
+config = XTTSConfig.from_api("https://your-api.com/config", api_key="your-key")
+
+# Smart dataset handling: 
+# - If dataset exists at config.data.dataset_path -> read from local
+# - If dataset doesn't exist -> download automatically
+
+# Create and train model
+model = XTTS(config.model)
+trainer = XTTSTrainer(config, model)
+train_dataset, val_dataset = trainer.prepare_datasets(config.data.dataset_path)
+trainer.train(train_dataset, val_dataset)
+
+# Inference
+inference = XTTSInference(config, checkpoint_path="model.ckpt")
+result = inference.synthesize("Hello world!", reference_audio="speaker.wav")
+```
+
+#### Option 2: YAML-based Configuration
+
+```python
+from myxtts import XTTS, XTTSConfig, XTTSInference, XTTSTrainer
+
+# Load configuration from YAML
+config = XTTSConfig.from_yaml("config.yaml")
+
+# Create and train model
+model = XTTS(config.model)
+trainer = XTTSTrainer(config, model)
+trainer.train(train_dataset, val_dataset)
+
+# Inference
+inference = XTTSInference(config, checkpoint_path="model.ckpt")
+result = inference.synthesize("Hello world!", reference_audio="speaker.wav")
+```
+
+### API Configuration Format
+
+When using API-based configuration, your API endpoint should return JSON in this format:
+
+```json
+{
+  "data": {
+    "dataset_path": "./data/ljspeech",
+    "dataset_name": "ljspeech",
+    "batch_size": 32,
+    "language": "en",
+    "sample_rate": 22050,
+    "text_cleaners": ["english_cleaners"],
+    "train_split": 0.9,
+    "val_split": 0.1
+  },
+  "model": {
+    "sample_rate": 22050,
+    "languages": ["en", "es", "fr", "de", "it"],
+    "text_encoder_dim": 512,
+    "decoder_dim": 1024,
+    "use_voice_conditioning": true
+  },
+  "training": {
+    "epochs": 200,
+    "learning_rate": 5e-05,
+    "optimizer": "adamw",
+    "checkpoint_dir": "./checkpoints"
+  }
+}
+```
+
+### Smart Dataset Handling
+
+The new API-based configuration includes smart dataset handling:
+
+- **Local Dataset Found**: If the dataset exists at `config.data.dataset_path`, it reads from the local path
+- **Auto-Download**: If the dataset doesn't exist locally, it automatically downloads when `trainer.prepare_datasets()` is called
+- **No Manual Intervention**: Works seamlessly regardless of whether data exists locally or needs to be downloaded
+
 ### Alternative: Using trainTestFile.py (Flexible Configuration)
 
 For even more flexibility, you can use the `trainTestFile.py` script in the root directory, which allows both programmatic configuration (without YAML files) and optional YAML-based configuration:
