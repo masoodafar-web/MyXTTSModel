@@ -191,9 +191,12 @@ class PerformanceMonitor:
             recommendations.append("CPU usage is very high. Consider optimizing data preprocessing or using more efficient algorithms.")
         
         # Low GPU utilization suggests data loading bottleneck
-        if self.has_gpu and avg_gpu_util < 50:
+        if self.has_gpu and avg_gpu_util < 30:
+            bottlenecks.append("critical_low_gpu_utilization")
+            recommendations.append(f"GPU utilization is critically low ({avg_gpu_util:.1f}%). This strongly suggests a data loading bottleneck or model not properly placed on GPU. Check: 1) Data preprocessing happening on CPU during training, 2) Insufficient data prefetching, 3) Model device placement, 4) Batch size too small.")
+        elif self.has_gpu and avg_gpu_util < 60:
             bottlenecks.append("low_gpu_utilization")
-            recommendations.append("GPU utilization is low. This suggests a data loading bottleneck. Consider prefetching more data or optimizing data pipeline.")
+            recommendations.append(f"GPU utilization is suboptimal ({avg_gpu_util:.1f}%). Consider: 1) Increasing prefetch buffer size, 2) Using more parallel data loading workers, 3) Optimizing data preprocessing, 4) Increasing batch size if memory allows.")
         
         # High memory usage
         if avg_memory > 85:

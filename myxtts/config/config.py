@@ -92,10 +92,19 @@ class DataConfig:
     max_audio_length: float = 11.0
     
     # Performance optimization settings
-    prefetch_buffer_size: int = 4  # Number of batches to prefetch
-    shuffle_buffer_multiplier: int = 10  # Multiplier for shuffle buffer size
+    prefetch_buffer_size: int = 8  # Increased for better GPU utilization  
+    shuffle_buffer_multiplier: int = 20  # Increased for better shuffling
     enable_memory_mapping: bool = True  # Use memory mapping for cache files
     cache_verification: bool = True  # Verify cache integrity on startup
+    
+    # GPU-specific optimizations
+    enable_xla: bool = True  # Enable XLA compilation for faster training
+    enable_tensorrt: bool = False  # Enable TensorRT optimization (requires TensorRT)
+    mixed_precision: bool = True  # Enable mixed precision training
+    
+    # Data loading optimizations
+    pin_memory: bool = True  # Pin memory for faster GPU transfer
+    persistent_workers: bool = True  # Keep workers alive between epochs
     
     def __post_init__(self):
         if self.text_cleaners is None:

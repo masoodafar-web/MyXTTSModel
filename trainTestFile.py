@@ -57,7 +57,7 @@ except ImportError as e:
 def create_default_config(
     data_path: str = "./data/ljspeech",
     language: str = "en",
-    batch_size: int = 16,
+    batch_size: int = 32,  # Increased default for better GPU utilization
     epochs: int = 100,
     learning_rate: float = 1e-4,
     sample_rate: int = 22050,
