@@ -57,3 +57,6 @@ data:
   enable_xla: true             # Enable XLA compilation
   mixed_precision: true        # Enable mixed precision
   pin_memory: true             # Pin memory for faster GPU transfer
+  
+  # Dataset preprocessing control
+  preprocessing_mode: auto     # "auto", "precompute", "runtime"

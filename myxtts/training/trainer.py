@@ -209,26 +209,70 @@ class XTTSTrainer:
             download=False
         )
 
-        # Optional: precompute and cache to disk to avoid CPU bottleneck
-        try:
-            train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
-            val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
-            train_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
-            val_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
-            # Verify caches and auto-fix any invalid files
-            train_report = train_ljs.verify_and_fix_cache(fix=True)
-            val_report = val_ljs.verify_and_fix_cache(fix=True)
-            self.logger.info(f"Cache verify: train {train_report}, val {val_report}")
-        except Exception as e:
-            self.logger.warning(f"Precompute failed: {e}")
+        # Handle dataset preprocessing based on mode
+        preprocessing_mode = getattr(self.config.data, 'preprocessing_mode', 'auto')
+        self.logger.info(f"Dataset preprocessing mode: {preprocessing_mode}")
+        
+        if preprocessing_mode == "precompute":
+            # Force complete preprocessing before training starts
+            self.logger.info("Preprocessing mode: PRECOMPUTE - Ensuring all data is fully preprocessed...")
+            try:
+                train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
+                val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
+                train_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
+                val_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
+                
+                # Verify and fix any cache issues
+                train_report = train_ljs.verify_and_fix_cache(fix=True)
+                val_report = val_ljs.verify_and_fix_cache(fix=True)
+                self.logger.info(f"Cache verify: train {train_report}, val {val_report}")
+                
+                # Filter to only use items with valid caches
+                n_train = train_ljs.filter_items_by_cache()
+                n_val = val_ljs.filter_items_by_cache()
+                
+                if n_train == 0 or n_val == 0:
+                    raise RuntimeError(f"No valid cached items found after preprocessing. Train: {n_train}, Val: {n_val}")
+                
+                self.logger.info(f"Using fully cached items - train: {n_train}, val: {n_val}")
+                use_cache_files = True
+                
+            except Exception as e:
+                self.logger.error(f"Precompute mode failed: {e}")
+                raise RuntimeError(f"Preprocessing failed in precompute mode: {e}")
+                
+        elif preprocessing_mode == "runtime":
+            # Disable preprocessing, do everything on-the-fly during training
+            self.logger.info("Preprocessing mode: RUNTIME - Processing data on-the-fly during training")
+            self.logger.warning("Runtime mode may impact GPU utilization due to CPU preprocessing during training")
+            use_cache_files = False
+            
+        else:  # preprocessing_mode == "auto" or unrecognized mode
+            # Current behavior: try to precompute but fall back gracefully
+            self.logger.info("Preprocessing mode: AUTO - Attempting to precompute with graceful fallback")
+            try:
+                train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
+                val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
+                train_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
+                val_ljs.precompute_tokens(num_workers=self.config.data.num_workers, overwrite=False)
+                # Verify caches and auto-fix any invalid files
+                train_report = train_ljs.verify_and_fix_cache(fix=True)
+                val_report = val_ljs.verify_and_fix_cache(fix=True)
+                self.logger.info(f"Cache verify: train {train_report}, val {val_report}")
+                use_cache_files = True
+            except Exception as e:
+                self.logger.warning(f"Precompute failed: {e}")
+                use_cache_files = False
 
-        # Filter items to those with valid caches
-        try:
-            n_train = train_ljs.filter_items_by_cache()
-            n_val = val_ljs.filter_items_by_cache()
-            self.logger.info(f"Using cached items - train: {n_train}, val: {n_val}")
-        except Exception as e:
-            self.logger.warning(f"Cache filter failed: {e}")
+            # Filter items to those with valid caches (only if using cache files)
+            if use_cache_files:
+                try:
+                    n_train = train_ljs.filter_items_by_cache()
+                    n_val = val_ljs.filter_items_by_cache()
+                    self.logger.info(f"Using cached items - train: {n_train}, val: {n_val}")
+                except Exception as e:
+                    self.logger.warning(f"Cache filter failed: {e}")
+                    use_cache_files = False
 
         # Convert to TensorFlow datasets with optimized settings for GPU
         train_tf_dataset = train_ljs.create_tf_dataset(
@@ -236,7 +280,7 @@ class XTTSTrainer:
             shuffle=True,
             repeat=True,
             prefetch=True,
-            use_cache_files=True,
+            use_cache_files=use_cache_files,
             memory_cache=False,
             num_parallel_calls=self.config.data.num_workers,
             buffer_size_multiplier=self.config.data.shuffle_buffer_multiplier
@@ -247,7 +291,7 @@ class XTTSTrainer:
             shuffle=False,
             repeat=False,
             prefetch=True,
-            use_cache_files=True,
+            use_cache_files=use_cache_files,
             memory_cache=True,
             num_parallel_calls=min(self.config.data.num_workers, 4),  # Fewer workers for validation
             buffer_size_multiplier=2

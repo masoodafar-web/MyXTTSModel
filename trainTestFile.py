@@ -65,7 +65,8 @@ def create_default_config(
     metadata_train_file: Optional[str] = None,
     metadata_eval_file: Optional[str] = None,
     wavs_train_dir: Optional[str] = None,
-    wavs_eval_dir: Optional[str] = None
+    wavs_eval_dir: Optional[str] = None,
+    preprocessing_mode: str = "auto"
 ) -> XTTSConfig:
     """
     Create a default configuration programmatically without requiring YAML.
@@ -82,6 +83,7 @@ def create_default_config(
         metadata_eval_file: Custom eval metadata file path (optional)
         wavs_train_dir: Custom train wav files directory (optional)
         wavs_eval_dir: Custom eval wav files directory (optional)
+        preprocessing_mode: Dataset preprocessing mode ("auto", "precompute", "runtime")
     
     Returns:
         XTTSConfig: Configured XTTS configuration object
@@ -93,6 +95,7 @@ def create_default_config(
     config.data.language = language
     config.data.batch_size = batch_size
     config.data.sample_rate = sample_rate
+    config.data.preprocessing_mode = preprocessing_mode
     
     # Configure custom metadata file paths if provided
     if metadata_train_file:
@@ -284,6 +287,11 @@ def main():
     parser.add_argument("--resume-from", help="Resume training from checkpoint")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility")
     
+    # Dataset preprocessing options
+    parser.add_argument("--preprocessing-mode", choices=["auto", "precompute", "runtime"], 
+                       default="auto", help="Dataset preprocessing mode: 'auto' (try precompute, fall back), "
+                       "'precompute' (fully preprocess before training), 'runtime' (process during training)")
+    
     # Testing options
     parser.add_argument("--checkpoint", help="Model checkpoint for testing/inference")
     parser.add_argument("--text", default="Hello, this is a test.", help="Text to synthesize")
@@ -323,6 +331,9 @@ def main():
                 config.data.wavs_train_dir = args.wavs_train_dir
             if args.wavs_eval_dir:
                 config.data.wavs_eval_dir = args.wavs_eval_dir
+            # Override preprocessing mode if provided
+            if hasattr(args, 'preprocessing_mode') and args.preprocessing_mode != "auto":
+                config.data.preprocessing_mode = args.preprocessing_mode
         else:
             if args.config:
                 print(f"Warning: Configuration file {args.config} not found, using programmatic config")
@@ -338,7 +349,8 @@ def main():
                 metadata_train_file=args.metadata_train_file,
                 metadata_eval_file=args.metadata_eval_file,
                 wavs_train_dir=args.wavs_train_dir,
-                wavs_eval_dir=args.wavs_eval_dir
+                wavs_eval_dir=args.wavs_eval_dir,
+                preprocessing_mode=args.preprocessing_mode
             )
         
         train_model(config, resume_checkpoint=args.resume_from)
@@ -372,7 +384,8 @@ def main():
             metadata_train_file=args.metadata_train_file,
             metadata_eval_file=args.metadata_eval_file,
             wavs_train_dir=args.wavs_train_dir,
-            wavs_eval_dir=args.wavs_eval_dir
+            wavs_eval_dir=args.wavs_eval_dir,
+            preprocessing_mode=args.preprocessing_mode
         )
 
 
