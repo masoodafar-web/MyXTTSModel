@@ -49,6 +49,11 @@ class ModelConfig:
     tokenizer_type: str = "nllb"  # "custom" or "nllb"
     tokenizer_model: str = "facebook/nllb-200-distilled-600M"
     
+    # Memory optimization settings
+    enable_gradient_checkpointing: bool = False
+    max_attention_sequence_length: int = 512  # Limit attention sequence length
+    use_memory_efficient_attention: bool = True
+    
     def __post_init__(self):
         if self.languages is None:
             self.languages = ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]

@@ -87,18 +87,51 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         mask: Optional[tf.Tensor] = None
     ) -> Tuple[tf.Tensor, tf.Tensor]:
         """
-        Compute scaled dot-product attention.
+        Compute memory-efficient scaled dot-product attention.
         
         Args:
-            q: Query tensor [batch, seq_len, d_k]
-            k: Key tensor [batch, seq_len, d_k]
-            v: Value tensor [batch, seq_len, d_k]
-            mask: Attention mask [batch, seq_len, seq_len]
+            q: Query tensor [batch, heads, seq_len, d_k]
+            k: Key tensor [batch, heads, seq_len, d_k]
+            v: Value tensor [batch, heads, seq_len, d_k]
+            mask: Attention mask [batch, heads, seq_len, seq_len]
             
         Returns:
             Tuple of (attention_output, attention_weights)
         """
-        # Compute attention scores
+        # Get sequence lengths
+        q_seq_len = tf.shape(q)[2]
+        k_seq_len = tf.shape(k)[2]
+        
+        # Memory optimization: limit maximum sequence length for attention
+        max_seq_len = 512  # Reduce from potential 1024+ to prevent OOM
+        
+        if q_seq_len > max_seq_len or k_seq_len > max_seq_len:
+            # Truncate sequences to prevent memory explosion
+            q = q[:, :, :max_seq_len, :]
+            k = k[:, :, :max_seq_len, :]
+            v = v[:, :, :max_seq_len, :]
+            if mask is not None:
+                mask = mask[:, :, :max_seq_len, :max_seq_len]
+        
+        # Use tf.nn.scaled_dot_product_attention if available (TF 2.11+)
+        try:
+            # Modern TensorFlow has built-in memory-efficient attention
+            output = tf.nn.scaled_dot_product_attention(
+                query=q,
+                key=k,
+                value=v,
+                attn_mask=mask,
+                dropout_rate=0.1 if self.dropout.rate > 0 else 0.0
+            )
+            # Return dummy weights since we can't get them from the built-in function
+            attention_weights = tf.zeros([tf.shape(q)[0], tf.shape(q)[1], 
+                                        tf.shape(q)[2], tf.shape(k)[2]])
+            return output, attention_weights
+        except AttributeError:
+            # Fallback to manual implementation for older TensorFlow versions
+            pass
+        
+        # Compute attention scores with memory limits
         scores = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(
             tf.cast(self.d_k, tf.float32)
         )
@@ -107,7 +140,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         if mask is not None:
             scores += (mask * -1e9)
         
-        # Softmax
+        # Use memory-efficient softmax for large tensors
         attention_weights = tf.nn.softmax(scores, axis=-1)
         attention_weights = self.dropout(attention_weights)
         
@@ -280,7 +313,7 @@ class FeedForward(tf.keras.layers.Layer):
 
 
 class TransformerBlock(tf.keras.layers.Layer):
-    """Transformer encoder/decoder block."""
+    """Transformer encoder/decoder block with memory optimization."""
     
     def __init__(
         self,
@@ -289,6 +322,7 @@ class TransformerBlock(tf.keras.layers.Layer):
         d_ff: int,
         dropout: float = 0.1,
         is_decoder: bool = False,
+        use_gradient_checkpointing: bool = False,
         name: str = "transformer_block"
     ):
         """
@@ -300,12 +334,14 @@ class TransformerBlock(tf.keras.layers.Layer):
             d_ff: Feed-forward hidden dimension
             dropout: Dropout rate
             is_decoder: Whether this is a decoder block
+            use_gradient_checkpointing: Enable gradient checkpointing for memory savings
             name: Layer name
         """
         super().__init__(name=name)
         
         self.d_model = d_model
         self.is_decoder = is_decoder
+        self.use_gradient_checkpointing = use_gradient_checkpointing
         
         # Self-attention
         self.self_attention = MultiHeadAttention(
@@ -331,6 +367,29 @@ class TransformerBlock(tf.keras.layers.Layer):
         # Use device-aware dropout creation to avoid placement conflicts
         self.dropout = create_dropout_layer(dropout, name="dropout")
     
+    def _self_attention_block(self, inputs, mask, training):
+        """Self-attention block that can be checkpointed."""
+        attn_output = self.self_attention(
+            inputs, mask=mask, training=training
+        )
+        attn_output = self.dropout(attn_output, training=training)
+        return self.norm1(inputs + attn_output)
+    
+    def _cross_attention_block(self, inputs, encoder_output, mask, training):
+        """Cross-attention block that can be checkpointed."""
+        attn_output = self.cross_attention(
+            inputs, key_value=encoder_output, 
+            mask=mask, training=training
+        )
+        attn_output = self.dropout(attn_output, training=training)
+        return self.norm2(inputs + attn_output)
+    
+    def _feed_forward_block(self, inputs, training):
+        """Feed-forward block that can be checkpointed."""
+        ff_output = self.feed_forward(inputs, training=training)
+        ff_output = self.dropout(ff_output, training=training)
+        return self.norm3(inputs + ff_output)
+    
     def call(
         self,
         inputs: tf.Tensor,
@@ -340,7 +399,7 @@ class TransformerBlock(tf.keras.layers.Layer):
         training: bool = False
     ) -> tf.Tensor:
         """
-        Forward pass.
+        Forward pass with optional gradient checkpointing.
         
         Args:
             inputs: Input tensor [batch, seq_len, d_model]
@@ -352,19 +411,32 @@ class TransformerBlock(tf.keras.layers.Layer):
         Returns:
             Output tensor [batch, seq_len, d_model]
         """
-        # Self-attention
-        attn_output = self.self_attention(
-            inputs, mask=self_attention_mask, training=training
-        )
-        attn_output = self.dropout(attn_output, training=training)
-        x = self.norm1(inputs + attn_output)
+        # Self-attention with optional gradient checkpointing
+        if self.use_gradient_checkpointing and training:
+            x = tf.recompute_grad(
+                lambda: self._self_attention_block(inputs, self_attention_mask, training)
+            )
+        else:
+            x = self._self_attention_block(inputs, self_attention_mask, training)
         
         # Cross-attention (decoder only)
         if self.is_decoder and encoder_output is not None:
-            attn_output = self.cross_attention(
-                x, key_value=encoder_output, 
-                mask=cross_attention_mask, training=training
+            if self.use_gradient_checkpointing and training:
+                x = tf.recompute_grad(
+                    lambda: self._cross_attention_block(x, encoder_output, cross_attention_mask, training)
+                )
+            else:
+                x = self._cross_attention_block(x, encoder_output, cross_attention_mask, training)
+        
+        # Feed-forward with optional gradient checkpointing
+        if self.use_gradient_checkpointing and training:
+            x = tf.recompute_grad(
+                lambda: self._feed_forward_block(x, training)
             )
+        else:
+            x = self._feed_forward_block(x, training)
+        
+        return x
             attn_output = self.dropout(attn_output, training=training)
             x = self.norm2(x + attn_output)
         

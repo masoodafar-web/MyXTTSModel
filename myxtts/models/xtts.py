@@ -61,6 +61,7 @@ class TextEncoder(tf.keras.layers.Layer):
                 config.text_encoder_heads,
                 self.d_model * 4,
                 dropout=0.1,
+                use_gradient_checkpointing=config.enable_gradient_checkpointing,
                 name=f"transformer_block_{i}"
             )
             for i in range(config.text_encoder_layers)
@@ -170,6 +171,7 @@ class AudioEncoder(tf.keras.layers.Layer):
                 config.audio_encoder_heads,
                 self.d_model * 4,
                 dropout=0.1,
+                use_gradient_checkpointing=config.enable_gradient_checkpointing,
                 name=f"transformer_block_{i}"
             )
             for i in range(config.audio_encoder_layers)
@@ -259,6 +261,7 @@ class MelDecoder(tf.keras.layers.Layer):
                 self.d_model * 4,
                 dropout=0.1,
                 is_decoder=True,
+                use_gradient_checkpointing=config.enable_gradient_checkpointing,
                 name=f"transformer_block_{i}"
             )
             for i in range(config.decoder_layers)

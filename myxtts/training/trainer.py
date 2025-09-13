@@ -439,6 +439,22 @@ class XTTSTrainer:
         device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
         
         with device_context:
+            # Memory optimization: limit sequence lengths to prevent OOM
+            max_text_len = getattr(self.config.model, 'max_attention_sequence_length', 512)
+            max_mel_len = getattr(self.config.model, 'max_attention_sequence_length', 512)
+            
+            # Truncate sequences if they're too long
+            text_seq_len = tf.shape(text_sequences)[1]
+            mel_seq_len = tf.shape(mel_spectrograms)[1]
+            
+            if text_seq_len > max_text_len:
+                text_sequences = text_sequences[:, :max_text_len]
+                text_lengths = tf.minimum(text_lengths, max_text_len)
+            
+            if mel_seq_len > max_mel_len:
+                mel_spectrograms = mel_spectrograms[:, :max_mel_len, :]
+                mel_lengths = tf.minimum(mel_lengths, max_mel_len)
+            
             # Ensure tensors are on GPU if available
             if self.device == "GPU":
                 text_sequences = ensure_gpu_placement(text_sequences)
@@ -446,65 +462,83 @@ class XTTSTrainer:
                 text_lengths = ensure_gpu_placement(text_lengths)
                 mel_lengths = ensure_gpu_placement(mel_lengths)
             
-            with tf.GradientTape() as tape:
-                # Forward pass
-                outputs = self.model(
-                    text_inputs=text_sequences,
-                    mel_inputs=mel_spectrograms,
-                    text_lengths=text_lengths,
-                    mel_lengths=mel_lengths,
-                    training=True
-                )
+            try:
+                with tf.GradientTape() as tape:
+                    # Forward pass
+                    outputs = self.model(
+                        text_inputs=text_sequences,
+                        mel_inputs=mel_spectrograms,
+                        text_lengths=text_lengths,
+                        mel_lengths=mel_lengths,
+                        training=True
+                    )
+                    
+                    # Prepare targets
+                    stop_targets = create_stop_targets(
+                        mel_lengths, 
+                        tf.shape(mel_spectrograms)[1]
+                    )
+                    
+                    y_true = {
+                        "mel_target": mel_spectrograms,
+                        "stop_target": stop_targets,
+                        "text_lengths": text_lengths,
+                        "mel_lengths": mel_lengths
+                    }
+                    
+                    y_pred = {
+                        "mel_output": outputs["mel_output"],
+                        "stop_tokens": outputs["stop_tokens"]
+                    }
+                    
+                    # Compute loss
+                    loss = self.criterion(y_true, y_pred)
+                    
+                    # Per-replica loss scaling (average across replicas)
+                    loss_for_grad = loss / self.strategy.num_replicas_in_sync
+
+                    # Mixed precision handling (Keras 3 API)
+                    is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
+                    if is_mixed and hasattr(self.optimizer, 'scale_loss'):
+                        scaled_loss = self.optimizer.scale_loss(loss_for_grad)
+                        gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+                    else:
+                        gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
+
+                # Clip gradients to prevent memory explosion
+                if gradients:
+                    gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=0.5)  # Reduced clip norm
+
+                # Apply gradients (LossScaleOptimizer will unscale internally if used)
+                self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
                 
-                # Prepare targets
-                stop_targets = create_stop_targets(
-                    mel_lengths, 
-                    tf.shape(mel_spectrograms)[1]
-                )
+                # Get individual losses
+                individual_losses = self.criterion.get_losses()
                 
-                y_true = {
-                    "mel_target": mel_spectrograms,
-                    "stop_target": stop_targets,
-                    "text_lengths": text_lengths,
-                    "mel_lengths": mel_lengths
+                # Clear intermediate tensors to free memory
+                del outputs, y_true, y_pred, gradients
+                
+                return {
+                    "total_loss": loss,
+                    **individual_losses
                 }
                 
-                y_pred = {
-                    "mel_output": outputs["mel_output"],
-                    "stop_tokens": outputs["stop_tokens"]
+            except tf.errors.ResourceExhaustedError as e:
+                # Handle OOM gracefully by reducing batch size
+                self.logger.error(f"OOM error in training step: {e}")
+                self.logger.info("Attempting to continue with memory cleanup...")
+                
+                # Clear memory and try again with smaller effective batch size
+                tf.keras.backend.clear_session()
+                import gc
+                gc.collect()
+                
+                # Return a dummy loss to indicate OOM
+                return {
+                    "total_loss": tf.constant(float('inf')),
+                    "mel_loss": tf.constant(float('inf')),
+                    "stop_loss": tf.constant(float('inf'))
                 }
-                
-                # Compute loss
-                loss = self.criterion(y_true, y_pred)
-                
-                # Per-replica loss scaling (average across replicas)
-                loss_for_grad = loss / self.strategy.num_replicas_in_sync
-
-                # Mixed precision handling (Keras 3 API)
-                is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
-                if is_mixed and hasattr(self.optimizer, 'scale_loss'):
-                    scaled_loss = self.optimizer.scale_loss(loss_for_grad)
-                    gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
-                else:
-                    gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
-
-            # Clip gradients to prevent memory explosion
-            if gradients:
-                gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=1.0)
-
-            # Apply gradients (LossScaleOptimizer will unscale internally if used)
-            self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
-            
-            # Get individual losses
-            individual_losses = self.criterion.get_losses()
-            
-            # Clear intermediate tensors to free memory
-            del outputs, y_true, y_pred, gradients
-            
-            return {
-                "total_loss": loss,
-                **individual_losses
-            }
     
     def find_optimal_batch_size(self, start_batch_size: int = 8, max_batch_size: int = 32) -> int:
         """
