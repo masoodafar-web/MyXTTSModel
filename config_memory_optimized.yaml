@@ -1,0 +1,71 @@
+# Memory-Optimized Configuration for MyXTTS
+# This configuration prevents OOM errors while maintaining high GPU utilization
+
+model:
+  # Reduced model dimensions to save memory
+  text_encoder_dim: 256        # Reduced from 512
+  decoder_dim: 512             # Reduced from 1024
+  n_mels: 80
+  sample_rate: 22050
+  use_voice_conditioning: true
+  max_text_length: 400         # Reduced from 500
+
+data:
+  # Memory-optimized data settings
+  batch_size: 4                # Reduced from 8+ to prevent OOM
+  num_workers: 2               # Reduced to save memory
+  prefetch_buffer_size: 2      # Reduced from 8
+  shuffle_buffer_multiplier: 10 # Reduced from 20
+  
+  # Audio processing
+  sample_rate: 22050
+  n_mels: 80
+  normalize_audio: true
+  max_mel_frames: 384
+  
+  # Memory optimization flags
+  enable_memory_mapping: false  # Disable to save GPU memory
+  prefetch_to_gpu: false       # Keep data on CPU
+  mixed_precision: true        # Enable for memory efficiency
+  enable_xla: true            # Enable for optimization
+  
+  # Dataset files
+  metadata_train_file: "metadata_train.csv"
+  metadata_eval_file: "metadata_eval.csv"
+  wavs_train_dir: "wavs"
+  wavs_eval_dir: "wavs"
+
+training:
+  # Basic training settings
+  epochs: 200
+  learning_rate: 5e-5
+  warmup_steps: 2000
+  
+  # Memory optimization
+  gradient_accumulation_steps: 8  # Simulate effective batch size of 32
+  enable_memory_cleanup: true     # Clean memory between batches
+  max_memory_fraction: 0.85       # Use 85% of GPU memory max
+  
+  # Optimizer
+  optimizer: "adamw"
+  weight_decay: 1e-6
+  gradient_clip_norm: 1.0
+  
+  # GPU settings
+  multi_gpu: false              # Disable for single GPU training
+  visible_gpus: null           # Use default GPU
+  
+  # Checkpointing and logging
+  save_step: 25000
+  val_step: 5000
+  log_step: 100
+  checkpoint_dir: "./checkpoints"
+  
+  # Weights & Biases
+  use_wandb: false
+  wandb_project: "myxtts"
+  
+  # Loss weights
+  mel_loss_weight: 45.0
+  kl_loss_weight: 1.0
+  duration_loss_weight: 1.0

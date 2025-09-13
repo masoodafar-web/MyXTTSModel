@@ -165,6 +165,11 @@ class TrainingConfig:
     multi_gpu: bool = False            # Enable MirroredStrategy when True
     visible_gpus: Optional[str] = None # e.g., "0" or "0,1"; None = all visible
     
+    # Memory optimization
+    gradient_accumulation_steps: int = 1  # Number of steps to accumulate gradients
+    enable_memory_cleanup: bool = True    # Enable memory cleanup between batches
+    max_memory_fraction: float = 0.9      # Maximum GPU memory to use (0.0-1.0)
+    
     def __post_init__(self):
         if self.scheduler_params is None:
             self.scheduler_params = {}

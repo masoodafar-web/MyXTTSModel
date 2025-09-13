@@ -13,7 +13,7 @@ from typing import Dict, Any, Optional, List
 import logging
 
 
-def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = True) -> None:
+def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = True, memory_limit: Optional[int] = None) -> None:
     """Configure which GPUs are visible and set memory growth.
 
     Call this before any other TensorFlow GPU operations.
@@ -21,6 +21,7 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
     Args:
         visible_gpus: Comma-separated GPU indices to make visible (e.g., "0" or "0,1").
         memory_growth: Whether to enable memory growth on visible GPUs.
+        memory_limit: Optional memory limit in MB for each GPU.
     """
     try:
         if visible_gpus is not None:
@@ -34,12 +35,37 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
                 selected.append(all_gpus[idx])
             tf.config.set_visible_devices(selected, 'GPU')
         
-        if memory_growth:
-            for gpu in tf.config.list_physical_devices('GPU'):
-                try:
+        # Configure memory growth and limits
+        for gpu in tf.config.list_physical_devices('GPU'):
+            try:
+                if memory_growth:
                     tf.config.experimental.set_memory_growth(gpu, True)
-                except Exception:
-                    pass
+                    print(f"Enabled memory growth for {gpu}")
+                
+                if memory_limit is not None:
+                    tf.config.experimental.set_memory_limit(gpu, memory_limit)
+                    print(f"Set memory limit to {memory_limit}MB for {gpu}")
+                    
+            except Exception as e:
+                print(f"GPU memory configuration warning for {gpu}: {e}")
+                
+        # Set additional memory optimization settings
+        if tf.config.list_physical_devices('GPU'):
+            # Enable mixed precision for memory efficiency
+            try:
+                policy = tf.keras.mixed_precision.Policy('mixed_float16')
+                tf.keras.mixed_precision.set_global_policy(policy)
+                print("Mixed precision policy enabled for memory optimization")
+            except Exception as e:
+                print(f"Mixed precision setup warning: {e}")
+            
+            # Enable XLA for memory optimization
+            try:
+                tf.config.optimizer.set_jit(True)
+                print("XLA JIT compilation enabled for memory optimization")
+            except Exception as e:
+                print(f"XLA setup warning: {e}")
+                
     except Exception as e:
         print(f"GPU configuration warning: {e}")
 
