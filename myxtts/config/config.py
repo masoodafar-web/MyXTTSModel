@@ -86,6 +86,18 @@ class DataConfig:
     batch_size: int = 32
     num_workers: int = 8  # Increased for better CPU utilization
     
+    # Memory and performance optimization
+    prefetch_buffer_size: int = 4
+    shuffle_buffer_multiplier: int = 20
+    enable_memory_mapping: bool = True
+    prefetch_to_gpu: bool = True
+    mixed_precision: bool = False
+    enable_xla: bool = False
+    
+    # Audio/mel parameters (from ModelConfig)
+    n_mels: int = 80
+    max_mel_frames: int = 500
+    
     # Voice conditioning
     reference_audio_length: float = 3.0  # seconds
     min_audio_length: float = 1.0
@@ -164,6 +176,11 @@ class TrainingConfig:
     # Device / distribution
     multi_gpu: bool = False            # Enable MirroredStrategy when True
     visible_gpus: Optional[str] = None # e.g., "0" or "0,1"; None = all visible
+    
+    # Memory optimization
+    gradient_accumulation_steps: int = 1  # Number of steps to accumulate gradients
+    enable_memory_cleanup: bool = True    # Enable memory cleanup between batches
+    max_memory_fraction: float = 0.9      # Maximum GPU memory to use (0.0-1.0)
     
     def __post_init__(self):
         if self.scheduler_params is None:
