@@ -86,6 +86,18 @@ class DataConfig:
     batch_size: int = 32
     num_workers: int = 8  # Increased for better CPU utilization
     
+    # Memory and performance optimization
+    prefetch_buffer_size: int = 4
+    shuffle_buffer_multiplier: int = 20
+    enable_memory_mapping: bool = True
+    prefetch_to_gpu: bool = True
+    mixed_precision: bool = False
+    enable_xla: bool = False
+    
+    # Audio/mel parameters (from ModelConfig)
+    n_mels: int = 80
+    max_mel_frames: int = 500
+    
     # Voice conditioning
     reference_audio_length: float = 3.0  # seconds
     min_audio_length: float = 1.0
