@@ -224,6 +224,57 @@ class PerformanceMonitor:
             "recommendations": recommendations,
             "total_samples": len(self.metrics_history)
         }
+
+    def get_summary(self) -> Dict[str, Any]:
+        """
+        Return a concise, program-friendly summary of recent performance.
+
+        This mirrors the information commonly needed by notebooks or callers
+        that want numeric stats rather than a formatted report.
+
+        Returns:
+            Dict with keys such as avg_step_time, avg_data_time,
+            avg_compute_time, avg_samples_per_second, and recent system metrics.
+        """
+        # Timing summaries
+        def _avg(name: str, last_n: int = 50) -> float:
+            vals = self.timing_stats.get(name, [])
+            if not vals:
+                return 0.0
+            vals = vals[-last_n:]
+            try:
+                return float(np.mean(vals))
+            except Exception:
+                return 0.0
+
+        avg_data_time = _avg("data_loading")
+        avg_compute_time = _avg("model_compute")
+        avg_step_time = _avg("total_step") or (avg_data_time + avg_compute_time)
+        avg_sps = _avg("samples_per_second")
+
+        # System metrics (recent average)
+        if self.metrics_history:
+            recent = list(self.metrics_history)[-10:]
+            avg_cpu = float(np.mean([m.cpu_percent for m in recent]))
+            avg_mem = float(np.mean([m.memory_percent for m in recent]))
+            avg_gpu_util = float(np.mean([m.gpu_utilization for m in recent]))
+            latest = recent[-1]
+            batch_size = int(latest.batch_size or 0)
+        else:
+            avg_cpu = avg_mem = avg_gpu_util = 0.0
+            batch_size = 0
+
+        return {
+            "avg_step_time": avg_step_time,
+            "avg_data_time": avg_data_time,
+            "avg_compute_time": avg_compute_time,
+            "avg_samples_per_second": avg_sps,
+            "avg_cpu_percent": avg_cpu,
+            "avg_memory_percent": avg_mem,
+            "avg_gpu_utilization": avg_gpu_util,
+            "has_gpu": self.has_gpu,
+            "batch_size": batch_size,
+        }
     
     def get_summary_report(self) -> str:
         """Generate a human-readable performance summary."""
