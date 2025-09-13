@@ -9,6 +9,9 @@ import tensorflow as tf
 import numpy as np
 from typing import Optional, Tuple
 
+# Import device utilities
+from ..utils.commons import create_dropout_layer, get_device_context
+
 
 class MultiHeadAttention(tf.keras.layers.Layer):
     """Multi-head attention layer compatible with XTTS architecture."""
@@ -43,7 +46,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.wv = tf.keras.layers.Dense(d_model, name="value_projection")
         self.wo = tf.keras.layers.Dense(d_model, name="output_projection")
         
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def scaled_dot_product_attention(
         self,
@@ -176,11 +180,13 @@ class PositionalEncoding(tf.keras.layers.Layer):
         pe[:, 0::2] = np.sin(position * div_term)
         pe[:, 1::2] = np.cos(position * div_term)
         
-        self.pe = tf.Variable(
-            pe[np.newaxis, :, :],  # [1, max_length, d_model]
-            trainable=False,
-            name="positional_encoding"
-        )
+        # Create positional encoding with proper device placement
+        with get_device_context():
+            self.pe = tf.Variable(
+                pe[np.newaxis, :, :],  # [1, max_length, d_model]
+                trainable=False,
+                name="positional_encoding"
+            )
     
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
         """
@@ -223,7 +229,8 @@ class FeedForward(tf.keras.layers.Layer):
             d_ff, activation=activation, name="linear1"
         )
         self.linear2 = tf.keras.layers.Dense(d_model, name="linear2")
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
         """
@@ -291,7 +298,8 @@ class TransformerBlock(tf.keras.layers.Layer):
             name="norm3" if is_decoder else "norm2"
         )
         
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def call(
         self,
@@ -375,7 +383,8 @@ class ConvolutionalLayer(tf.keras.layers.Layer):
         )
         self.batch_norm = tf.keras.layers.BatchNormalization(name="batch_norm")
         self.activation = tf.keras.layers.Activation(activation)
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
         """Forward pass."""

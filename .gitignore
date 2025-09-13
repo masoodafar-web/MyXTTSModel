@@ -135,4 +135,4 @@ wandb/
 *.pkl
 *.json
 models/
-experiments/
+experiments/=*

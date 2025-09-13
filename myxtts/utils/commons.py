@@ -54,10 +54,12 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
                 except Exception as e:
                     print(f"GPU memory configuration warning for {gpu}: {e}")
             
-            # CRITICAL FIX: Force GPU device placement for all operations
+            # CRITICAL FIX: Set device policy to handle device placement issues
             try:
-                tf.config.experimental.set_device_policy('explicit')
-                print("✓ Set explicit device policy for GPU utilization")
+                # Use 'silent' policy to allow automatic tensor copying between devices
+                # This fixes the InvalidArgumentError with dropout layer seed generators
+                tf.config.experimental.set_device_policy('silent')
+                print("✓ Set silent device policy to handle automatic device placement")
             except Exception as e:
                 print(f"Device policy warning: {e}")
                 
@@ -165,6 +167,37 @@ def ensure_gpu_placement(tensor):
             else:
                 return tf.cast(tensor, tensor.dtype)  # Force movement to GPU
     return tensor
+
+
+def get_device_context():
+    """
+    Get the appropriate device context for layer creation.
+    
+    Returns:
+        Device context manager
+    """
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        return tf.device('/GPU:0')
+    else:
+        return tf.device('/CPU:0')
+
+
+def create_dropout_layer(rate: float, seed: Optional[int] = None, name: str = "dropout"):
+    """
+    Create a dropout layer with proper device placement.
+    
+    Args:
+        rate: Dropout rate
+        seed: Random seed for reproducibility
+        name: Layer name
+        
+    Returns:
+        Dropout layer with proper device context
+    """
+    # Ensure device placement is handled correctly for dropout layers
+    with get_device_context():
+        return tf.keras.layers.Dropout(rate, seed=seed, name=name)
 
 
 def setup_mixed_precision():
