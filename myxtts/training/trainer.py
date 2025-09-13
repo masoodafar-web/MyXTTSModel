@@ -98,10 +98,16 @@ class XTTSTrainer:
                 policy = tf.keras.mixed_precision.Policy('mixed_float16')
                 tf.keras.mixed_precision.set_global_policy(policy)
                 self.logger.info("Mixed precision enabled")
-            # Enable XLA compilation if requested
+            # Control XLA compilation explicitly based on config
             if getattr(config.data, 'enable_xla', False):
                 tf.config.optimizer.set_jit(True)
                 self.logger.info("XLA compilation enabled")
+            else:
+                try:
+                    tf.config.optimizer.set_jit(False)
+                    self.logger.info("XLA compilation disabled")
+                except Exception:
+                    pass
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
@@ -160,22 +166,27 @@ class XTTSTrainer:
         """Create optimizer based on configuration."""
         config = self.config.training
         
+        # Build common optimizer kwargs
+        common_kwargs = dict(
+            learning_rate=config.learning_rate,
+            beta_1=config.beta1,
+            beta_2=config.beta2,
+            epsilon=config.eps,
+        )
+        # Clip norm if requested
+        if getattr(config, 'gradient_clip_norm', 0) and config.gradient_clip_norm > 0:
+            common_kwargs["global_clipnorm"] = config.gradient_clip_norm
+        # Only include gradient_accumulation_steps when >= 2 (Keras requirement)
+        ga_steps = int(getattr(config, 'gradient_accumulation_steps', 1) or 1)
+        if ga_steps >= 2:
+            common_kwargs["gradient_accumulation_steps"] = ga_steps
+
         if config.optimizer.lower() == "adam":
-            return tf.keras.optimizers.Adam(
-                learning_rate=config.learning_rate,
-                beta_1=config.beta1,
-                beta_2=config.beta2,
-                epsilon=config.eps,
-                global_clipnorm=(config.gradient_clip_norm if getattr(config, 'gradient_clip_norm', 0) and config.gradient_clip_norm > 0 else None)
-            )
+            return tf.keras.optimizers.Adam(**common_kwargs)
         elif config.optimizer.lower() == "adamw":
             return tf.keras.optimizers.AdamW(
-                learning_rate=config.learning_rate,
-                beta_1=config.beta1,
-                beta_2=config.beta2,
-                epsilon=config.eps,
                 weight_decay=config.weight_decay,
-                global_clipnorm=(config.gradient_clip_norm if getattr(config, 'gradient_clip_norm', 0) and config.gradient_clip_norm > 0 else None)
+                **common_kwargs
             )
         else:
             raise ValueError(f"Unknown optimizer: {config.optimizer}")
@@ -393,38 +404,15 @@ class XTTSTrainer:
             mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
             text_lengths = ensure_gpu_placement(text_lengths)
             mel_lengths = ensure_gpu_placement(mel_lengths)
-        
-        # Clear any cached tensors to free memory
-        tf.keras.backend.clear_session()
-        
         with tf.GradientTape() as tape:
-            # Forward pass with memory optimization
-            try:
-                outputs = self.model(
-                    text_inputs=text_sequences,
-                    mel_inputs=mel_spectrograms,
-                    text_lengths=text_lengths,
-                    mel_lengths=mel_lengths,
-                    training=True
-                )
-            except tf.errors.ResourceExhaustedError as e:
-                # Handle OOM by reducing precision and retrying
-                self.logger.warning(f"OOM during forward pass, attempting recovery: {e}")
-                tf.keras.backend.clear_session()
-                # Force garbage collection
-                import gc
-                gc.collect()
-                
-                # Retry with float16 precision if not already enabled
-                with tf.cast(text_sequences, tf.float16), \
-                     tf.cast(mel_spectrograms, tf.float16):
-                    outputs = self.model(
-                        text_inputs=text_sequences,
-                        mel_inputs=mel_spectrograms,
-                        text_lengths=text_lengths,
-                        mel_lengths=mel_lengths,
-                        training=True
-                    )
+            # Forward pass
+            outputs = self.model(
+                text_inputs=text_sequences,
+                mel_inputs=mel_spectrograms,
+                text_lengths=text_lengths,
+                mel_lengths=mel_lengths,
+                training=True
+            )
             
             # Prepare targets
             stop_targets = create_stop_targets(

@@ -74,6 +74,14 @@ def train_command(args):
     if args.learning_rate:
         config.training.learning_rate = args.learning_rate
     
+    # Optional dataset subset fractions for quick experiments
+    if getattr(args, 'train_frac', None) is not None:
+        config.data.train_subset_fraction = float(args.train_frac)
+    if getattr(args, 'eval_frac', None) is not None:
+        config.data.eval_subset_fraction = float(args.eval_frac)
+    if getattr(args, 'subset_seed', None) is not None:
+        config.data.subset_seed = int(args.subset_seed)
+    
     # Create model
     model = XTTS(config.model)
     
@@ -239,6 +247,18 @@ def dataset_info_command(args):
     # Load configuration
     config = XTTSConfig()
     config.data.dataset_path = args.data_path
+    # Apply subset fraction if requested
+    try:
+        if args.frac is not None:
+            frac = float(args.frac)
+            if args.subset in ("val", "test"):
+                config.data.eval_subset_fraction = frac
+            else:
+                config.data.train_subset_fraction = frac
+        if args.subset_seed is not None:
+            config.data.subset_seed = int(args.subset_seed)
+    except Exception:
+        pass
     
     # Load dataset
     dataset = LJSpeechDataset(
@@ -345,6 +365,10 @@ def main():
     train_parser.add_argument("--batch-size", type=int, help="Batch size")
     train_parser.add_argument("--learning-rate", type=float, help="Learning rate")
     train_parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    # Dataset subset fractions for quick runs
+    train_parser.add_argument("--train-frac", type=float, help="Fraction of train data to use (0-1)")
+    train_parser.add_argument("--eval-frac", type=float, help="Fraction of eval/val data to use (0-1)")
+    train_parser.add_argument("--subset-seed", type=int, help="Subset selection seed")
     train_parser.set_defaults(func=train_command)
     
     # Inference command
@@ -377,6 +401,8 @@ def main():
     dataset_parser = subparsers.add_parser("dataset-info", help="Show dataset information")
     dataset_parser.add_argument("--data-path", required=True, help="Dataset path")
     dataset_parser.add_argument("--subset", default="train", help="Dataset subset")
+    dataset_parser.add_argument("--frac", type=float, help="Subsample fraction for the chosen subset (0-1)")
+    dataset_parser.add_argument("--subset-seed", type=int, help="Subset selection seed")
     dataset_parser.set_defaults(func=dataset_info_command)
     
     # Benchmark command

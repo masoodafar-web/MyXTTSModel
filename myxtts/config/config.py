@@ -54,85 +54,73 @@ class ModelConfig:
             self.languages = ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]
 
 
-@dataclass 
+@dataclass
 class DataConfig:
     """Data processing configuration."""
-    
+
     # Dataset paths
     dataset_path: str = ""
     dataset_name: str = "ljspeech"
-    
+
     # Custom metadata file paths (optional)
     metadata_train_file: Optional[str] = None  # Custom path for train metadata
     metadata_eval_file: Optional[str] = None   # Custom path for eval/val metadata
-    
+
     # Custom wav directories (optional, used with custom metadata files)
     wavs_train_dir: Optional[str] = None       # Custom path for train wav files
     wavs_eval_dir: Optional[str] = None        # Custom path for eval wav files
-    
+
     # Audio processing
     sample_rate: int = 22050
     trim_silence: bool = True
     normalize_audio: bool = True
-    
+
     # Text processing
     text_cleaners: List[str] = None
     language: str = "en"
     add_blank: bool = True
-    
-    # Training data
+
+    # Training splits and optional subsampling
     train_split: float = 0.9
     val_split: float = 0.1
+    train_subset_fraction: float = 1.0  # 0-1 fraction of train to use
+    eval_subset_fraction: float = 1.0   # 0-1 fraction of val/test to use
+    subset_seed: int = 42
+
+    # Batching and workers
     batch_size: int = 32
-    num_workers: int = 8  # Increased for better CPU utilization
-    
-    # Memory and performance optimization
-    prefetch_buffer_size: int = 4
+    num_workers: int = 8
+
+    # Data pipeline performance
+    prefetch_buffer_size: int = 8
     shuffle_buffer_multiplier: int = 20
     enable_memory_mapping: bool = True
+    cache_verification: bool = True
     prefetch_to_gpu: bool = True
-    mixed_precision: bool = False
-    enable_xla: bool = False
-    
-    # Audio/mel parameters (from ModelConfig)
-    n_mels: int = 80
-    max_mel_frames: int = 500
-    
-    # Voice conditioning
-    reference_audio_length: float = 3.0  # seconds
-    min_audio_length: float = 1.0
-    max_audio_length: float = 11.0
-    
-    # Performance optimization settings
-    prefetch_buffer_size: int = 8  # Increased for better GPU utilization  
-    shuffle_buffer_multiplier: int = 20  # Increased for better shuffling
-    enable_memory_mapping: bool = True  # Use memory mapping for cache files
-    cache_verification: bool = True  # Verify cache integrity on startup
-    prefetch_to_gpu: bool = True  # Prefetch batches directly to GPU (disable for low-memory)
-    
+
     # Sequence length caps to avoid OOM
-    max_mel_frames: int = 512  # Truncate mel length during training
-    
+    max_mel_frames: int = 512
+
     # GPU-specific optimizations
-    enable_xla: bool = True  # Enable XLA compilation for faster training
-    enable_tensorrt: bool = False  # Enable TensorRT optimization (requires TensorRT)
-    mixed_precision: bool = True  # Enable mixed precision training
-    
-    # Data loading optimizations
-    pin_memory: bool = True  # Pin memory for faster GPU transfer
-    persistent_workers: bool = True  # Keep workers alive between epochs
-    
+    enable_xla: bool = True
+    enable_tensorrt: bool = False
+    mixed_precision: bool = True
+
+    # Data loading extra options
+    pin_memory: bool = True
+    persistent_workers: bool = True
+
     # Dataset preprocessing control
     preprocessing_mode: str = "auto"  # "auto", "precompute", "runtime"
-    
+
     def __post_init__(self):
         if self.text_cleaners is None:
             self.text_cleaners = ["english_cleaners"]
-        
-        # Validate preprocessing_mode
         valid_modes = ["auto", "precompute", "runtime"]
         if self.preprocessing_mode not in valid_modes:
-            raise ValueError(f"preprocessing_mode must be one of {valid_modes}, got '{self.preprocessing_mode}'")
+            raise ValueError(
+                f"preprocessing_mode must be one of {valid_modes}, got '{self.preprocessing_mode}'"
+            )
 
 
 @dataclass
@@ -145,6 +133,7 @@ class TrainingConfig:
     warmup_steps: int = 4000
     weight_decay: float = 1e-6
     gradient_clip_norm: float = 1.0
+    gradient_accumulation_steps: int = 1
     
     # Optimizer
     optimizer: str = "adamw"
@@ -176,11 +165,6 @@ class TrainingConfig:
     # Device / distribution
     multi_gpu: bool = False            # Enable MirroredStrategy when True
     visible_gpus: Optional[str] = None # e.g., "0" or "0,1"; None = all visible
-    
-    # Memory optimization
-    gradient_accumulation_steps: int = 1  # Number of steps to accumulate gradients
-    enable_memory_cleanup: bool = True    # Enable memory cleanup between batches
-    max_memory_fraction: float = 0.9      # Maximum GPU memory to use (0.0-1.0)
     
     def __post_init__(self):
         if self.scheduler_params is None:
