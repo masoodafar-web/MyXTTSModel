@@ -30,6 +30,28 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
+### Memory Optimization (Important!)
+
+**If you encounter OOM (Out of Memory) errors**, use our memory-optimized configurations:
+
+```bash
+# For most GPUs (12GB+)
+python trainTestFile.py --config config_memory_optimized.yaml
+
+# For limited memory GPUs (8GB)
+python trainTestFile.py --config config_extreme_memory_optimized.yaml
+
+# Test your setup before training (optional)
+python quick_memory_test.py --config config_memory_optimized.yaml
+```
+
+**Auto-optimize any configuration:**
+```bash
+python memory_optimizer.py --config your_config.yaml --output optimized.yaml
+```
+
+See [QUICK_FIX_OOM_GUIDE.md](QUICK_FIX_OOM_GUIDE.md) for detailed OOM troubleshooting.
+
 ### Alternative: Using trainTestFile.py (Flexible Configuration)
 
 For even more flexibility, you can use the `trainTestFile.py` script in the root directory, which allows both programmatic configuration (without YAML files) and optional YAML-based configuration:
