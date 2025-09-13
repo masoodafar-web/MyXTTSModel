@@ -437,20 +437,6 @@ class TransformerBlock(tf.keras.layers.Layer):
             x = self._feed_forward_block(x, training)
         
         return x
-            attn_output = self.dropout(attn_output, training=training)
-            x = self.norm2(x + attn_output)
-        
-        # Feed-forward
-        ff_output = self.feed_forward(x, training=training)
-        ff_output = self.dropout(ff_output, training=training)
-        
-        # Final normalization: use the third norm layer for decoder blocks,
-        # and for encoder blocks this is the second norm (named "norm2").
-        # We always apply self.norm3, which is constructed as
-        # name="norm3" if decoder else name="norm2".
-        output = self.norm3(x + ff_output)
-        
-        return output
 
 
 class ConvolutionalLayer(tf.keras.layers.Layer):
