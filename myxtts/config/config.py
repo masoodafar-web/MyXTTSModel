@@ -96,6 +96,7 @@ class DataConfig:
     shuffle_buffer_multiplier: int = 20  # Increased for better shuffling
     enable_memory_mapping: bool = True  # Use memory mapping for cache files
     cache_verification: bool = True  # Verify cache integrity on startup
+    prefetch_to_gpu: bool = True  # Prefetch batches directly to GPU (disable for low-memory)
     
     # Sequence length caps to avoid OOM
     max_mel_frames: int = 512  # Truncate mel length during training

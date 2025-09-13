@@ -980,22 +980,24 @@ class LJSpeechDataset:
 
         # Optimized prefetching strategy
         if prefetch:
-            # Use larger prefetch buffer for better CPU-GPU overlap
-            prefetch_buffer = max(2, batch_size // 4)
+            # Use config-driven prefetch buffer (reduces peak memory vs. batch_size//4)
+            prefetch_buffer = max(1, int(getattr(self.config, 'prefetch_buffer_size', 2)))
             dataset = dataset.prefetch(prefetch_buffer)
 
         # Try prefetching to GPU if available for maximum CPU-GPU overlap
         try:
-            gpus = tf.config.list_logical_devices('GPU')
-            if gpus and len(gpus) > 0:
-                # Prefetch to GPU with multiple buffers for better overlap
-                gpu_device = f'/GPU:0'
-                dataset = dataset.apply(
-                    tf.data.experimental.prefetch_to_device(
-                        gpu_device, 
-                        buffer_size=max(2, batch_size // 8)
+            # Prefetch batches directly to GPU only if enabled in config
+            if bool(getattr(self.config, 'prefetch_to_gpu', True)):
+                gpus = tf.config.list_logical_devices('GPU')
+                if gpus and len(gpus) > 0:
+                    gpu_device = '/GPU:0'
+                    gpu_buf = max(1, int(getattr(self.config, 'prefetch_buffer_size', 2)))
+                    dataset = dataset.apply(
+                        tf.data.experimental.prefetch_to_device(
+                            gpu_device,
+                            buffer_size=gpu_buf
+                        )
                     )
-                )
         except Exception as e:
             print(f"Could not prefetch to GPU: {e}")
 

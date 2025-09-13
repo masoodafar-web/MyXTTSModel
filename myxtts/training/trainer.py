@@ -95,6 +95,13 @@ class XTTSTrainer:
             
             # Initialize optimizer
             self.optimizer = self._create_optimizer()
+            # Wrap optimizer for mixed precision if enabled
+            try:
+                if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
+                    self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
+                    self.logger.info("Wrapped optimizer with LossScaleOptimizer for mixed precision")
+            except Exception as e:
+                self.logger.warning(f"Could not wrap optimizer for mixed precision: {e}")
             
             # Initialize loss function
             self.criterion = XTTSLoss(
@@ -140,7 +147,8 @@ class XTTSTrainer:
                 learning_rate=config.learning_rate,
                 beta_1=config.beta1,
                 beta_2=config.beta2,
-                epsilon=config.eps
+                epsilon=config.eps,
+                global_clipnorm=(config.gradient_clip_norm if getattr(config, 'gradient_clip_norm', 0) and config.gradient_clip_norm > 0 else None)
             )
         elif config.optimizer.lower() == "adamw":
             return tf.keras.optimizers.AdamW(
@@ -148,7 +156,8 @@ class XTTSTrainer:
                 beta_1=config.beta1,
                 beta_2=config.beta2,
                 epsilon=config.eps,
-                weight_decay=config.weight_decay
+                weight_decay=config.weight_decay,
+                global_clipnorm=(config.gradient_clip_norm if getattr(config, 'gradient_clip_norm', 0) and config.gradient_clip_norm > 0 else None)
             )
         else:
             raise ValueError(f"Unknown optimizer: {config.optimizer}")
@@ -398,28 +407,18 @@ class XTTSTrainer:
             # Compute loss
             loss = self.criterion(y_true, y_pred)
             
-            # Scale loss for distributed training
-            scaled_loss = loss / self.strategy.num_replicas_in_sync
-            
-            # Scale loss for mixed precision
-            if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
-                scaled_loss = self.optimizer.get_scaled_loss(scaled_loss)
-        
-        # Compute gradients
-        gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
-        
-        # Scale gradients for mixed precision
-        if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
-            gradients = self.optimizer.get_unscaled_gradients(gradients)
-        
-        # Clip gradients
-        if self.config.training.gradient_clip_norm > 0:
-            gradients, _ = tf.clip_by_global_norm(
-                gradients, 
-                self.config.training.gradient_clip_norm
-            )
-        
-        # Apply gradients
+            # Per-replica loss scaling (average across replicas)
+            loss_for_grad = loss / self.strategy.num_replicas_in_sync
+
+            # Mixed precision handling (Keras 3 API)
+            is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
+            if is_mixed and hasattr(self.optimizer, 'scale_loss'):
+                scaled_loss = self.optimizer.scale_loss(loss_for_grad)
+                gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+            else:
+                gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
+
+        # Apply gradients (LossScaleOptimizer will unscale internally if used)
         self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
         
         # Get individual losses
