@@ -112,13 +112,27 @@ def create_default_config(
     # Configure model settings
     config.model.sample_rate = sample_rate
     
-    # Configure training settings
+    # Configure training settings with GPU optimizations
     config.training.epochs = epochs
     config.training.learning_rate = learning_rate
     config.training.checkpoint_dir = checkpoint_dir
     config.training.save_step = max(1000, epochs // 10)  # Save 10 times during training
     config.training.val_step = max(500, epochs // 20)    # Validate 20 times during training
     config.training.log_step = 100
+    
+    # CRITICAL GPU OPTIMIZATIONS: Add GPU-specific settings for better utilization
+    # Memory optimization settings
+    config.training.gradient_accumulation_steps = 4  # Effective batch size = batch_size * 4
+    config.training.enable_memory_cleanup = True
+    config.training.max_memory_fraction = 0.85  # Use 85% of GPU memory
+    
+    # GPU utilization settings
+    config.data.num_workers = 8  # Increased for better data loading
+    config.data.prefetch_buffer_size = 6  # Increased for GPU utilization
+    config.data.shuffle_buffer_multiplier = 15
+    config.data.enable_xla = True  # Enable XLA for better GPU performance
+    config.data.mixed_precision = True  # Enable mixed precision for memory efficiency
+    config.data.pin_memory = True  # Pin memory for faster GPU transfer
     
     return config
 
@@ -269,7 +283,7 @@ def main():
     # Data and model options
     parser.add_argument("--data-path", default="../dataset/dataset_train", help="Path to training data")
     parser.add_argument("--language", default="en", help="Language code")
-    parser.add_argument("--batch-size", type=int, default=16, help="Training batch size")
+    parser.add_argument("--batch-size", type=int, default=32, help="Training batch size (optimized for GPU)")
     parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
     parser.add_argument("--learning-rate", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--sample-rate", type=int, default=22050, help="Audio sample rate")
