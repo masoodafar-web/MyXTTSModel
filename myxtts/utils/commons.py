@@ -35,36 +35,52 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
                 selected.append(all_gpus[idx])
             tf.config.set_visible_devices(selected, 'GPU')
         
-        # Configure memory growth and limits
-        for gpu in tf.config.list_physical_devices('GPU'):
-            try:
-                if memory_growth:
-                    tf.config.experimental.set_memory_growth(gpu, True)
-                    print(f"Enabled memory growth for {gpu}")
-                
-                if memory_limit is not None:
-                    tf.config.experimental.set_memory_limit(gpu, memory_limit)
-                    print(f"Set memory limit to {memory_limit}MB for {gpu}")
+        # CRITICAL FIX: Better GPU configuration for utilization
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            print(f"Found {len(gpus)} GPU(s): {gpus}")
+            
+            # Configure memory growth and limits
+            for gpu in gpus:
+                try:
+                    if memory_growth:
+                        tf.config.experimental.set_memory_growth(gpu, True)
+                        print(f"✓ Enabled memory growth for {gpu}")
                     
-            except Exception as e:
-                print(f"GPU memory configuration warning for {gpu}: {e}")
-                
-        # Set additional memory optimization settings
-        if tf.config.list_physical_devices('GPU'):
-            # Enable mixed precision for memory efficiency
+                    if memory_limit is not None:
+                        tf.config.experimental.set_memory_limit(gpu, memory_limit)
+                        print(f"✓ Set memory limit to {memory_limit}MB for {gpu}")
+                        
+                except Exception as e:
+                    print(f"GPU memory configuration warning for {gpu}: {e}")
+            
+            # CRITICAL FIX: Force GPU device placement for all operations
             try:
+                tf.config.experimental.set_device_policy('explicit')
+                print("✓ Set explicit device policy for GPU utilization")
+            except Exception as e:
+                print(f"Device policy warning: {e}")
+                
+            # Set additional memory optimization settings
+            try:
+                # Enable mixed precision for memory efficiency
                 policy = tf.keras.mixed_precision.Policy('mixed_float16')
                 tf.keras.mixed_precision.set_global_policy(policy)
-                print("Mixed precision policy enabled for memory optimization")
-            except Exception as e:
-                print(f"Mixed precision setup warning: {e}")
-            
-            # Enable XLA for memory optimization
-            try:
+                print("✓ Mixed precision policy enabled")
+                
+                # Enable XLA for better GPU utilization
                 tf.config.optimizer.set_jit(True)
-                print("XLA JIT compilation enabled for memory optimization")
+                print("✓ XLA JIT compilation enabled")
+                
+                # Force eager execution for better debugging (can disable in production)
+                if not tf.executing_eagerly():
+                    tf.config.run_functions_eagerly(True)
+                    print("✓ Eager execution enabled for debugging")
+                    
             except Exception as e:
-                print(f"XLA setup warning: {e}")
+                print(f"Advanced GPU optimization warning: {e}")
+        else:
+            print("⚠️ No GPUs detected - falling back to CPU")
                 
     except Exception as e:
         print(f"GPU configuration warning: {e}")
@@ -142,7 +158,12 @@ def ensure_gpu_placement(tensor):
     """
     if tf.config.list_physical_devices('GPU'):
         with tf.device('/GPU:0'):
-            return tf.identity(tensor)
+            # Use tf.cast to force tensor movement to GPU memory
+            # tf.identity alone might not move the tensor
+            if tensor.dtype == tf.float64:
+                return tf.cast(tensor, tf.float32)  # Convert to float32 for GPU efficiency
+            else:
+                return tf.cast(tensor, tensor.dtype)  # Force movement to GPU
     return tensor
 
 

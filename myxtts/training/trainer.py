@@ -111,11 +111,40 @@ class XTTSTrainer:
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
-            # Initialize model
-            if model is None:
-                self.model = XTTS(config.model)
-            else:
-                self.model = model
+            # CRITICAL FIX: Ensure model is created on GPU
+            device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
+            with device_context:
+                # Initialize model
+                if model is None:
+                    self.model = XTTS(config.model)
+                else:
+                    self.model = model
+                
+                # Force model to be built on GPU by running a dummy forward pass
+                if self.device == "GPU":
+                    self.logger.info("Building model on GPU with dummy forward pass...")
+                    try:
+                        dummy_text = tf.zeros([1, 10], dtype=tf.int32)
+                        dummy_mel = tf.zeros([1, 20, 80], dtype=tf.float32)
+                        dummy_text_len = tf.constant([10], dtype=tf.int32)
+                        dummy_mel_len = tf.constant([20], dtype=tf.int32)
+                        
+                        with tf.device('/GPU:0'):
+                            dummy_text = tf.cast(dummy_text, tf.int32)
+                            dummy_mel = tf.cast(dummy_mel, tf.float32)
+                            dummy_text_len = tf.cast(dummy_text_len, tf.int32)
+                            dummy_mel_len = tf.cast(dummy_mel_len, tf.int32)
+                            
+                            _ = self.model(
+                                text_inputs=dummy_text,
+                                mel_inputs=dummy_mel,
+                                text_lengths=dummy_text_len,
+                                mel_lengths=dummy_mel_len,
+                                training=False
+                            )
+                            self.logger.info("✓ Model successfully built on GPU")
+                    except Exception as e:
+                        self.logger.warning(f"Model GPU initialization warning: {e}")
             
             # Initialize optimizer
             self.optimizer = self._create_optimizer()
@@ -335,11 +364,19 @@ class XTTSTrainer:
             buffer_size_multiplier=2
         )
         
-        # Optimize datasets for GPU training (prefetch only; avoid distributing dataset here)
+        # Optimize datasets for GPU training and distribute
         if self.device == "GPU":
             AUTOTUNE = tf.data.AUTOTUNE
             train_tf_dataset = train_tf_dataset.prefetch(AUTOTUNE)
             val_tf_dataset = val_tf_dataset.prefetch(AUTOTUNE)
+            
+            # CRITICAL FIX: Properly distribute datasets to GPU strategy
+            try:
+                train_tf_dataset = self.strategy.experimental_distribute_dataset(train_tf_dataset)
+                val_tf_dataset = self.strategy.experimental_distribute_dataset(val_tf_dataset)
+                self.logger.info("✓ Datasets distributed to GPU strategy")
+            except Exception as e:
+                self.logger.warning(f"Dataset distribution failed: {e}")
         
         # Store sizes and default steps per epoch for scheduler/progress
         self.train_dataset_size = len(train_ljs)
@@ -398,71 +435,76 @@ class XTTSTrainer:
         Returns:
             Dictionary with loss values
         """
-        # Ensure tensors are on GPU if available
-        if self.device == "GPU":
-            text_sequences = ensure_gpu_placement(text_sequences)
-            mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
-            text_lengths = ensure_gpu_placement(text_lengths)
-            mel_lengths = ensure_gpu_placement(mel_lengths)
-        with tf.GradientTape() as tape:
-            # Forward pass
-            outputs = self.model(
-                text_inputs=text_sequences,
-                mel_inputs=mel_spectrograms,
-                text_lengths=text_lengths,
-                mel_lengths=mel_lengths,
-                training=True
-            )
+        # CRITICAL FIX: Wrap entire training step in GPU device context
+        device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
+        
+        with device_context:
+            # Ensure tensors are on GPU if available
+            if self.device == "GPU":
+                text_sequences = ensure_gpu_placement(text_sequences)
+                mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
+                text_lengths = ensure_gpu_placement(text_lengths)
+                mel_lengths = ensure_gpu_placement(mel_lengths)
             
-            # Prepare targets
-            stop_targets = create_stop_targets(
-                mel_lengths, 
-                tf.shape(mel_spectrograms)[1]
-            )
+            with tf.GradientTape() as tape:
+                # Forward pass
+                outputs = self.model(
+                    text_inputs=text_sequences,
+                    mel_inputs=mel_spectrograms,
+                    text_lengths=text_lengths,
+                    mel_lengths=mel_lengths,
+                    training=True
+                )
+                
+                # Prepare targets
+                stop_targets = create_stop_targets(
+                    mel_lengths, 
+                    tf.shape(mel_spectrograms)[1]
+                )
+                
+                y_true = {
+                    "mel_target": mel_spectrograms,
+                    "stop_target": stop_targets,
+                    "text_lengths": text_lengths,
+                    "mel_lengths": mel_lengths
+                }
+                
+                y_pred = {
+                    "mel_output": outputs["mel_output"],
+                    "stop_tokens": outputs["stop_tokens"]
+                }
+                
+                # Compute loss
+                loss = self.criterion(y_true, y_pred)
+                
+                # Per-replica loss scaling (average across replicas)
+                loss_for_grad = loss / self.strategy.num_replicas_in_sync
+
+                # Mixed precision handling (Keras 3 API)
+                is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
+                if is_mixed and hasattr(self.optimizer, 'scale_loss'):
+                    scaled_loss = self.optimizer.scale_loss(loss_for_grad)
+                    gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+                else:
+                    gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
+
+            # Clip gradients to prevent memory explosion
+            if gradients:
+                gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=1.0)
+
+            # Apply gradients (LossScaleOptimizer will unscale internally if used)
+            self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
             
-            y_true = {
-                "mel_target": mel_spectrograms,
-                "stop_target": stop_targets,
-                "text_lengths": text_lengths,
-                "mel_lengths": mel_lengths
+            # Get individual losses
+            individual_losses = self.criterion.get_losses()
+            
+            # Clear intermediate tensors to free memory
+            del outputs, y_true, y_pred, gradients
+            
+            return {
+                "total_loss": loss,
+                **individual_losses
             }
-            
-            y_pred = {
-                "mel_output": outputs["mel_output"],
-                "stop_tokens": outputs["stop_tokens"]
-            }
-            
-            # Compute loss
-            loss = self.criterion(y_true, y_pred)
-            
-            # Per-replica loss scaling (average across replicas)
-            loss_for_grad = loss / self.strategy.num_replicas_in_sync
-
-            # Mixed precision handling (Keras 3 API)
-            is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
-            if is_mixed and hasattr(self.optimizer, 'scale_loss'):
-                scaled_loss = self.optimizer.scale_loss(loss_for_grad)
-                gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
-            else:
-                gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
-
-        # Clip gradients to prevent memory explosion
-        if gradients:
-            gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=1.0)
-
-        # Apply gradients (LossScaleOptimizer will unscale internally if used)
-        self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
-        
-        # Get individual losses
-        individual_losses = self.criterion.get_losses()
-        
-        # Clear intermediate tensors to free memory
-        del outputs, y_true, y_pred, gradients
-        
-        return {
-            "total_loss": loss,
-            **individual_losses
-        }
     
     def find_optimal_batch_size(self, start_batch_size: int = 8, max_batch_size: int = 32) -> int:
         """
@@ -685,50 +727,54 @@ class XTTSTrainer:
         Returns:
             Dictionary with loss values
         """
-        # Ensure tensors are on GPU if available
-        if self.device == "GPU":
-            text_sequences = ensure_gpu_placement(text_sequences)
-            mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
-            text_lengths = ensure_gpu_placement(text_lengths)
-            mel_lengths = ensure_gpu_placement(mel_lengths)
+        # CRITICAL FIX: Wrap entire validation step in GPU device context
+        device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
         
-        # Forward pass
-        outputs = self.model(
-            text_inputs=text_sequences,
-            mel_inputs=mel_spectrograms,
-            text_lengths=text_lengths,
-            mel_lengths=mel_lengths,
-            training=False
-        )
-        
-        # Prepare targets
-        stop_targets = create_stop_targets(
-            mel_lengths,
-            tf.shape(mel_spectrograms)[1]
-        )
-        
-        y_true = {
-            "mel_target": mel_spectrograms,
-            "stop_target": stop_targets,
-            "text_lengths": text_lengths,
-            "mel_lengths": mel_lengths
-        }
-        
-        y_pred = {
-            "mel_output": outputs["mel_output"],
-            "stop_tokens": outputs["stop_tokens"]
-        }
-        
-        # Compute loss
-        loss = self.criterion(y_true, y_pred)
-        
-        # Get individual losses
-        individual_losses = self.criterion.get_losses()
-        
-        return {
-            "total_loss": loss,
-            **individual_losses
-        }
+        with device_context:
+            # Ensure tensors are on GPU if available
+            if self.device == "GPU":
+                text_sequences = ensure_gpu_placement(text_sequences)
+                mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
+                text_lengths = ensure_gpu_placement(text_lengths)
+                mel_lengths = ensure_gpu_placement(mel_lengths)
+            
+            # Forward pass
+            outputs = self.model(
+                text_inputs=text_sequences,
+                mel_inputs=mel_spectrograms,
+                text_lengths=text_lengths,
+                mel_lengths=mel_lengths,
+                training=False
+            )
+            
+            # Prepare targets
+            stop_targets = create_stop_targets(
+                mel_lengths,
+                tf.shape(mel_spectrograms)[1]
+            )
+            
+            y_true = {
+                "mel_target": mel_spectrograms,
+                "stop_target": stop_targets,
+                "text_lengths": text_lengths,
+                "mel_lengths": mel_lengths
+            }
+            
+            y_pred = {
+                "mel_output": outputs["mel_output"],
+                "stop_tokens": outputs["stop_tokens"]
+            }
+            
+            # Compute loss
+            loss = self.criterion(y_true, y_pred)
+            
+            # Get individual losses
+            individual_losses = self.criterion.get_losses()
+            
+            return {
+                "total_loss": loss,
+                **individual_losses
+            }
     
     def train(
         self,

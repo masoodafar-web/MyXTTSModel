@@ -1,0 +1,67 @@
+model:
+  # Architecture optimized for GPU
+  text_encoder_dim: 512      # Text encoder dimension
+  decoder_dim: 1024          # Decoder dimension
+  text_encoder_layers: 6     # Number of transformer layers
+  
+  # Audio settings
+  sample_rate: 22050         # Audio sample rate
+  n_mels: 80                 # Mel spectrogram channels
+  
+  # Voice cloning
+  use_voice_conditioning: true
+  speaker_embedding_dim: 256
+  
+  # Languages
+  languages: [en, es, fr, de, it, pt, pl, tr, ru, nl, cs, ar, zh, ja, hu, ko]
+  
+training:
+  epochs: 1000
+  learning_rate: 1e-4
+  batch_size: 32                     # GPU-optimized batch size
+  optimizer: adamw
+  scheduler: noam
+  
+  # GPU Memory Optimization - CRITICAL FIXES
+  gradient_accumulation_steps: 4     # Effective batch size = 32 * 4 = 128
+  enable_memory_cleanup: true        # Clean GPU memory regularly
+  max_memory_fraction: 0.85          # Use 85% of GPU memory max
+  
+  # Loss weights
+  mel_loss_weight: 45.0
+  kl_loss_weight: 1.0
+  
+  # Checkpointing
+  save_step: 25000
+  val_step: 5000
+  checkpoint_dir: "./checkpoints"
+
+data:
+  dataset_path: "./data/ljspeech"
+  dataset_name: "ljspeech"
+  language: "en"
+  
+  # Audio processing
+  sample_rate: 22050
+  normalize_audio: true
+  trim_silence: true
+  
+  # Text processing
+  text_cleaners: ["english_cleaners"]
+  add_blank: true
+  
+  # Training splits
+  train_split: 0.9
+  val_split: 0.1
+  batch_size: 32                     # GPU-optimized batch size
+  num_workers: 8                     # Increased for better GPU utilization
+  
+  # CRITICAL GPU OPTIMIZATION SETTINGS
+  prefetch_buffer_size: 6            # Optimized for GPU data pipeline
+  shuffle_buffer_multiplier: 15      # Optimized shuffling
+  enable_xla: true                   # Enable XLA compilation for GPU
+  mixed_precision: true              # Enable mixed precision for memory efficiency
+  pin_memory: true                   # Pin memory for faster GPU transfer
+  
+  # Dataset preprocessing control
+  preprocessing_mode: auto           # "auto", "precompute", "runtime"
