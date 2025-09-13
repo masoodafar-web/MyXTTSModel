@@ -13,7 +13,14 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from myxtts.config.config import ModelConfig, XTTSConfig
-from myxtts.utils.text import TextProcessor, NLLBTokenizer, TRANSFORMERS_AVAILABLE
+from myxtts.utils.text import (
+    TextProcessor, 
+    NLLBTokenizer, 
+    TRANSFORMERS_AVAILABLE,
+    get_supported_nllb_languages,
+    get_nllb_language_code,
+    is_nllb_language_supported
+)
 
 
 def demo_nllb_tokenizer():
@@ -58,26 +65,29 @@ def demo_nllb_tokenizer():
         )
         print(f"NLLB tokenizer vocab size: {nllb_processor.get_vocab_size():,}")
         
-        # Test text processing
+        # Test text processing with language-specific tokenization
         sample_texts = [
-            "Hello, world!",
-            "This is a multilingual text-to-speech system.",
-            "¡Hola, mundo!",  # Spanish
-            "Bonjour le monde!",  # French
-            "Hallo Welt!"  # German
+            ("Hello, world!", "en"),
+            ("This is a multilingual text-to-speech system.", "en"),
+            ("¡Hola, mundo!", "es"),  # Spanish
+            ("Bonjour le monde!", "fr"),  # French
+            ("Hallo Welt!", "de"),  # German
+            ("سلام دنیا!", "fa"),  # Persian/Farsi
         ]
         
-        print("\nTokenization Comparison:")
-        print("-" * 40)
+        print("\nTokenization Comparison with Language Context:")
+        print("-" * 50)
         
-        for text in sample_texts:
-            print(f"\nText: '{text}'")
+        for text, lang in sample_texts:
+            print(f"\nText: '{text}' (Language: {lang})")
+            print(f"NLLB code: {nllb_processor.nllb_tokenizer.get_nllb_code(lang)}")
             
             # Custom tokenizer
             custom_seq = custom_processor.text_to_sequence(text)
             print(f"Custom tokenizer:  {len(custom_seq):3d} tokens: {custom_seq[:10]}...")
             
-            # NLLB tokenizer
+            # NLLB tokenizer with language context
+            nllb_processor.language = lang  # Set language context
             nllb_seq = nllb_processor.text_to_sequence(text)
             print(f"NLLB tokenizer:    {len(nllb_seq):3d} tokens: {nllb_seq[:10]}...")
         
@@ -85,11 +95,22 @@ def demo_nllb_tokenizer():
         print("\nBatch Processing:")
         print("-" * 20)
         
-        nllb_sequences, nllb_lengths = nllb_processor.batch_text_to_sequence(sample_texts[:2])
+        batch_texts = [text for text, _ in sample_texts[:3]]
+        nllb_sequences, nllb_lengths = nllb_processor.batch_text_to_sequence(batch_texts)
         print(f"Batch sequences shape: {nllb_sequences.shape}")
         print(f"Sequence lengths: {nllb_lengths}")
         
-        print("\nNLLB tokenizer integration successful!")
+        # Display supported languages
+        print("\nSupported NLLB Languages (sample):")
+        print("-" * 35)
+        supported_langs = nllb_processor.nllb_tokenizer.get_supported_languages()
+        print(f"Total supported languages: {len(supported_langs)}")
+        for i, lang in enumerate(supported_langs[:10]):
+            nllb_code = nllb_processor.nllb_tokenizer.get_nllb_code(lang)
+            print(f"  {lang} -> {nllb_code}")
+        print("  ... and more")
+        
+        print("\nNLLB tokenizer integration with language standardization successful!")
         
     except Exception as e:
         print(f"Could not initialize NLLB tokenizer: {e}")
