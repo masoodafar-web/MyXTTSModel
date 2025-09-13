@@ -60,13 +60,31 @@ class XTTSTrainer:
         # Configure GPUs before any TensorFlow device queries
         try:
             vis = getattr(config.training, 'visible_gpus', None)
-            configure_gpus(vis, memory_growth=True)
+            memory_fraction = getattr(config.training, 'max_memory_fraction', 0.9)
+            memory_limit = None
+            
+            # Calculate memory limit if available
+            if memory_fraction < 1.0 and hasattr(tf.config, 'list_physical_devices'):
+                gpus = tf.config.list_physical_devices('GPU')
+                if gpus:
+                    # Estimate memory limit (RTX 4090 has ~24GB)
+                    estimated_memory = 24000  # MB
+                    memory_limit = int(estimated_memory * memory_fraction)
+            
+            configure_gpus(vis, memory_growth=True, memory_limit=memory_limit)
         except Exception as e:
             self.logger.warning(f"GPU visibility configuration failed: {e}")
 
         # Setup device
         self.device = get_device()
         self.logger.info(f"Using device: {self.device}")
+        
+        # Memory optimization settings
+        self.gradient_accumulation_steps = getattr(config.training, 'gradient_accumulation_steps', 1)
+        self.enable_memory_cleanup = getattr(config.training, 'enable_memory_cleanup', True)
+        
+        if self.gradient_accumulation_steps > 1:
+            self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
         
         # Setup distribution strategy based on configuration
         self.strategy = setup_gpu_strategy(
@@ -358,7 +376,7 @@ class XTTSTrainer:
         mel_lengths: tf.Tensor
     ) -> Dict[str, tf.Tensor]:
         """
-        Single training step with explicit GPU placement.
+        Single training step with explicit GPU placement and memory optimization.
         
         Args:
             text_sequences: Text token sequences [batch, text_len]
@@ -376,15 +394,37 @@ class XTTSTrainer:
             text_lengths = ensure_gpu_placement(text_lengths)
             mel_lengths = ensure_gpu_placement(mel_lengths)
         
+        # Clear any cached tensors to free memory
+        tf.keras.backend.clear_session()
+        
         with tf.GradientTape() as tape:
-            # Forward pass
-            outputs = self.model(
-                text_inputs=text_sequences,
-                mel_inputs=mel_spectrograms,
-                text_lengths=text_lengths,
-                mel_lengths=mel_lengths,
-                training=True
-            )
+            # Forward pass with memory optimization
+            try:
+                outputs = self.model(
+                    text_inputs=text_sequences,
+                    mel_inputs=mel_spectrograms,
+                    text_lengths=text_lengths,
+                    mel_lengths=mel_lengths,
+                    training=True
+                )
+            except tf.errors.ResourceExhaustedError as e:
+                # Handle OOM by reducing precision and retrying
+                self.logger.warning(f"OOM during forward pass, attempting recovery: {e}")
+                tf.keras.backend.clear_session()
+                # Force garbage collection
+                import gc
+                gc.collect()
+                
+                # Retry with float16 precision if not already enabled
+                with tf.cast(text_sequences, tf.float16), \
+                     tf.cast(mel_spectrograms, tf.float16):
+                    outputs = self.model(
+                        text_inputs=text_sequences,
+                        mel_inputs=mel_spectrograms,
+                        text_lengths=text_lengths,
+                        mel_lengths=mel_lengths,
+                        training=True
+                    )
             
             # Prepare targets
             stop_targets = create_stop_targets(
@@ -418,16 +458,201 @@ class XTTSTrainer:
             else:
                 gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
 
+        # Clip gradients to prevent memory explosion
+        if gradients:
+            gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=1.0)
+
         # Apply gradients (LossScaleOptimizer will unscale internally if used)
         self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
         
         # Get individual losses
         individual_losses = self.criterion.get_losses()
         
+        # Clear intermediate tensors to free memory
+        del outputs, y_true, y_pred, gradients
+        
         return {
             "total_loss": loss,
             **individual_losses
         }
+    
+    def find_optimal_batch_size(self, start_batch_size: int = 8, max_batch_size: int = 32) -> int:
+        """
+        Find the largest batch size that fits in GPU memory.
+        
+        Args:
+            start_batch_size: Starting batch size to test
+            max_batch_size: Maximum batch size to test
+            
+        Returns:
+            Optimal batch size that doesn't cause OOM
+        """
+        if self.device != "GPU":
+            return start_batch_size
+        
+        self.logger.info(f"Finding optimal batch size starting from {start_batch_size}")
+        
+        # Create dummy data for testing
+        dummy_text = tf.random.uniform([start_batch_size, 50], maxval=1000, dtype=tf.int32)
+        dummy_mel = tf.random.normal([start_batch_size, 100, 80])
+        dummy_text_len = tf.fill([start_batch_size], 50)
+        dummy_mel_len = tf.fill([start_batch_size], 100)
+        
+        optimal_batch_size = start_batch_size
+        
+        for batch_size in range(start_batch_size, max_batch_size + 1, 2):
+            try:
+                # Scale dummy data to current batch size
+                scale_factor = batch_size // start_batch_size
+                remainder = batch_size % start_batch_size
+                
+                if scale_factor > 1:
+                    test_text = tf.tile(dummy_text, [scale_factor, 1])
+                    test_mel = tf.tile(dummy_mel, [scale_factor, 1, 1])
+                    test_text_len = tf.tile(dummy_text_len, [scale_factor])
+                    test_mel_len = tf.tile(dummy_mel_len, [scale_factor])
+                else:
+                    test_text = dummy_text[:batch_size]
+                    test_mel = dummy_mel[:batch_size]
+                    test_text_len = dummy_text_len[:batch_size]
+                    test_mel_len = dummy_mel_len[:batch_size]
+                
+                if remainder > 0:
+                    test_text = tf.concat([test_text, dummy_text[:remainder]], axis=0)
+                    test_mel = tf.concat([test_mel, dummy_mel[:remainder]], axis=0)
+                    test_text_len = tf.concat([test_text_len, dummy_text_len[:remainder]], axis=0)
+                    test_mel_len = tf.concat([test_mel_len, dummy_mel_len[:remainder]], axis=0)
+                
+                # Test forward pass
+                with tf.GradientTape() as tape:
+                    outputs = self.model(
+                        text_inputs=test_text,
+                        mel_inputs=test_mel,
+                        text_lengths=test_text_len,
+                        mel_lengths=test_mel_len,
+                        training=True
+                    )
+                    
+                    # Test loss computation
+                    stop_targets = create_stop_targets(test_mel_len, tf.shape(test_mel)[1])
+                    y_true = {
+                        "mel_target": test_mel,
+                        "stop_target": stop_targets,
+                        "text_lengths": test_text_len,
+                        "mel_lengths": test_mel_len
+                    }
+                    y_pred = {
+                        "mel_output": outputs["mel_output"],
+                        "stop_tokens": outputs["stop_tokens"]
+                    }
+                    loss = self.criterion(y_true, y_pred)
+                
+                # Test gradient computation
+                gradients = tape.gradient(loss, self.model.trainable_variables)
+                
+                optimal_batch_size = batch_size
+                self.logger.info(f"Batch size {batch_size} successful")
+                
+                # Clear memory
+                del outputs, gradients, loss, y_true, y_pred
+                tf.keras.backend.clear_session()
+                
+            except (tf.errors.ResourceExhaustedError, tf.errors.OutOfRangeError) as e:
+                self.logger.warning(f"Batch size {batch_size} failed with OOM: {e}")
+                tf.keras.backend.clear_session()
+                import gc
+                gc.collect()
+                break
+        
+        self.logger.info(f"Optimal batch size found: {optimal_batch_size}")
+        return optimal_batch_size
+    
+    def train_step_with_accumulation(
+        self, 
+        batch_data: Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor],
+        accumulation_steps: int = 4
+    ) -> Dict[str, tf.Tensor]:
+        """
+        Training step with gradient accumulation to simulate larger batch sizes.
+        
+        Args:
+            batch_data: Tuple of (text_sequences, mel_spectrograms, text_lengths, mel_lengths)
+            accumulation_steps: Number of steps to accumulate gradients
+            
+        Returns:
+            Dictionary with accumulated loss values
+        """
+        text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_data
+        
+        # Split batch into micro-batches
+        micro_batch_size = tf.shape(text_sequences)[0] // accumulation_steps
+        if micro_batch_size == 0:
+            micro_batch_size = 1
+            accumulation_steps = tf.shape(text_sequences)[0]
+        
+        accumulated_gradients = None
+        total_loss = 0.0
+        total_losses = {}
+        
+        for step in range(accumulation_steps):
+            start_idx = step * micro_batch_size
+            end_idx = min((step + 1) * micro_batch_size, tf.shape(text_sequences)[0])
+            
+            # Get micro-batch
+            micro_text = text_sequences[start_idx:end_idx]
+            micro_mel = mel_spectrograms[start_idx:end_idx]
+            micro_text_len = text_lengths[start_idx:end_idx]
+            micro_mel_len = mel_lengths[start_idx:end_idx]
+            
+            # Compute gradients for micro-batch
+            with tf.GradientTape() as tape:
+                step_losses = self.train_step(micro_text, micro_mel, micro_text_len, micro_mel_len)
+                scaled_loss = step_losses["total_loss"] / accumulation_steps
+            
+            gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+            
+            # Accumulate gradients
+            if accumulated_gradients is None:
+                accumulated_gradients = gradients
+            else:
+                accumulated_gradients = [
+                    acc_grad + grad for acc_grad, grad in zip(accumulated_gradients, gradients)
+                ]
+            
+            # Accumulate losses
+            total_loss += float(step_losses["total_loss"])
+            for key, value in step_losses.items():
+                if key not in total_losses:
+                    total_losses[key] = 0.0
+                total_losses[key] += float(value)
+        
+        # Apply accumulated gradients
+        if accumulated_gradients:
+            # Clip gradients
+            accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=1.0)
+            self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
+        
+        # Average losses
+        for key in total_losses:
+            total_losses[key] /= accumulation_steps
+        
+        return total_losses
+    
+    def cleanup_gpu_memory(self):
+        """Clean up GPU memory to prevent fragmentation."""
+        if self.device == "GPU":
+            tf.keras.backend.clear_session()
+            import gc
+            gc.collect()
+            
+            # Force GPU memory cleanup
+            try:
+                with tf.device('/GPU:0'):
+                    # Create and delete a small tensor to trigger cleanup
+                    temp = tf.ones([1, 1])
+                    del temp
+            except Exception:
+                pass
     
     @tf.function
     def distributed_validation_step(self, dist_inputs):
@@ -635,11 +860,18 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # Training step: always use strategy.run-backed path for proper replica context
-                # This avoids Keras optimizers requiring a replica context (e.g., AdamW weight decay)
-                if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.OneDeviceStrategy)):
+                # Training step: use gradient accumulation if configured
+                if self.gradient_accumulation_steps > 1:
+                    # Use gradient accumulation for memory efficiency
+                    step_losses = self.train_step_with_accumulation(
+                        (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
+                        accumulation_steps=self.gradient_accumulation_steps
+                    )
+                elif isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.OneDeviceStrategy)):
+                    # Use distributed training step
                     step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
                 else:
+                    # Use regular training step
                     step_losses = self.train_step(
                         text_sequences, mel_spectrograms, text_lengths, mel_lengths
                     )
@@ -660,6 +892,10 @@ class XTTSTrainer:
                 
                 num_batches += 1
                 self.current_step += 1
+                
+                # Memory cleanup after each batch if enabled
+                if self.enable_memory_cleanup and num_batches % 10 == 0:
+                    self.cleanup_gpu_memory()
                 
                 # Update progress bar with detailed losses and timing info
                 postfix = {
