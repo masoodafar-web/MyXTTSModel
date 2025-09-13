@@ -8,6 +8,39 @@ positional encoding, and feed-forward networks used in the XTTS architecture.
 import tensorflow as tf
 import numpy as np
 from typing import Optional, Tuple
+import warnings
+import os
+import importlib.util
+
+# Import device utilities with fallback
+try:
+    from ..utils.commons import create_dropout_layer, get_device_context
+except ImportError:
+    # Fallback: load commons directly to avoid dependency issues
+    try:
+        commons_path = os.path.join(os.path.dirname(__file__), '..', 'utils', 'commons.py')
+        spec = importlib.util.spec_from_file_location("commons", commons_path)
+        commons = importlib.util.module_from_spec(spec)
+        # Add required imports to commons namespace
+        commons.tf = tf
+        spec.loader.exec_module(commons)
+        create_dropout_layer = commons.create_dropout_layer
+        get_device_context = commons.get_device_context
+        # Apply GPU configuration
+        commons.configure_gpus()
+    except Exception as e:
+        warnings.warn(f"Could not load device utilities: {e}")
+        # Fallback implementations
+        def get_device_context():
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                return tf.device('/GPU:0')
+            else:
+                return tf.device('/CPU:0')
+        
+        def create_dropout_layer(rate: float, seed: Optional[int] = None, name: str = "dropout"):
+            with get_device_context():
+                return tf.keras.layers.Dropout(rate, seed=seed, name=name)
 
 
 class MultiHeadAttention(tf.keras.layers.Layer):
@@ -43,7 +76,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         self.wv = tf.keras.layers.Dense(d_model, name="value_projection")
         self.wo = tf.keras.layers.Dense(d_model, name="output_projection")
         
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def scaled_dot_product_attention(
         self,
@@ -176,11 +210,13 @@ class PositionalEncoding(tf.keras.layers.Layer):
         pe[:, 0::2] = np.sin(position * div_term)
         pe[:, 1::2] = np.cos(position * div_term)
         
-        self.pe = tf.Variable(
-            pe[np.newaxis, :, :],  # [1, max_length, d_model]
-            trainable=False,
-            name="positional_encoding"
-        )
+        # Create positional encoding with proper device placement
+        with get_device_context():
+            self.pe = tf.Variable(
+                pe[np.newaxis, :, :],  # [1, max_length, d_model]
+                trainable=False,
+                name="positional_encoding"
+            )
     
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
         """
@@ -223,7 +259,8 @@ class FeedForward(tf.keras.layers.Layer):
             d_ff, activation=activation, name="linear1"
         )
         self.linear2 = tf.keras.layers.Dense(d_model, name="linear2")
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
         """
@@ -291,7 +328,8 @@ class TransformerBlock(tf.keras.layers.Layer):
             name="norm3" if is_decoder else "norm2"
         )
         
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def call(
         self,
@@ -375,7 +413,8 @@ class ConvolutionalLayer(tf.keras.layers.Layer):
         )
         self.batch_norm = tf.keras.layers.BatchNormalization(name="batch_norm")
         self.activation = tf.keras.layers.Activation(activation)
-        self.dropout = tf.keras.layers.Dropout(dropout)
+        # Use device-aware dropout creation to avoid placement conflicts
+        self.dropout = create_dropout_layer(dropout, name="dropout")
     
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
         """Forward pass."""
