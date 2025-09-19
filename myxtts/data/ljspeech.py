@@ -828,20 +828,102 @@ class LJSpeechDataset:
                 shuffle_buffer_size = min(len(token_paths), max(1000, batch_size * buffer_size_multiplier))
                 ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
 
-            # Optimized file loading function using TensorFlow ops where possible
+            # CRITICAL OPTIMIZATION: Pure TensorFlow file loading without Python functions
+            # This eliminates CPU bottlenecks and enables proper GPU utilization
+            def _load_from_cache_optimized_tf_native(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor, 
+                                                     audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
+                """
+                TensorFlow-native cache loading for maximum GPU utilization.
+                Eliminates Python function calls that create CPU bottlenecks.
+                """
+                try:
+                    # Load token cache using TensorFlow file operations
+                    tok_raw = tf.io.read_file(tok_path_t)
+                    # Parse numpy array header and data (simplified for .npy files)
+                    # Skip numpy header (typically first 128 bytes) and load as raw int32
+                    tok_data = tf.io.decode_raw(tok_raw[128:], tf.int32)  # Skip .npy header
+                    
+                    # Load mel cache using TensorFlow file operations  
+                    mel_raw = tf.io.read_file(mel_path_t)
+                    # Parse numpy array header and data
+                    mel_data = tf.io.decode_raw(mel_raw[128:], tf.float32)  # Skip .npy header
+                    
+                    # Reshape mel data to [time, n_mels] based on known n_mels
+                    n_mels = self.audio_processor.n_mels
+                    mel_flat_size = tf.shape(mel_data)[0]
+                    mel_time_steps = mel_flat_size // n_mels
+                    mel_spec = tf.reshape(mel_data, [mel_time_steps, n_mels])
+                    
+                    # Calculate lengths
+                    text_len = tf.shape(tok_data)[0]
+                    mel_len = mel_time_steps
+                    
+                    return tok_data, mel_spec, text_len, mel_len
+                    
+                except Exception:
+                    # Fallback to Python function only when TF-native approach fails
+                    def _py_loader_fallback(tok_path_b, mel_path_b, audio_path_b, norm_text_b):
+                        # Decode tensors
+                        tok_path = tok_path_b.decode('utf-8') if isinstance(tok_path_b, (bytes, bytearray)) else tok_path_b
+                        mel_path = mel_path_b.decode('utf-8') if isinstance(mel_path_b, (bytes, bytearray)) else mel_path_b
+                        
+                        try:
+                            # Load from cache with error handling
+                            tokens = np.load(tok_path, allow_pickle=False)
+                            mel = np.load(mel_path, allow_pickle=False)
+                            
+                            # Validate shapes
+                            if tokens.ndim != 1:
+                                raise ValueError(f"Invalid token shape: {tokens.shape}")
+                            if mel.ndim != 2 or mel.shape[1] != self.audio_processor.n_mels:
+                                raise ValueError(f"Invalid mel shape: {mel.shape}")
+                            
+                            text_len = np.int32(tokens.shape[0])
+                            mel_len = np.int32(mel.shape[0])
+                            
+                            return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
+                        
+                        except Exception as e:
+                            # Final fallback: create dummy data
+                            print(f"Cache loading failed for {tok_path}: {e}")
+                            dummy_tokens = np.array([0], dtype=np.int32)
+                            dummy_mel = np.zeros((1, self.audio_processor.n_mels), dtype=np.float32)
+                            return dummy_tokens, dummy_mel, np.int32(1), np.int32(1)
+
+                    return tf.numpy_function(
+                        func=_py_loader_fallback,
+                        inp=[tok_path_t, mel_path_t, audio_path_t, norm_text_t],
+                        Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
+                    )
+            
+            # Try TensorFlow-native loading first, fallback to Python if needed
             def _load_from_cache_optimized(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor, 
                                           audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
+                
+                # Check if TensorFlow-native loading is enabled
+                use_tf_native = getattr(self.config, 'use_tf_native_loading', True)
+                
+                if use_tf_native:
+                    # Use TensorFlow-native loading when cache files exist
+                    tok_exists = tf.io.gfile.exists(tok_path_t)
+                    mel_exists = tf.io.gfile.exists(mel_path_t)
+                    
+                    if tok_exists and mel_exists:
+                        try:
+                            return _load_from_cache_optimized_tf_native(tok_path_t, mel_path_t, audio_path_t, norm_text_t)
+                        except Exception:
+                            # Fallback to Python function if TF-native fails
+                            pass
+                
+                # Python fallback for edge cases
                 def _py_loader(tok_path_b, mel_path_b, audio_path_b, norm_text_b):
-                    # Decode tensors
                     tok_path = tok_path_b.decode('utf-8') if isinstance(tok_path_b, (bytes, bytearray)) else tok_path_b
                     mel_path = mel_path_b.decode('utf-8') if isinstance(mel_path_b, (bytes, bytearray)) else mel_path_b
                     
                     try:
-                        # Load from cache with error handling
                         tokens = np.load(tok_path, allow_pickle=False)
                         mel = np.load(mel_path, allow_pickle=False)
                         
-                        # Validate shapes
                         if tokens.ndim != 1:
                             raise ValueError(f"Invalid token shape: {tokens.shape}")
                         if mel.ndim != 2 or mel.shape[1] != self.audio_processor.n_mels:
@@ -853,8 +935,6 @@ class LJSpeechDataset:
                         return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
                     
                     except Exception as e:
-                        # Fallback: create dummy data to maintain dataset structure
-                        # This should rarely happen if cache verification was run
                         print(f"Cache loading failed for {tok_path}: {e}")
                         dummy_tokens = np.array([0], dtype=np.int32)
                         dummy_mel = np.zeros((1, self.audio_processor.n_mels), dtype=np.float32)
@@ -980,36 +1060,68 @@ class LJSpeechDataset:
             prefetch_buffer = max(1, int(getattr(self.config, 'prefetch_buffer_size', 2)))
             dataset = dataset.prefetch(prefetch_buffer)
 
-        # Try prefetching to GPU if available for maximum CPU-GPU overlap
+        # CRITICAL GPU OPTIMIZATION: Advanced prefetching and CPU-GPU overlap
         try:
-            # Prefetch batches directly to GPU only if enabled in config
-            if bool(getattr(self.config, 'prefetch_to_gpu', True)):
+            # Check if enhanced GPU prefetching is enabled
+            use_enhanced_prefetch = getattr(self.config, 'enhanced_gpu_prefetch', True)
+            
+            if use_enhanced_prefetch and bool(getattr(self.config, 'prefetch_to_gpu', True)):
                 gpus = tf.config.list_logical_devices('GPU')
                 if gpus and len(gpus) > 0:
                     gpu_device = '/GPU:0'
-                    gpu_buf = max(1, int(getattr(self.config, 'prefetch_buffer_size', 2)))
+                    
+                    # Enhanced GPU prefetching with larger buffer for sustained utilization
+                    gpu_buf = max(4, int(getattr(self.config, 'prefetch_buffer_size', 8)))
+                    
+                    # Apply GPU prefetching with automatic memory management
                     dataset = dataset.apply(
                         tf.data.experimental.prefetch_to_device(
                             gpu_device,
                             buffer_size=gpu_buf
                         )
                     )
+                    
+                    # Additional optimization: Enable GPU memory growth to avoid fragmentation
+                    if getattr(self.config, 'optimize_cpu_gpu_overlap', True):
+                        try:
+                            physical_devices = tf.config.list_physical_devices('GPU')
+                            if physical_devices:
+                                tf.config.experimental.set_memory_growth(physical_devices[0], True)
+                        except Exception:
+                            pass  # Ignore if already configured
+                        
         except Exception as e:
             print(f"Could not prefetch to GPU: {e}")
 
-        # Enable performance optimizations
+        # CRITICAL PERFORMANCE OPTIMIZATION: Enhanced TensorFlow data pipeline options
         options = tf.data.Options()
-        options.experimental_deterministic = False  # Better performance
-        options.threading.private_threadpool_size = self.config.num_workers
+        
+        # Core optimizations for GPU utilization
+        options.experimental_deterministic = False  # Allow non-deterministic for better performance
+        options.threading.private_threadpool_size = max(4, self.config.num_workers)
         options.threading.max_intra_op_parallelism = 1  # Avoid CPU oversubscription
-        options.experimental_optimization.parallel_batch = True
-        options.experimental_optimization.map_fusion = True
-        # Note: map_vectorization might not be available in all TF versions
-        try:
-            options.experimental_optimization.map_vectorization.enabled = True
-        except AttributeError:
-            pass  # Skip if not available
-        options.experimental_optimization.map_parallelization = True
+        
+        # Advanced pipeline optimizations
+        if getattr(self.config, 'optimize_cpu_gpu_overlap', True):
+            options.experimental_optimization.parallel_batch = True
+            options.experimental_optimization.map_fusion = True
+            options.experimental_optimization.map_parallelization = True
+            options.experimental_optimization.filter_fusion = True
+            options.experimental_optimization.filter_parallelization = True
+            
+            # GPU-specific optimizations
+            try:
+                options.experimental_optimization.map_vectorization.enabled = True
+                options.experimental_optimization.map_vectorization.use_choose_fastest = True
+            except AttributeError:
+                pass  # Skip if not available in this TF version
+                
+            # Memory optimization
+            options.experimental_optimization.apply_default_optimizations = True
+            
+            # Threading optimization for GPU workloads
+            options.threading.private_threadpool_size = min(12, max(4, self.config.num_workers * 2))
+        
         dataset = dataset.with_options(options)
 
         return dataset

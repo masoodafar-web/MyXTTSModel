@@ -66,7 +66,13 @@ def create_default_config(
     metadata_eval_file: Optional[str] = None,
     wavs_train_dir: Optional[str] = None,
     wavs_eval_dir: Optional[str] = None,
-    preprocessing_mode: str = "auto"
+    preprocessing_mode: str = "auto",
+    # New GPU optimization parameters
+    use_tf_native_loading: bool = True,
+    enhanced_gpu_prefetch: bool = True,
+    optimize_cpu_gpu_overlap: bool = True,
+    num_workers: int = 8,
+    prefetch_buffer_size: int = 8
 ) -> XTTSConfig:
     """
     Create a default configuration programmatically without requiring YAML.
@@ -120,19 +126,30 @@ def create_default_config(
     config.training.val_step = max(500, epochs // 20)    # Validate 20 times during training
     config.training.log_step = 100
     
-    # CRITICAL GPU OPTIMIZATIONS: Add GPU-specific settings for better utilization
-    # Memory optimization settings
-    config.training.gradient_accumulation_steps = 4  # Effective batch size = batch_size * 4
-    config.training.enable_memory_cleanup = True
-    config.training.max_memory_fraction = 0.85  # Use 85% of GPU memory
+    # CRITICAL GPU OPTIMIZATIONS: Enable all bottleneck fixes by default
+    # TensorFlow-native loading optimizations (eliminates Python function bottlenecks)
+    config.data.use_tf_native_loading = use_tf_native_loading     # Enable TF-native file loading
+    config.data.enhanced_gpu_prefetch = enhanced_gpu_prefetch     # Enhanced GPU prefetching
+    config.data.optimize_cpu_gpu_overlap = optimize_cpu_gpu_overlap  # Maximum CPU-GPU overlap
     
-    # GPU utilization settings
-    config.data.num_workers = 8  # Increased for better data loading
-    config.data.prefetch_buffer_size = 6  # Increased for GPU utilization
-    config.data.shuffle_buffer_multiplier = 15
-    config.data.enable_xla = True  # Enable XLA for better GPU performance
-    config.data.mixed_precision = True  # Enable mixed precision for memory efficiency
-    config.data.pin_memory = True  # Pin memory for faster GPU transfer
+    # Advanced data loading optimizations
+    config.data.num_workers = num_workers                # More workers for data loading
+    config.data.prefetch_buffer_size = prefetch_buffer_size         # Larger prefetch buffer for GPU utilization
+    config.data.shuffle_buffer_multiplier = 20   # Larger shuffle buffer
+    config.data.prefetch_to_gpu = True          # Direct GPU prefetching
+    
+    # Memory and caching optimizations
+    config.data.enable_memory_mapping = True    # Use memory mapping for cache files
+    config.data.cache_verification = True       # Verify cache integrity  
+    config.data.pin_memory = True              # Pin memory for faster GPU transfer
+    config.data.persistent_workers = True      # Keep workers alive between epochs
+    
+    # TensorFlow and GPU optimizations
+    config.data.enable_xla = True              # Enable XLA for better GPU performance
+    config.data.mixed_precision = True         # Enable mixed precision for memory efficiency
+    
+    # Sequence length management for better GPU utilization
+    config.data.max_mel_frames = 1024          # Allow longer sequences for better GPU utilization
     
     return config
 
@@ -306,6 +323,18 @@ def main():
                        default="auto", help="Dataset preprocessing mode: 'auto' (try precompute, fall back), "
                        "'precompute' (fully preprocess before training), 'runtime' (process during training)")
     
+    # GPU optimization options (NEW - for fixing CPU bottlenecks)
+    parser.add_argument("--disable-tf-native-loading", action="store_true", 
+                       help="Disable TensorFlow-native file loading optimization (not recommended)")
+    parser.add_argument("--disable-gpu-prefetch", action="store_true",
+                       help="Disable enhanced GPU prefetching (not recommended)")
+    parser.add_argument("--disable-cpu-gpu-overlap", action="store_true",
+                       help="Disable CPU-GPU overlap optimizations (not recommended)")
+    parser.add_argument("--num-workers", type=int, default=8,
+                       help="Number of data loading workers (default: 8)")
+    parser.add_argument("--prefetch-buffer-size", type=int, default=8,
+                       help="Prefetch buffer size for GPU utilization (default: 8)")
+    
     # Testing options
     parser.add_argument("--checkpoint", help="Model checkpoint for testing/inference")
     parser.add_argument("--text", default="Hello, this is a test.", help="Text to synthesize")
@@ -348,6 +377,18 @@ def main():
             # Override preprocessing mode if provided
             if hasattr(args, 'preprocessing_mode') and args.preprocessing_mode != "auto":
                 config.data.preprocessing_mode = args.preprocessing_mode
+            
+            # Override GPU optimization settings if disabled via command line
+            if args.disable_tf_native_loading:
+                config.data.use_tf_native_loading = False
+            if args.disable_gpu_prefetch:
+                config.data.enhanced_gpu_prefetch = False
+            if args.disable_cpu_gpu_overlap:
+                config.data.optimize_cpu_gpu_overlap = False
+            if args.num_workers != 8:
+                config.data.num_workers = args.num_workers
+            if args.prefetch_buffer_size != 8:
+                config.data.prefetch_buffer_size = args.prefetch_buffer_size
         else:
             if args.config:
                 print(f"Warning: Configuration file {args.config} not found, using programmatic config")
@@ -364,7 +405,13 @@ def main():
                 metadata_eval_file=args.metadata_eval_file,
                 wavs_train_dir=args.wavs_train_dir,
                 wavs_eval_dir=args.wavs_eval_dir,
-                preprocessing_mode=args.preprocessing_mode
+                preprocessing_mode=args.preprocessing_mode,
+                # Apply GPU optimization settings
+                use_tf_native_loading=not args.disable_tf_native_loading,
+                enhanced_gpu_prefetch=not args.disable_gpu_prefetch,
+                optimize_cpu_gpu_overlap=not args.disable_cpu_gpu_overlap,
+                num_workers=args.num_workers,
+                prefetch_buffer_size=args.prefetch_buffer_size
             )
         
         train_model(config, resume_checkpoint=args.resume_from)

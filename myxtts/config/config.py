@@ -117,6 +117,11 @@ class DataConfig:
 
     # Dataset preprocessing control
     preprocessing_mode: str = "auto"  # "auto", "precompute", "runtime"
+    
+    # Advanced GPU optimization options
+    use_tf_native_loading: bool = True  # Use TensorFlow-native file loading instead of Python functions
+    enhanced_gpu_prefetch: bool = True  # Enable advanced GPU prefetching strategies
+    optimize_cpu_gpu_overlap: bool = True  # Enable maximum CPU-GPU overlap optimizations
 
     def __post_init__(self):
         if self.text_cleaners is None:
