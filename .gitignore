@@ -130,7 +130,7 @@ logs/
 outputs/
 wandb/
 *.wav
-*.h5
+*.weights.h5
 *.ckpt
 *.pkl
 *.json

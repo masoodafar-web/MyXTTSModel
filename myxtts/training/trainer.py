@@ -390,6 +390,14 @@ class XTTSTrainer:
         self.logger.info("Data loading performance:")
         self.logger.info(train_ljs.get_performance_report())
         
+        # Expose datasets for external training loops (e.g., notebooks)
+        self.train_dataset = train_tf_dataset
+        self.val_dataset = val_tf_dataset
+        try:
+            self._train_dataset_iter = iter(self.train_dataset)
+        except Exception:
+            self._train_dataset_iter = None
+        
         return train_tf_dataset, val_tf_dataset
     
     @tf.function
@@ -631,21 +639,63 @@ class XTTSTrainer:
         self.logger.info(f"Optimal batch size found: {optimal_batch_size}")
         return optimal_batch_size
     
+    def _maybe_merge_distributed(self, value: Any) -> Any:
+        """Merge per-replica tensors into a single tensor along batch axis if needed."""
+        try:
+            # For PerReplica/DistributedValues, collect local results and concat on batch dim
+            if isinstance(value, tf.distribute.DistributedValues):
+                parts = self.strategy.experimental_local_results(value)
+                if len(parts) == 1:
+                    return parts[0]
+                return tf.concat(list(parts), axis=0)
+        except Exception:
+            pass
+        return value
+
+    def _next_batch(self) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
+        """Return next batch from stored train dataset, unwrapping distributed values."""
+        if not hasattr(self, 'train_dataset') or self.train_dataset is None:
+            raise RuntimeError("No train_dataset set. Call prepare_datasets() first or pass batch_data explicitly.")
+        if self._train_dataset_iter is None:
+            self._train_dataset_iter = iter(self.train_dataset)
+        batch = next(self._train_dataset_iter)
+        # Support tuple of components; unwrap each if distributed
+        if isinstance(batch, (tuple, list)) and len(batch) == 4:
+            text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
+        else:
+            # Some input pipelines yield dicts; map to expected order if possible
+            try:
+                text_sequences = batch[0]
+                mel_spectrograms = batch[1]
+                text_lengths = batch[2]
+                mel_lengths = batch[3]
+            except Exception:
+                raise RuntimeError("Unexpected batch structure; expected tuple/list of 4 tensors.")
+        
+        text_sequences = self._maybe_merge_distributed(text_sequences)
+        mel_spectrograms = self._maybe_merge_distributed(mel_spectrograms)
+        text_lengths = self._maybe_merge_distributed(text_lengths)
+        mel_lengths = self._maybe_merge_distributed(mel_lengths)
+        return text_sequences, mel_spectrograms, text_lengths, mel_lengths
+
     def train_step_with_accumulation(
         self, 
-        batch_data: Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor],
+        batch_data: Optional[Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]] = None,
         accumulation_steps: int = 4
     ) -> Dict[str, tf.Tensor]:
         """
         Training step with gradient accumulation to simulate larger batch sizes.
         
         Args:
-            batch_data: Tuple of (text_sequences, mel_spectrograms, text_lengths, mel_lengths)
+            batch_data: Optional tuple of (text_sequences, mel_spectrograms, text_lengths, mel_lengths).
+                        If None, pulls the next batch from internal dataset iterator.
             accumulation_steps: Number of steps to accumulate gradients
             
         Returns:
             Dictionary with accumulated loss values
         """
+        if batch_data is None:
+            batch_data = self._next_batch()
         text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_data
         
         # Split batch into micro-batches
@@ -700,6 +750,19 @@ class XTTSTrainer:
         for key in total_losses:
             total_losses[key] /= accumulation_steps
         
+        # Provide a notebook-friendly alias for total loss
+        if "total_loss" in total_losses and "loss" not in total_losses:
+            try:
+                total_losses["loss"] = float(total_losses["total_loss"])  # convenience key
+            except Exception:
+                pass
+        # Optionally include learning rate for logging
+        try:
+            lr = self.optimizer.learning_rate
+            current_lr = lr.numpy() if hasattr(lr, 'numpy') else lr
+            total_losses["learning_rate"] = float(current_lr)
+        except Exception:
+            pass
         return total_losses
     
     def cleanup_gpu_memory(self):
@@ -1055,6 +1118,68 @@ class XTTSTrainer:
         
         self.logger.info(f"Saved checkpoint: {checkpoint_path}")
     
+    # Public helpers for notebooks / external loops
+    def save_checkpoint(self, checkpoint_path: str) -> str:
+        """
+        Save a checkpoint to a specific path base (no enforced naming).
+        Creates files: `<base>_model.weights.h5`, `<base>_optimizer.pkl`, `<base>_metadata.json`.
+        """
+        base = checkpoint_path
+        checkpoint_dir = os.path.dirname(base) or "."
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Save model weights
+        self.model.save_weights(f"{base}_model.weights.h5")
+        
+        # Save optimizer state
+        try:
+            opt_weights = self.optimizer.get_weights()
+        except Exception:
+            # Some wrappers may require building before getting weights
+            dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
+            self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
+            opt_weights = self.optimizer.get_weights()
+        import pickle
+        with open(f"{base}_optimizer.pkl", "wb") as f:
+            pickle.dump(opt_weights, f)
+        
+        # Save metadata
+        import json
+        metadata = {
+            "step": int(self.current_step),
+            "loss": float(self.best_val_loss) if np.isfinite(self.best_val_loss) else None,
+            "config": self.config.to_dict() if hasattr(self.config, 'to_dict') else None,
+        }
+        with open(f"{base}_metadata.json", "w") as f:
+            json.dump(metadata, f, indent=2)
+        
+        self.logger.info(f"Saved checkpoint to: {base}")
+        return base
+
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load a checkpoint from a file base or directory path used by this project."""
+        base = checkpoint_path
+        for suffix in ("_model.weights.h5", "_optimizer.pkl", "_metadata.json"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        # If a directory is provided, find latest
+        if os.path.isdir(base):
+            latest = find_latest_checkpoint(base)
+            if latest is None:
+                raise FileNotFoundError(f"No checkpoints found in {base}")
+            base = latest
+        self._load_checkpoint(base)
+
+    def validate(self) -> Dict[str, float]:
+        """Run a full validation pass over the stored validation dataset."""
+        if not hasattr(self, 'val_dataset') or self.val_dataset is None:
+            raise RuntimeError("No val_dataset set. Call prepare_datasets() first or pass a dataset to _validate_epoch().")
+        losses = self._validate_epoch(self.val_dataset)
+        # Provide 'loss' alias for convenience
+        if 'total_loss' in losses and 'loss' not in losses:
+            losses['loss'] = losses['total_loss']
+        return losses
     def _load_checkpoint(self, checkpoint_path: str):
         """Load model checkpoint."""
         if os.path.isdir(checkpoint_path):

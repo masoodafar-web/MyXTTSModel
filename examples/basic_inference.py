@@ -23,7 +23,7 @@ def basic_synthesis_example():
     
     # Create inference engine
     # Note: Replace with actual checkpoint path when available
-    checkpoint_path = "./checkpoints/checkpoint_best_model.h5"
+    checkpoint_path = "./checkpoints/checkpoint_best_model.weights.h5"
     
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")
@@ -66,7 +66,7 @@ def voice_cloning_example():
     config.model.use_voice_conditioning = True
     
     # Create inference engine
-    checkpoint_path = "./checkpoints/checkpoint_best_model.h5"
+    checkpoint_path = "./checkpoints/checkpoint_best_model.weights.h5"
     
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")
@@ -116,7 +116,7 @@ def multilingual_example():
     config = XTTSConfig()
     
     # Create inference engine
-    checkpoint_path = "./checkpoints/checkpoint_best_model.h5"
+    checkpoint_path = "./checkpoints/checkpoint_best_model.weights.h5"
     
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")
@@ -161,7 +161,7 @@ def batch_synthesis_example():
     config = XTTSConfig()
     
     # Create inference engine
-    checkpoint_path = "./checkpoints/checkpoint_best_model.h5"
+    checkpoint_path = "./checkpoints/checkpoint_best_model.weights.h5"
     
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")
@@ -205,7 +205,7 @@ def benchmark_example():
     config = XTTSConfig()
     
     # Create inference engine
-    checkpoint_path = "./checkpoints/checkpoint_best_model.h5"
+    checkpoint_path = "./checkpoints/checkpoint_best_model.weights.h5"
     
     if not os.path.exists(checkpoint_path):
         print(f"Checkpoint not found: {checkpoint_path}")

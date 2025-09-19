@@ -239,7 +239,7 @@ def save_checkpoint(
     checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step}")
     
     # Save model weights
-    model.save_weights(f"{checkpoint_path}_model.h5")
+    model.save_weights(f"{checkpoint_path}_model.weights.h5")
     
     # Save optimizer state
     optimizer_weights = optimizer.get_weights()
@@ -284,7 +284,7 @@ def load_checkpoint(
         Dictionary with checkpoint metadata
     """
     # Load model weights
-    model_path = f"{checkpoint_path}_model.h5"
+    model_path = f"{checkpoint_path}_model.weights.h5"
     if os.path.exists(model_path):
         model.load_weights(model_path)
         print(f"Loaded model weights from {model_path}")
@@ -344,7 +344,7 @@ def cleanup_old_checkpoints(checkpoint_dir: str, max_checkpoints: int):
     for i, (step, checkpoint_base) in enumerate(checkpoint_files):
         if i >= max_checkpoints:
             # Remove checkpoint files
-            for ext in ["_model.h5", "_optimizer.pkl", "_metadata.json"]:
+            for ext in ["_model.weights.h5", "_optimizer.pkl", "_metadata.json"]:
                 file_path = os.path.join(checkpoint_dir, checkpoint_base + ext)
                 if os.path.exists(file_path):
                     os.remove(file_path)
