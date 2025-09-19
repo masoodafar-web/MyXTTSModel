@@ -105,6 +105,15 @@ class XTTSTrainer:
                     self.logger.debug("XLA compilation disabled")
                 except Exception:
                     pass
+            
+            # Log GPU memory info
+            try:
+                gpus = tf.config.list_physical_devices('GPU')
+                if gpus:
+                    gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
+                    self.logger.info(f"GPU Memory - Current: {gpu_memory['current'] / 1024**3:.1f}GB, Peak: {gpu_memory['peak'] / 1024**3:.1f}GB")
+            except Exception:
+                pass
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
@@ -192,9 +201,17 @@ class XTTSTrainer:
         """Create optimizer based on configuration."""
         config = self.config.training
         
+        # Create learning rate schedule first
+        learning_rate = config.learning_rate
+        if hasattr(config, 'scheduler') and config.scheduler != "none":
+            lr_schedule = self._create_lr_scheduler()
+            if lr_schedule is not None:
+                learning_rate = lr_schedule
+                self.logger.debug(f"Using {config.scheduler} learning rate scheduler")
+        
         # Build common optimizer kwargs
         common_kwargs = dict(
-            learning_rate=config.learning_rate,
+            learning_rate=learning_rate,
             beta_1=config.beta1,
             beta_2=config.beta2,
             epsilon=config.eps,
@@ -948,16 +965,23 @@ class XTTSTrainer:
         # Training loop
         for epoch in range(self.current_epoch, epochs):
             self.current_epoch = epoch
+            epoch_start_time = time.time()
+            
+            self.logger.info(f"Starting Epoch {epoch + 1}/{epochs}")
             
             # Training phase
             train_losses = self._train_epoch(train_dataset, steps_per_epoch)
+            epoch_duration = time.time() - epoch_start_time
             
-            # Validation phase
-            if epoch % (self.config.training.val_step // 1000) == 0:
+            # Validation phase (fixed validation frequency logic)
+            val_losses = {}
+            val_freq = max(1, self.config.training.val_step // 1000)  # Convert steps to epochs
+            if epoch % val_freq == 0 or epoch == epochs - 1:  # Always validate on last epoch
+                self.logger.info("Running validation...")
                 val_losses = self._validate_epoch(val_dataset)
                 
                 # Early stopping check
-                if self.early_stopping(val_losses["total_loss"], self.model):
+                if hasattr(self, 'early_stopping') and self.early_stopping(val_losses["total_loss"], self.model):
                     self.logger.info("Early stopping triggered")
                     break
                 
@@ -966,27 +990,69 @@ class XTTSTrainer:
                     self.best_val_loss = val_losses["total_loss"]
                     self._save_checkpoint(is_best=True)
             
-            # Regular checkpointing
-            if (self.current_step % self.config.training.save_step == 0):
+            # Regular checkpointing (fixed frequency logic)
+            checkpoint_freq = max(1, self.config.training.save_step // 1000)  # Convert steps to epochs
+            if epoch % checkpoint_freq == 0 or epoch == epochs - 1:  # Always save on last epoch
                 self._save_checkpoint()
             
-            # Log epoch results
-            self.logger.info(f"Epoch {epoch}: Train Loss = {train_losses['total_loss']:.4f}")
+            # Enhanced logging with timing information
+            samples_per_sec = (self.config.data.batch_size * (steps_per_epoch or 1)) / epoch_duration
+            self.logger.info(f"Epoch {epoch + 1}/{epochs} completed in {epoch_duration:.1f}s")
+            self.logger.info(f"Train Loss: {train_losses['total_loss']:.4f}")
+            if val_losses:
+                self.logger.info(f"Val Loss: {val_losses['total_loss']:.4f}")
+            self.logger.info(f"Samples/sec: {samples_per_sec:.1f}")
             
-            
-            # Wandb logging
+            # Enhanced Wandb logging
             if self.config.training.use_wandb:
-                wandb.log({
-                    "epoch": epoch,
+                log_data = {
+                    "epoch": epoch + 1,
                     "step": self.current_step,
+                    "epoch_duration": epoch_duration,
+                    "samples_per_second": samples_per_sec,
                     **{f"train_{k}": v for k, v in train_losses.items()},
-                    "learning_rate": self.optimizer.learning_rate.numpy() 
-                    if hasattr(self.optimizer.learning_rate, 'numpy') 
-                    else self.optimizer.learning_rate
-                })
+                }
+                if val_losses:
+                    log_data.update({f"val_{k}": v for k, v in val_losses.items()})
+                
+                try:
+                    lr_value = self.optimizer.learning_rate.numpy() if hasattr(self.optimizer.learning_rate, 'numpy') else self.optimizer.learning_rate
+                    log_data["learning_rate"] = float(lr_value)
+                except:
+                    pass
+                    
+                wandb.log(log_data)
+            
+            # Track loss convergence for better training insights
+            if not hasattr(self, 'loss_history'):
+                self.loss_history = []
+            self.loss_history.append(train_losses['total_loss'])
+            
+            # Check for loss convergence (last 5 epochs)
+            if len(self.loss_history) >= 5:
+                recent_losses = self.loss_history[-5:]
+                loss_std = np.std(recent_losses)
+                loss_mean = np.mean(recent_losses)
+                if loss_std < 0.001 and loss_mean < 1.0:  # Very stable and low loss
+                    self.logger.info(f"Loss converged (std: {loss_std:.6f}, mean: {loss_mean:.4f})")
         
-        
-        self.logger.info("Training completed")
+        # Training completion with summary
+        final_gpu_memory = "N/A"
+        try:
+            if self.device == "GPU":
+                gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
+                final_gpu_memory = f"{gpu_memory['current'] / 1024**3:.1f}GB"
+        except Exception:
+            pass
+            
+        self.logger.info("Training completed successfully!")
+        self.logger.info(f"Final GPU Memory Usage: {final_gpu_memory}")
+        if hasattr(self, 'loss_history') and self.loss_history:
+            self.logger.info(f"Final Training Loss: {self.loss_history[-1]:.4f}")
+            if len(self.loss_history) > 1:
+                initial_loss = self.loss_history[0]
+                improvement = ((initial_loss - self.loss_history[-1]) / initial_loss) * 100
+                self.logger.info(f"Loss Improvement: {improvement:.1f}% (from {initial_loss:.4f} to {self.loss_history[-1]:.4f})")
     
     def _train_epoch(
         self,
@@ -1025,24 +1091,34 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # Training step: use gradient accumulation if configured
-                if self.gradient_accumulation_steps > 1:
-                    # Use gradient accumulation for memory efficiency
-                    step_losses = self.train_step_with_accumulation(
-                        (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
-                        accumulation_steps=self.gradient_accumulation_steps
-                    )
-                elif (
-                    getattr(self.config.training, 'multi_gpu', False)
-                    and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-                ):
-                    # Multi-GPU: use distributed training step
-                    step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
-                else:
-                    # Use regular training step
-                    step_losses = self.train_step(
-                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                    )
+                # ENHANCED: Ensure proper device placement for training steps
+                device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
+                
+                with device_context:
+                    # Ensure tensors are on correct device
+                    text_sequences = ensure_gpu_placement(text_sequences) if self.device == "GPU" else text_sequences
+                    mel_spectrograms = ensure_gpu_placement(mel_spectrograms) if self.device == "GPU" else mel_spectrograms
+                    text_lengths = ensure_gpu_placement(text_lengths) if self.device == "GPU" else text_lengths
+                    mel_lengths = ensure_gpu_placement(mel_lengths) if self.device == "GPU" else mel_lengths
+                    
+                    # Training step: use gradient accumulation if configured
+                    if self.gradient_accumulation_steps > 1:
+                        # Use gradient accumulation for memory efficiency
+                        step_losses = self.train_step_with_accumulation(
+                            (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
+                            accumulation_steps=self.gradient_accumulation_steps
+                        )
+                    elif (
+                        getattr(self.config.training, 'multi_gpu', False)
+                        and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+                    ):
+                        # Multi-GPU: use distributed training step
+                        step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
+                    else:
+                        # Use regular training step
+                        step_losses = self.train_step(
+                            text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                        )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
@@ -1054,7 +1130,9 @@ class XTTSTrainer:
                     train_losses[key] += float(value)
                 
                 num_batches += 1
-                self.current_step += 1
+                # Only increment step for non-accumulation training or last accumulation step
+                if self.gradient_accumulation_steps <= 1:
+                    self.current_step += 1
                 
                 # Memory cleanup after each batch if enabled
                 if self.enable_memory_cleanup and num_batches % 10 == 0:
