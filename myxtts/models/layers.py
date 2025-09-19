@@ -413,8 +413,9 @@ class TransformerBlock(tf.keras.layers.Layer):
         """
         # Self-attention with optional gradient checkpointing
         if self.use_gradient_checkpointing and training:
-            x = tf.recompute_grad(
-                lambda: self._self_attention_block(inputs, self_attention_mask, training)
+            # Correct usage: wrap the block function, then call with kwargs
+            x = tf.recompute_grad(self._self_attention_block)(
+                inputs, self_attention_mask, training=training
             )
         else:
             x = self._self_attention_block(inputs, self_attention_mask, training)
@@ -422,16 +423,16 @@ class TransformerBlock(tf.keras.layers.Layer):
         # Cross-attention (decoder only)
         if self.is_decoder and encoder_output is not None:
             if self.use_gradient_checkpointing and training:
-                x = tf.recompute_grad(
-                    lambda: self._cross_attention_block(x, encoder_output, cross_attention_mask, training)
+                x = tf.recompute_grad(self._cross_attention_block)(
+                    x, encoder_output, cross_attention_mask, training=training
                 )
             else:
                 x = self._cross_attention_block(x, encoder_output, cross_attention_mask, training)
         
         # Feed-forward with optional gradient checkpointing
         if self.use_gradient_checkpointing and training:
-            x = tf.recompute_grad(
-                lambda: self._feed_forward_block(x, training)
+            x = tf.recompute_grad(self._feed_forward_block)(
+                x, training=training
             )
         else:
             x = self._feed_forward_block(x, training)

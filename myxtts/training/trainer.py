@@ -69,11 +69,12 @@ class XTTSTrainer:
             
             configure_gpus(vis, memory_growth=True, memory_limit=memory_limit)
         except Exception as e:
-            self.logger.warning(f"GPU visibility configuration failed: {e}")
+            # Silence GPU config noise
+            self.logger.debug(f"GPU visibility configuration note: {e}")
 
         # Setup device
         self.device = get_device()
-        self.logger.info(f"Using device: {self.device}")
+        self.logger.debug(f"Using device: {self.device}")
         
         # Memory optimization settings
         self.gradient_accumulation_steps = getattr(config.training, 'gradient_accumulation_steps', 1)
@@ -93,15 +94,15 @@ class XTTSTrainer:
             if getattr(config.data, 'mixed_precision', True):
                 policy = tf.keras.mixed_precision.Policy('mixed_float16')
                 tf.keras.mixed_precision.set_global_policy(policy)
-                self.logger.info("Mixed precision enabled")
+                self.logger.debug("Mixed precision enabled")
             # Control XLA compilation explicitly based on config
             if getattr(config.data, 'enable_xla', False):
                 tf.config.optimizer.set_jit(True)
-                self.logger.info("XLA compilation enabled")
+                self.logger.debug("XLA compilation enabled")
             else:
                 try:
                     tf.config.optimizer.set_jit(False)
-                    self.logger.info("XLA compilation disabled")
+                    self.logger.debug("XLA compilation disabled")
                 except Exception:
                     pass
 
@@ -118,7 +119,7 @@ class XTTSTrainer:
                 
                 # Force model to be built on GPU by running a dummy forward pass
                 if self.device == "GPU":
-                    self.logger.info("Building model on GPU with dummy forward pass...")
+                    self.logger.debug("Building model on GPU with dummy forward pass...")
                     try:
                         dummy_text = tf.zeros([1, 10], dtype=tf.int32)
                         dummy_mel = tf.zeros([1, 20, 80], dtype=tf.float32)
@@ -138,9 +139,9 @@ class XTTSTrainer:
                                 mel_lengths=dummy_mel_len,
                                 training=False
                             )
-                            self.logger.info("✓ Model successfully built on GPU")
+                            self.logger.debug("Model successfully built on GPU")
                     except Exception as e:
-                        self.logger.warning(f"Model GPU initialization warning: {e}")
+                        self.logger.debug(f"Model GPU initialization note: {e}")
             
             # Initialize optimizer
             self.optimizer = self._create_optimizer()
@@ -148,9 +149,9 @@ class XTTSTrainer:
             try:
                 if tf.keras.mixed_precision.global_policy().name == 'mixed_float16':
                     self.optimizer = tf.keras.mixed_precision.LossScaleOptimizer(self.optimizer)
-                    self.logger.info("Wrapped optimizer with LossScaleOptimizer for mixed precision")
+                    self.logger.debug("Wrapped optimizer with LossScaleOptimizer for mixed precision")
             except Exception as e:
-                self.logger.warning(f"Could not wrap optimizer for mixed precision: {e}")
+                self.logger.debug(f"Could not wrap optimizer for mixed precision: {e}")
             
             # Initialize loss function
             self.criterion = XTTSLoss(
@@ -274,11 +275,11 @@ class XTTSTrainer:
 
         # Handle dataset preprocessing based on mode
         preprocessing_mode = getattr(self.config.data, 'preprocessing_mode', 'auto')
-        self.logger.info(f"Dataset preprocessing mode: {preprocessing_mode}")
+        self.logger.debug(f"Dataset preprocessing mode: {preprocessing_mode}")
         
         if preprocessing_mode == "precompute":
             # Force complete preprocessing before training starts
-            self.logger.info("Preprocessing mode: PRECOMPUTE - Ensuring all data is fully preprocessed...")
+            self.logger.debug("Preprocessing mode: PRECOMPUTE - Ensuring all data is fully preprocessed...")
             try:
                 train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
                 val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
@@ -288,7 +289,7 @@ class XTTSTrainer:
                 # Verify and fix any cache issues
                 train_report = train_ljs.verify_and_fix_cache(fix=True)
                 val_report = val_ljs.verify_and_fix_cache(fix=True)
-                self.logger.info(f"Cache verify: train {train_report}, val {val_report}")
+                self.logger.debug(f"Cache verify: train {train_report}, val {val_report}")
                 
                 # Filter to only use items with valid caches
                 n_train = train_ljs.filter_items_by_cache()
@@ -297,7 +298,7 @@ class XTTSTrainer:
                 if n_train == 0 or n_val == 0:
                     raise RuntimeError(f"No valid cached items found after preprocessing. Train: {n_train}, Val: {n_val}")
                 
-                self.logger.info(f"Using fully cached items - train: {n_train}, val: {n_val}")
+                self.logger.debug(f"Using fully cached items - train: {n_train}, val: {n_val}")
                 use_cache_files = True
                 
             except Exception as e:
@@ -306,13 +307,12 @@ class XTTSTrainer:
                 
         elif preprocessing_mode == "runtime":
             # Disable preprocessing, do everything on-the-fly during training
-            self.logger.info("Preprocessing mode: RUNTIME - Processing data on-the-fly during training")
-            self.logger.warning("Runtime mode may impact GPU utilization due to CPU preprocessing during training")
+            self.logger.debug("Preprocessing mode: RUNTIME - Processing data on-the-fly during training")
             use_cache_files = False
             
         else:  # preprocessing_mode == "auto" or unrecognized mode
             # Current behavior: try to precompute but fall back gracefully
-            self.logger.info("Preprocessing mode: AUTO - Attempting to precompute with graceful fallback")
+            self.logger.debug("Preprocessing mode: AUTO - Attempting to precompute with graceful fallback")
             try:
                 train_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
                 val_ljs.precompute_mels(num_workers=self.config.data.num_workers, overwrite=False)
@@ -321,10 +321,10 @@ class XTTSTrainer:
                 # Verify caches and auto-fix any invalid files
                 train_report = train_ljs.verify_and_fix_cache(fix=True)
                 val_report = val_ljs.verify_and_fix_cache(fix=True)
-                self.logger.info(f"Cache verify: train {train_report}, val {val_report}")
+                self.logger.debug(f"Cache verify: train {train_report}, val {val_report}")
                 use_cache_files = True
             except Exception as e:
-                self.logger.warning(f"Precompute failed: {e}")
+                self.logger.debug(f"Precompute failed: {e}")
                 use_cache_files = False
 
             # Filter items to those with valid caches (only if using cache files)
@@ -332,12 +332,12 @@ class XTTSTrainer:
                 try:
                     n_train = train_ljs.filter_items_by_cache()
                     n_val = val_ljs.filter_items_by_cache()
-                    self.logger.info(f"Using cached items - train: {n_train}, val: {n_val}")
+                    self.logger.debug(f"Using cached items - train: {n_train}, val: {n_val}")
                 except Exception as e:
-                    self.logger.warning(f"Cache filter failed: {e}")
+                    self.logger.debug(f"Cache filter failed: {e}")
                     use_cache_files = False
 
-        # Convert to TensorFlow datasets with optimized settings for GPU
+        # Convert to TensorFlow datasets with optimized settings
         train_tf_dataset = train_ljs.create_tf_dataset(
             batch_size=self.config.data.batch_size,
             shuffle=True,
@@ -360,19 +360,22 @@ class XTTSTrainer:
             buffer_size_multiplier=2
         )
         
-        # Optimize datasets for GPU training and distribute
+        # Optimize datasets, and only distribute when multi-GPU is enabled
         if self.device == "GPU":
             AUTOTUNE = tf.data.AUTOTUNE
             train_tf_dataset = train_tf_dataset.prefetch(AUTOTUNE)
             val_tf_dataset = val_tf_dataset.prefetch(AUTOTUNE)
-            
-            # CRITICAL FIX: Properly distribute datasets to GPU strategy
-            try:
-                train_tf_dataset = self.strategy.experimental_distribute_dataset(train_tf_dataset)
-                val_tf_dataset = self.strategy.experimental_distribute_dataset(val_tf_dataset)
-                self.logger.info("✓ Datasets distributed to GPU strategy")
-            except Exception as e:
-                self.logger.warning(f"Dataset distribution failed: {e}")
+
+            should_distribute = bool(getattr(self.config.training, 'multi_gpu', False))
+            if should_distribute and isinstance(self.strategy, tf.distribute.MirroredStrategy):
+                # Distribute only for multi-GPU; OneDeviceStrategy returns a DistributedDataset
+                # that requires strategy.run, which our single-GPU path doesn't use.
+                try:
+                    train_tf_dataset = self.strategy.experimental_distribute_dataset(train_tf_dataset)
+                    val_tf_dataset = self.strategy.experimental_distribute_dataset(val_tf_dataset)
+                    self.logger.debug("Datasets distributed to GPU strategy")
+                except Exception as e:
+                    self.logger.debug(f"Dataset distribution note: {e}")
         
         # Store sizes and default steps per epoch for scheduler/progress
         self.train_dataset_size = len(train_ljs)
@@ -696,65 +699,116 @@ class XTTSTrainer:
             micro_batch_size = 1
             accumulation_steps = tf.shape(text_sequences)[0]
         
+        # Manual accumulation that is safe with IndexedSlices
+        def _to_dense_if_indexed(g):
+            if isinstance(g, tf.IndexedSlices):
+                return tf.convert_to_tensor(g)
+            return g
+
         accumulated_gradients = None
-        total_loss = 0.0
         total_losses = {}
         
-        for step in range(accumulation_steps):
-            start_idx = step * micro_batch_size
-            end_idx = min((step + 1) * micro_batch_size, tf.shape(text_sequences)[0])
-            
-            # Get micro-batch
-            micro_text = text_sequences[start_idx:end_idx]
-            micro_mel = mel_spectrograms[start_idx:end_idx]
-            micro_text_len = text_lengths[start_idx:end_idx]
-            micro_mel_len = mel_lengths[start_idx:end_idx]
-            
-            # Compute gradients for micro-batch
-            with tf.GradientTape() as tape:
-                step_losses = self.train_step(micro_text, micro_mel, micro_text_len, micro_mel_len)
-                scaled_loss = step_losses["total_loss"] / accumulation_steps
-            
-            gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
-            
-            # Accumulate gradients
-            if accumulated_gradients is None:
-                accumulated_gradients = gradients
-            else:
-                accumulated_gradients = [
-                    acc_grad + grad for acc_grad, grad in zip(accumulated_gradients, gradients)
-                ]
-            
-            # Accumulate losses
-            total_loss += float(step_losses["total_loss"])
-            for key, value in step_losses.items():
-                if key not in total_losses:
-                    total_losses[key] = 0.0
-                total_losses[key] += float(value)
+        # Reuse device context and placement logic similar to train_step
+        device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
         
-        # Apply accumulated gradients
-        if accumulated_gradients:
-            # Clip gradients
+        with device_context:
+            for step in range(accumulation_steps):
+                start_idx = step * micro_batch_size
+                end_idx = min((step + 1) * micro_batch_size, tf.shape(text_sequences)[0])
+                
+                micro_text = text_sequences[start_idx:end_idx]
+                micro_mel = mel_spectrograms[start_idx:end_idx]
+                micro_text_len = text_lengths[start_idx:end_idx]
+                micro_mel_len = mel_lengths[start_idx:end_idx]
+                
+                # Ensure tensors are on GPU if available
+                if self.device == "GPU":
+                    micro_text = ensure_gpu_placement(micro_text)
+                    micro_mel = ensure_gpu_placement(micro_mel)
+                    micro_text_len = ensure_gpu_placement(micro_text_len)
+                    micro_mel_len = ensure_gpu_placement(micro_mel_len)
+                
+                with tf.GradientTape() as tape:
+                    # Forward pass (replicated from train_step)
+                    outputs = self.model(
+                        text_inputs=micro_text,
+                        mel_inputs=micro_mel,
+                        text_lengths=micro_text_len,
+                        mel_lengths=micro_mel_len,
+                        training=True
+                    )
+                    stop_targets = create_stop_targets(
+                        micro_mel_len,
+                        tf.shape(micro_mel)[1]
+                    )
+                    y_true = {
+                        "mel_target": micro_mel,
+                        "stop_target": stop_targets,
+                        "text_lengths": micro_text_len,
+                        "mel_lengths": micro_mel_len
+                    }
+                    y_pred = {
+                        "mel_output": outputs["mel_output"],
+                        "stop_tokens": outputs["stop_tokens"]
+                    }
+                    loss = self.criterion(y_true, y_pred)
+                    scaled_loss = loss / accumulation_steps
+                
+                grads = tape.gradient(scaled_loss, self.model.trainable_variables)
+                
+                # Accumulate gradients safely
+                if accumulated_gradients is None:
+                    accumulated_gradients = [(_to_dense_if_indexed(g) if g is not None else None) for g in grads]
+                else:
+                    new_acc = []
+                    for acc_g, g in zip(accumulated_gradients, grads):
+                        if g is None:
+                            new_acc.append(acc_g)
+                            continue
+                        g = _to_dense_if_indexed(g)
+                        if acc_g is None:
+                            new_acc.append(g)
+                        else:
+                            new_acc.append(acc_g + g)
+                    accumulated_gradients = new_acc
+                
+                # Accumulate losses for reporting
+                micro_losses = self.criterion.get_losses()
+                total_losses["total_loss"] = total_losses.get("total_loss", 0.0) + float(loss)
+                for k, v in micro_losses.items():
+                    total_losses[k] = total_losses.get(k, 0.0) + float(v)
+                
+                # Cleanup per micro-batch
+                del outputs, y_true, y_pred, grads
+        
+        # Clip and apply accumulated gradients once
+        if accumulated_gradients is not None:
             accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=1.0)
             self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
         
-        # Average losses
-        for key in total_losses:
-            total_losses[key] /= accumulation_steps
+        # Average losses across micro-steps
+        for key in list(total_losses.keys()):
+            total_losses[key] /= float(accumulation_steps)
         
-        # Provide a notebook-friendly alias for total loss
+        # Convenience keys
         if "total_loss" in total_losses and "loss" not in total_losses:
             try:
                 total_losses["loss"] = float(total_losses["total_loss"])  # convenience key
             except Exception:
                 pass
-        # Optionally include learning rate for logging
         try:
             lr = self.optimizer.learning_rate
             current_lr = lr.numpy() if hasattr(lr, 'numpy') else lr
             total_losses["learning_rate"] = float(current_lr)
         except Exception:
             pass
+        
+        # Advance global step once per accumulation cycle
+        try:
+            self.current_step += 1
+        except Exception:
+            pass
+        
         return total_losses
     
     def cleanup_gpu_memory(self):
@@ -978,8 +1032,11 @@ class XTTSTrainer:
                         (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
                         accumulation_steps=self.gradient_accumulation_steps
                     )
-                elif isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.OneDeviceStrategy)):
-                    # Use distributed training step
+                elif (
+                    getattr(self.config.training, 'multi_gpu', False)
+                    and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+                ):
+                    # Multi-GPU: use distributed training step
                     step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
                 else:
                     # Use regular training step
@@ -1048,7 +1105,10 @@ class XTTSTrainer:
             text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
             
             # Use strategy-backed validation when strategy provides replica context
-            if isinstance(self.strategy, (tf.distribute.MirroredStrategy, tf.distribute.OneDeviceStrategy)):
+            if (
+                getattr(self.config.training, 'multi_gpu', False)
+                and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+            ):
                 step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
             else:
                 step_losses = self.validation_step(

@@ -62,14 +62,14 @@ class PerformanceMonitor:
         self._monitoring = True
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._monitor_thread.start()
-        print("Performance monitoring started")
+        # Silence startup message to reduce notebook logs
     
     def stop_monitoring(self):
         """Stop background monitoring."""
         self._monitoring = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=2.0)
-        print("Performance monitoring stopped")
+        # Silence stop message to reduce notebook logs
     
     def _monitor_loop(self):
         """Background monitoring loop."""
@@ -79,7 +79,8 @@ class PerformanceMonitor:
                 self.metrics_history.append(metrics)
                 time.sleep(self.monitor_interval)
             except Exception as e:
-                print(f"Error in monitoring loop: {e}")
+                # Suppress noisy monitoring loop errors from flooding logs
+                pass
                 time.sleep(self.monitor_interval)
     
     def _collect_system_metrics(self) -> PerformanceMetrics:

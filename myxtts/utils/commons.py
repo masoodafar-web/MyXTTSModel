@@ -23,6 +23,7 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
         memory_growth: Whether to enable memory growth on visible GPUs.
         memory_limit: Optional memory limit in MB for each GPU.
     """
+    logger = logging.getLogger("MyXTTS")
     try:
         if visible_gpus is not None:
             # Map to actual physical devices
@@ -38,54 +39,54 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
         # CRITICAL FIX: Better GPU configuration for utilization
         gpus = tf.config.list_physical_devices('GPU')
         if gpus:
-            print(f"Found {len(gpus)} GPU(s): {gpus}")
+            logger.debug(f"Found {len(gpus)} GPU(s): {gpus}")
             
             # Configure memory growth and limits
             for gpu in gpus:
                 try:
                     if memory_growth:
                         tf.config.experimental.set_memory_growth(gpu, True)
-                        print(f"✓ Enabled memory growth for {gpu}")
+                        logger.debug(f"Enabled memory growth for {gpu}")
                     
                     if memory_limit is not None:
                         tf.config.experimental.set_memory_limit(gpu, memory_limit)
-                        print(f"✓ Set memory limit to {memory_limit}MB for {gpu}")
+                        logger.debug(f"Set memory limit to {memory_limit}MB for {gpu}")
                         
                 except Exception as e:
-                    print(f"GPU memory configuration warning for {gpu}: {e}")
+                    logger.debug(f"GPU memory configuration note for {gpu}: {e}")
             
             # CRITICAL FIX: Set device policy to handle device placement issues
             try:
                 # Use 'silent' policy to allow automatic tensor copying between devices
                 # This fixes the InvalidArgumentError with dropout layer seed generators
                 tf.config.experimental.set_device_policy('silent')
-                print("✓ Set silent device policy to handle automatic device placement")
+                logger.debug("Set silent device policy to handle automatic device placement")
             except Exception as e:
-                print(f"Device policy warning: {e}")
+                logger.debug(f"Device policy note: {e}")
                 
             # Set additional memory optimization settings
             try:
                 # Enable mixed precision for memory efficiency
                 policy = tf.keras.mixed_precision.Policy('mixed_float16')
                 tf.keras.mixed_precision.set_global_policy(policy)
-                print("✓ Mixed precision policy enabled")
+                logger.debug("Mixed precision policy enabled")
                 
                 # Enable XLA for better GPU utilization
                 tf.config.optimizer.set_jit(True)
-                print("✓ XLA JIT compilation enabled")
+                logger.debug("XLA JIT compilation enabled")
                 
                 # Force eager execution for better debugging (can disable in production)
                 if not tf.executing_eagerly():
                     tf.config.run_functions_eagerly(True)
-                    print("✓ Eager execution enabled for debugging")
+                    logger.debug("Eager execution enabled for debugging")
                     
             except Exception as e:
-                print(f"Advanced GPU optimization warning: {e}")
+                logger.debug(f"Advanced GPU optimization note: {e}")
         else:
-            print("⚠️ No GPUs detected - falling back to CPU")
+            logger.debug("No GPUs detected - falling back to CPU")
                 
     except Exception as e:
-        print(f"GPU configuration warning: {e}")
+        logger.debug(f"GPU configuration note: {e}")
 
 def get_device() -> str:
     """
@@ -94,6 +95,7 @@ def get_device() -> str:
     Returns:
         Device string ("GPU" or "CPU")
     """
+    logger = logging.getLogger("MyXTTS")
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         try:
@@ -103,10 +105,10 @@ def get_device() -> str:
             
             # Set up logical GPU devices for optimal utilization
             logical_gpus = tf.config.list_logical_devices('GPU')
-            print(f"Physical GPUs: {len(gpus)}, Logical GPUs: {len(logical_gpus)}")
+            logger.debug(f"Physical GPUs: {len(gpus)}, Logical GPUs: {len(logical_gpus)}")
             return "GPU"
         except RuntimeError as e:
-            print(f"GPU setup error: {e}")
+            logger.debug(f"GPU setup note: {e}")
             return "CPU"
     else:
         return "CPU"
@@ -123,29 +125,26 @@ def setup_gpu_strategy(enable_multi_gpu: bool = False):
     Returns:
         tf.distribute.Strategy for training
     """
+    logger = logging.getLogger("MyXTTS")
     gpus = tf.config.list_physical_devices('GPU')
     
     if len(gpus) == 0:
-        print("No GPUs available, using CPU strategy")
+        logger.debug("No GPUs available, using CPU strategy")
         return tf.distribute.get_strategy()  # Default strategy for CPU
     elif len(gpus) == 1:
-        # Single GPU strategy with optimizations
-        print("Using single GPU strategy")
-        with tf.device('/GPU:0'):
-            strategy = tf.distribute.OneDeviceStrategy("/gpu:0")
-        return strategy
+        # Single GPU: use default (no-op) strategy to avoid replica context requirements
+        logger.debug("Single GPU detected; using default strategy")
+        return tf.distribute.get_strategy()
     else:
         # Multi-GPU available - check if user wants to enable it
         if enable_multi_gpu:
-            print(f"Using multi-GPU strategy with {len(gpus)} GPUs")
+            logger.debug(f"Using multi-GPU strategy with {len(gpus)} GPUs")
             strategy = tf.distribute.MirroredStrategy()
             return strategy
         else:
-            # Use only first GPU even with multiple GPUs available
-            print(f"Multi-GPU disabled, using single GPU strategy (GPU 0 of {len(gpus)} available)")
-            with tf.device('/GPU:0'):
-                strategy = tf.distribute.OneDeviceStrategy("/gpu:0")
-            return strategy
+            # Multi-GPU disabled: fall back to default (no-op) strategy
+            logger.debug("Multi-GPU disabled; using default strategy")
+            return tf.distribute.get_strategy()
 
 
 def ensure_gpu_placement(tensor):
@@ -202,12 +201,13 @@ def create_dropout_layer(rate: float, seed: Optional[int] = None, name: str = "d
 
 def setup_mixed_precision():
     """Set up mixed precision training for better performance."""
+    logger = logging.getLogger("MyXTTS")
     try:
         policy = tf.keras.mixed_precision.Policy('mixed_float16')
         tf.keras.mixed_precision.set_global_policy(policy)
-        print("Mixed precision training enabled")
+        logger.debug("Mixed precision training enabled")
     except Exception as e:
-        print(f"Could not enable mixed precision: {e}")
+        logger.debug(f"Could not enable mixed precision: {e}")
 
 
 def save_checkpoint(

@@ -904,16 +904,9 @@ class LJSpeechDataset:
                 use_tf_native = getattr(self.config, 'use_tf_native_loading', True)
                 
                 if use_tf_native:
-                    # Use TensorFlow-native loading when cache files exist
-                    tok_exists = tf.io.gfile.exists(tok_path_t)
-                    mel_exists = tf.io.gfile.exists(mel_path_t)
-                    
-                    if tok_exists and mel_exists:
-                        try:
-                            return _load_from_cache_optimized_tf_native(tok_path_t, mel_path_t, audio_path_t, norm_text_t)
-                        except Exception:
-                            # Fallback to Python function if TF-native fails
-                            pass
+                    # Attempt TF-native loading directly; internal try/except handles missing files
+                    # and falls back to a Python loader via tf.numpy_function when needed.
+                    return _load_from_cache_optimized_tf_native(tok_path_t, mel_path_t, audio_path_t, norm_text_t)
                 
                 # Python fallback for edge cases
                 def _py_loader(tok_path_b, mel_path_b, audio_path_b, norm_text_b):
