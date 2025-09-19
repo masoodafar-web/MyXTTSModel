@@ -1,15 +1,14 @@
 """
 Performance monitoring and profiling utilities for MyXTTS.
 
-This module provides tools to monitor CPU/GPU utilization, data loading 
-bottlenecks, and overall training performance.
+This module provides basic performance monitoring for CPU and memory usage,
+focusing on training performance without detailed GPU monitoring.
 """
 
 import time
 import threading
 import psutil
 import numpy as np
-import tensorflow as tf
 from typing import Dict, List, Optional, Callable, Any
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -21,9 +20,6 @@ class PerformanceMetrics:
     """Container for performance metrics."""
     cpu_percent: float = 0.0
     memory_percent: float = 0.0
-    gpu_memory_used: float = 0.0
-    gpu_memory_total: float = 0.0
-    gpu_utilization: float = 0.0
     data_loading_time: float = 0.0
     model_compute_time: float = 0.0
     total_step_time: float = 0.0
@@ -35,8 +31,8 @@ class PerformanceMonitor:
     """
     Monitor system and training performance to identify bottlenecks.
     
-    This class provides real-time monitoring of CPU, GPU, and memory usage,
-    as well as detailed timing of data loading and model computation phases.
+    This class provides basic monitoring of CPU and memory usage,
+    as well as timing of data loading and model computation phases.
     """
     
     def __init__(self, monitor_interval: float = 1.0, history_size: int = 1000):
@@ -57,21 +53,6 @@ class PerformanceMonitor:
         # Monitoring state
         self._monitoring = False
         self._monitor_thread: Optional[threading.Thread] = None
-        
-        # GPU availability check
-        self.has_gpu = len(tf.config.list_physical_devices('GPU')) > 0
-        
-        # Initialize GPU monitoring if available
-        if self.has_gpu:
-            try:
-                import pynvml
-                pynvml.nvmlInit()
-                self.gpu_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-                self._gpu_available = True
-            except (ImportError, Exception):
-                self._gpu_available = False
-        else:
-            self._gpu_available = False
     
     def start_monitoring(self):
         """Start background monitoring of system metrics."""
@@ -108,21 +89,6 @@ class PerformanceMonitor:
         # CPU and memory
         metrics.cpu_percent = psutil.cpu_percent(interval=None)
         metrics.memory_percent = psutil.virtual_memory().percent
-        
-        # GPU metrics if available
-        if self._gpu_available:
-            try:
-                import pynvml
-                # Memory usage
-                mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.gpu_handle)
-                metrics.gpu_memory_used = mem_info.used / 1024**3  # GB
-                metrics.gpu_memory_total = mem_info.total / 1024**3  # GB
-                
-                # GPU utilization
-                util = pynvml.nvmlDeviceGetUtilizationRates(self.gpu_handle)
-                metrics.gpu_utilization = util.gpu
-            except Exception:
-                pass
         
         return metrics
     
@@ -166,7 +132,6 @@ class PerformanceMonitor:
         # Calculate averages
         avg_cpu = np.mean([m.cpu_percent for m in recent_metrics])
         avg_memory = np.mean([m.memory_percent for m in recent_metrics])
-        avg_gpu_util = np.mean([m.gpu_utilization for m in recent_metrics])
         
         # Analyze timing stats
         timing_analysis = {}
@@ -190,14 +155,6 @@ class PerformanceMonitor:
             bottlenecks.append("high_cpu_usage")
             recommendations.append("CPU usage is very high. Consider optimizing data preprocessing or using more efficient algorithms.")
         
-        # Low GPU utilization suggests data loading bottleneck
-        if self.has_gpu and avg_gpu_util < 30:
-            bottlenecks.append("critical_low_gpu_utilization")
-            recommendations.append(f"GPU utilization is critically low ({avg_gpu_util:.1f}%). This strongly suggests a data loading bottleneck or model not properly placed on GPU. Check: 1) Data preprocessing happening on CPU during training, 2) Insufficient data prefetching, 3) Model device placement, 4) Batch size too small.")
-        elif self.has_gpu and avg_gpu_util < 60:
-            bottlenecks.append("low_gpu_utilization")
-            recommendations.append(f"GPU utilization is suboptimal ({avg_gpu_util:.1f}%). Consider: 1) Increasing prefetch buffer size, 2) Using more parallel data loading workers, 3) Optimizing data preprocessing, 4) Increasing batch size if memory allows.")
-        
         # High memory usage
         if avg_memory > 85:
             bottlenecks.append("high_memory_usage")
@@ -215,9 +172,7 @@ class PerformanceMonitor:
         return {
             "system_metrics": {
                 "cpu_percent": avg_cpu,
-                "memory_percent": avg_memory,
-                "gpu_utilization": avg_gpu_util,
-                "has_gpu": self.has_gpu
+                "memory_percent": avg_memory
             },
             "timing_analysis": timing_analysis,
             "bottlenecks": bottlenecks,
@@ -228,9 +183,6 @@ class PerformanceMonitor:
     def get_summary(self) -> Dict[str, Any]:
         """
         Return a concise, program-friendly summary of recent performance.
-
-        This mirrors the information commonly needed by notebooks or callers
-        that want numeric stats rather than a formatted report.
 
         Returns:
             Dict with keys such as avg_step_time, avg_data_time,
@@ -257,11 +209,10 @@ class PerformanceMonitor:
             recent = list(self.metrics_history)[-10:]
             avg_cpu = float(np.mean([m.cpu_percent for m in recent]))
             avg_mem = float(np.mean([m.memory_percent for m in recent]))
-            avg_gpu_util = float(np.mean([m.gpu_utilization for m in recent]))
             latest = recent[-1]
             batch_size = int(latest.batch_size or 0)
         else:
-            avg_cpu = avg_mem = avg_gpu_util = 0.0
+            avg_cpu = avg_mem = 0.0
             batch_size = 0
 
         return {
@@ -271,8 +222,6 @@ class PerformanceMonitor:
             "avg_samples_per_second": avg_sps,
             "avg_cpu_percent": avg_cpu,
             "avg_memory_percent": avg_mem,
-            "avg_gpu_utilization": avg_gpu_util,
-            "has_gpu": self.has_gpu,
             "batch_size": batch_size,
         }
     
@@ -290,10 +239,6 @@ class PerformanceMonitor:
         report += f"System Metrics (Average):\n"
         report += f"  CPU Usage: {metrics['cpu_percent']:.1f}%\n"
         report += f"  Memory Usage: {metrics['memory_percent']:.1f}%\n"
-        if metrics["has_gpu"]:
-            report += f"  GPU Utilization: {metrics['gpu_utilization']:.1f}%\n"
-        else:
-            report += f"  GPU: Not available\n"
         report += "\n"
         
         # Timing analysis
