@@ -1,0 +1,71 @@
+# GPU Bottleneck Fix Configuration for MyXTTS
+# Specifically designed to eliminate CPU bottlenecks and maximize GPU utilization
+
+data:
+  dataset_path: "./data/ljspeech"
+  batch_size: 48                      # Larger batch size for GPU efficiency
+  num_workers: 16                     # More workers for data preprocessing
+  
+  # Core GPU optimization settings
+  preprocessing_mode: precompute      # Ensure all data is preprocessed
+  use_tf_native_loading: true         # Enable TensorFlow-native file loading (eliminates Python bottlenecks)
+  enhanced_gpu_prefetch: true         # Enable advanced GPU prefetching
+  optimize_cpu_gpu_overlap: true      # Maximum CPU-GPU overlap
+  
+  # Advanced prefetching and buffering
+  prefetch_buffer_size: 12            # Larger prefetch buffer for sustained GPU utilization  
+  shuffle_buffer_multiplier: 30       # Larger shuffle buffer
+  prefetch_to_gpu: true              # Direct GPU prefetching
+  
+  # Memory optimizations
+  enable_memory_mapping: true         # Use memory mapping for cache files
+  cache_verification: true            # Verify cache integrity
+  pin_memory: true                   # Pin memory for faster transfers
+  persistent_workers: true           # Keep workers alive between epochs
+  
+  # Sequence length management (prevent OOM while keeping GPU busy)
+  max_mel_frames: 1024               # Allow longer sequences for better GPU utilization
+  
+  # XLA and mixed precision optimizations
+  enable_xla: true                   # Enable XLA compilation for better GPU performance
+  mixed_precision: true              # Use mixed precision for faster training
+
+model:
+  # Model configuration optimized for GPU
+  d_model: 512
+  n_heads: 8
+  n_layers: 6
+  dropout: 0.1
+  max_attention_sequence_length: 1024  # Match with max_mel_frames
+
+training:
+  learning_rate: 2e-4                # Slightly higher LR for larger batches
+  warmup_steps: 8000                 # More warmup steps for stability
+  gradient_clip_norm: 1.0
+  gradient_accumulation_steps: 1     # No accumulation needed with larger batch size
+  
+  # Checkpointing and validation
+  save_step: 10000
+  val_step: 2500                     # More frequent validation with faster training
+  log_step: 50                       # More frequent logging
+  
+  # Multi-GPU settings (if available)
+  multi_gpu: false                   # Set to true if multiple GPUs available
+  visible_gpus: "0"                  # Use first GPU
+  
+  # Memory and performance
+  epochs: 1000
+  
+# Advanced GPU-specific optimizations
+gpu_optimizations:
+  # TensorFlow GPU options
+  allow_memory_growth: true          # Prevent memory fragmentation
+  auto_mixed_precision: true         # Automatic mixed precision
+  
+  # Data pipeline optimizations
+  tensorflow_data_autotune: true     # Use TF data autotune
+  parallel_data_calls: 16           # More parallel calls for data loading
+  
+  # Advanced threading
+  inter_op_parallelism_threads: 8    # CPU threads for TensorFlow operations
+  intra_op_parallelism_threads: 8    # CPU threads within operations
