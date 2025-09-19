@@ -278,7 +278,8 @@ class TextProcessor:
             text = self.clean_text(text)
         
         if self.tokenizer_type == "nllb":
-            # Use NLLB tokenizer
+            # Use NLLB tokenizer with language context
+            self.nllb_tokenizer.set_language(self.language)
             return self.nllb_tokenizer.text_to_sequence(text, max_length=max_length)
         else:
             # Use custom tokenizer
@@ -392,6 +393,152 @@ class TextProcessor:
             return self.pad_sequences(sequences, max_length)
 
 
+# NLLB-200 language codes mapping
+# Maps ISO 639-1 language codes to NLLB-200 standardized codes
+NLLB_LANGUAGE_CODES = {
+    "en": "eng_Latn",  # English
+    "es": "spa_Latn",  # Spanish
+    "fr": "fra_Latn",  # French
+    "de": "deu_Latn",  # German
+    "it": "ita_Latn",  # Italian
+    "pt": "por_Latn",  # Portuguese
+    "ru": "rus_Cyrl",  # Russian
+    "zh": "zho_Hans",  # Chinese (Simplified)
+    "ja": "jpn_Jpan",  # Japanese
+    "ko": "kor_Hang",  # Korean
+    "ar": "arb_Arab",  # Arabic
+    "hi": "hin_Deva",  # Hindi
+    "tr": "tur_Latn",  # Turkish
+    "pl": "pol_Latn",  # Polish
+    "nl": "nld_Latn",  # Dutch
+    "sv": "swe_Latn",  # Swedish
+    "da": "dan_Latn",  # Danish
+    "no": "nob_Latn",  # Norwegian
+    "fi": "fin_Latn",  # Finnish
+    "cs": "ces_Latn",  # Czech
+    "hu": "hun_Latn",  # Hungarian
+    "he": "heb_Hebr",  # Hebrew
+    "th": "tha_Thai",  # Thai
+    "vi": "vie_Latn",  # Vietnamese
+    "uk": "ukr_Cyrl",  # Ukrainian
+    "bg": "bul_Cyrl",  # Bulgarian
+    "hr": "hrv_Latn",  # Croatian
+    "sk": "slk_Latn",  # Slovak
+    "sl": "slv_Latn",  # Slovenian
+    "et": "est_Latn",  # Estonian
+    "lv": "lvs_Latn",  # Latvian
+    "lt": "lit_Latn",  # Lithuanian
+    "ro": "ron_Latn",  # Romanian
+    "mt": "mlt_Latn",  # Maltese
+    "is": "isl_Latn",  # Icelandic
+    "ga": "gle_Latn",  # Irish
+    "cy": "cym_Latn",  # Welsh
+    "eu": "eus_Latn",  # Basque
+    "ca": "cat_Latn",  # Catalan
+    "gl": "glg_Latn",  # Galician
+    "fa": "pes_Arab",  # Persian/Farsi
+    "ur": "urd_Arab",  # Urdu
+    "bn": "ben_Beng",  # Bengali
+    "ta": "tam_Taml",  # Tamil
+    "te": "tel_Telu",  # Telugu
+    "ml": "mal_Mlym",  # Malayalam
+    "kn": "kan_Knda",  # Kannada
+    "gu": "guj_Gujr",  # Gujarati
+    "pa": "pan_Guru",  # Punjabi
+    "mr": "mar_Deva",  # Marathi
+    "ne": "npi_Deva",  # Nepali
+    "si": "sin_Sinh",  # Sinhala
+    "my": "mya_Mymr",  # Burmese
+    "km": "khm_Khmr",  # Khmer
+    "lo": "lao_Laoo",  # Lao
+    "ka": "kat_Geor",  # Georgian
+    "hy": "hye_Armn",  # Armenian
+    "az": "azj_Latn",  # Azerbaijani
+    "kk": "kaz_Cyrl",  # Kazakh
+    "ky": "kir_Cyrl",  # Kyrgyz
+    "uz": "uzn_Latn",  # Uzbek
+    "tg": "tgk_Cyrl",  # Tajik
+    "mn": "khk_Cyrl",  # Mongolian
+    "af": "afr_Latn",  # Afrikaans
+    "sq": "als_Latn",  # Albanian
+    "am": "amh_Ethi",  # Amharic
+    "as": "asm_Beng",  # Assamese
+    "be": "bel_Cyrl",  # Belarusian
+    "bs": "bos_Latn",  # Bosnian
+    "br": "bre_Latn",  # Breton
+    "dv": "div_Thaa",  # Divehi
+    "fo": "fao_Latn",  # Faroese
+    "fy": "fry_Latn",  # Frisian
+    "gd": "gla_Latn",  # Scottish Gaelic
+    "ha": "hau_Latn",  # Hausa
+    "ig": "ibo_Latn",  # Igbo
+    "id": "ind_Latn",  # Indonesian
+    "jv": "jav_Latn",  # Javanese
+    "ku": "ckb_Arab",  # Kurdish
+    "lb": "ltz_Latn",  # Luxembourgish
+    "mk": "mkd_Cyrl",  # Macedonian
+    "mg": "plt_Latn",  # Malagasy
+    "ms": "zsm_Latn",  # Malay
+    "or": "ory_Orya",  # Odia
+    "ps": "pbt_Arab",  # Pashto
+    "qu": "quy_Latn",  # Quechua
+    "rw": "kin_Latn",  # Kinyarwanda
+    "sa": "san_Deva",  # Sanskrit
+    "sd": "snd_Arab",  # Sindhi
+    "so": "som_Latn",  # Somali
+    "su": "sun_Latn",  # Sundanese
+    "sw": "swh_Latn",  # Swahili
+    "tl": "tgl_Latn",  # Tagalog
+    "tt": "tat_Cyrl",  # Tatar
+    "ti": "tir_Ethi",  # Tigrinya
+    "tk": "tuk_Latn",  # Turkmen
+    "tw": "twi_Latn",  # Twi
+    "ug": "uig_Arab",  # Uyghur
+    "wo": "wol_Latn",  # Wolof
+    "xh": "xho_Latn",  # Xhosa
+    "yi": "yid_Hebr",  # Yiddish
+    "yo": "yor_Latn",  # Yoruba
+    "zu": "zul_Latn",  # Zulu
+}
+
+
+def get_nllb_language_code(language: str) -> str:
+    """
+    Get NLLB-200 standardized language code from ISO language code.
+    
+    Args:
+        language: ISO 639-1 language code (e.g., "en", "fr", "de")
+        
+    Returns:
+        NLLB-200 language code (e.g., "eng_Latn", "fra_Latn", "deu_Latn")
+        Falls back to "eng_Latn" if language not found.
+    """
+    return NLLB_LANGUAGE_CODES.get(language, "eng_Latn")
+
+
+def get_supported_nllb_languages() -> List[str]:
+    """
+    Get list of ISO language codes supported by NLLB mapping.
+    
+    Returns:
+        List of ISO 639-1 language codes supported by NLLB-200
+    """
+    return list(NLLB_LANGUAGE_CODES.keys())
+
+
+def is_nllb_language_supported(language: str) -> bool:
+    """
+    Check if a language is supported by NLLB mapping.
+    
+    Args:
+        language: ISO 639-1 language code
+        
+    Returns:
+        True if language is supported, False otherwise
+    """
+    return language in NLLB_LANGUAGE_CODES
+
+
 def get_language_phonemizer(language: str) -> Optional[str]:
     """
     Get appropriate phonemizer backend for language.
@@ -465,6 +612,23 @@ class NLLBTokenizer:
         self.eos_token_id = self.tokenizer.eos_token_id
         self.bos_token_id = self.tokenizer.bos_token_id or self.tokenizer.cls_token_id
         self.unk_token_id = self.tokenizer.unk_token_id
+        
+        # Current language for NLLB context
+        self.current_language = None
+    
+    def set_language(self, language: str):
+        """
+        Set the language context for NLLB tokenization.
+        
+        Args:
+            language: ISO language code (e.g., "en", "fr", "de")
+        """
+        nllb_code = get_nllb_language_code(language)
+        self.current_language = nllb_code
+        
+        # Set the source language for NLLB tokenizer
+        if hasattr(self.tokenizer, 'src_lang'):
+            self.tokenizer.src_lang = nllb_code
     
     def encode(
         self, 
@@ -472,10 +636,11 @@ class NLLBTokenizer:
         max_length: Optional[int] = None,
         padding: bool = False,
         truncation: bool = True,
-        return_tensors: Optional[str] = None
+        return_tensors: Optional[str] = None,
+        language: Optional[str] = None
     ) -> List[int]:
         """
-        Encode text to token IDs.
+        Encode text to token IDs with optional language context.
         
         Args:
             text: Input text
@@ -483,10 +648,15 @@ class NLLBTokenizer:
             padding: Whether to pad sequences
             truncation: Whether to truncate long sequences
             return_tensors: Format for returned tensors ("tf", "pt", or None)
+            language: Optional ISO language code for this specific encoding
             
         Returns:
             List of token IDs or tensor if return_tensors specified
         """
+        # Set language context if provided
+        if language is not None:
+            self.set_language(language)
+        
         encoded = self.tokenizer.encode(
             text,
             max_length=max_length,
@@ -523,10 +693,11 @@ class NLLBTokenizer:
         max_length: Optional[int] = None,
         padding: bool = True,
         truncation: bool = True,
-        return_tensors: Optional[str] = None
+        return_tensors: Optional[str] = None,
+        language: Optional[str] = None
     ) -> Dict:
         """
-        Encode batch of texts.
+        Encode batch of texts with optional language context.
         
         Args:
             texts: List of input texts
@@ -534,10 +705,15 @@ class NLLBTokenizer:
             padding: Whether to pad sequences
             truncation: Whether to truncate long sequences
             return_tensors: Format for returned tensors
+            language: Optional ISO language code for this batch
             
         Returns:
             Dictionary with input_ids, attention_mask, etc.
         """
+        # Set language context if provided
+        if language is not None:
+            self.set_language(language)
+            
         return self.tokenizer(
             texts,
             max_length=max_length,
@@ -622,3 +798,24 @@ class NLLBTokenizer:
             NLLBTokenizer instance
         """
         return cls(model_name)
+    
+    def get_supported_languages(self) -> List[str]:
+        """
+        Get list of ISO language codes supported by NLLB mapping.
+        
+        Returns:
+            List of ISO 639-1 language codes
+        """
+        return list(NLLB_LANGUAGE_CODES.keys())
+    
+    def get_nllb_code(self, language: str) -> str:
+        """
+        Get NLLB code for ISO language code.
+        
+        Args:
+            language: ISO language code
+            
+        Returns:
+            NLLB language code
+        """
+        return get_nllb_language_code(language)
