@@ -92,19 +92,19 @@ class DataConfig:
     eval_subset_fraction: float = 1.0   # 0-1 fraction of val/test to use
     subset_seed: int = 42
 
-    # Batching and workers
-    batch_size: int = 32
-    num_workers: int = 8
+    # Batching and workers (increased for GPU optimization)
+    batch_size: int = 48  # Increased from 32 for better GPU utilization  
+    num_workers: int = 16  # Increased from 8 for better CPU-GPU overlap
 
-    # Data pipeline performance
-    prefetch_buffer_size: int = 8
-    shuffle_buffer_multiplier: int = 20
+    # Data pipeline performance (optimized for GPU)
+    prefetch_buffer_size: int = 12  # Increased from 8 for sustained GPU utilization
+    shuffle_buffer_multiplier: int = 30  # Increased from 20 for better randomization
     enable_memory_mapping: bool = True
     cache_verification: bool = True
     prefetch_to_gpu: bool = True
 
-    # Sequence length caps to avoid OOM
-    max_mel_frames: int = 512
+    # Sequence length caps to avoid OOM (optimized for GPU)
+    max_mel_frames: int = 1024  # Increased from 512 for better GPU utilization
 
     # GPU-specific optimizations
     enable_xla: bool = True
@@ -115,8 +115,8 @@ class DataConfig:
     pin_memory: bool = True
     persistent_workers: bool = True
 
-    # Dataset preprocessing control
-    preprocessing_mode: str = "auto"  # "auto", "precompute", "runtime"
+    # Dataset preprocessing control (default to precompute for GPU optimization)
+    preprocessing_mode: str = "precompute"  # Changed from "auto" - forces cache files for GPU optimization
     
     # Advanced GPU optimization options
     use_tf_native_loading: bool = True  # Use TensorFlow-native file loading instead of Python functions
