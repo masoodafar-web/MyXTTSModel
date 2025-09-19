@@ -23,7 +23,6 @@ import threading
 from ..utils.audio import AudioProcessor
 from ..utils.text import TextProcessor
 from ..config.config import DataConfig
-from ..utils.performance import DataLoadingProfiler, time_operation
 
 
 class LJSpeechDataset:
@@ -60,9 +59,6 @@ class LJSpeechDataset:
         self.subset = subset
         self.download_flag = download
         self.preprocess_flag = preprocess
-        
-        # Performance monitoring
-        self.profiler = DataLoadingProfiler()
         
         # Simple in-memory cache for tokenized text to avoid recomputation
         self._text_cache: Dict[str, np.ndarray] = {}
@@ -1017,10 +1013,6 @@ class LJSpeechDataset:
         dataset = dataset.with_options(options)
 
         return dataset
-    
-    def get_performance_report(self) -> str:
-        """Get detailed performance report from the data loading profiler."""
-        return self.profiler.get_report()
     
     def cleanup_cache(self):
         """Clean up memory-mapped caches to free memory."""
