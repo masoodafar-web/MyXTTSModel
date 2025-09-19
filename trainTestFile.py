@@ -57,7 +57,7 @@ except ImportError as e:
 def create_default_config(
     data_path: str = "./data/ljspeech",
     language: str = "en",
-    batch_size: int = 32,  # Increased default for better GPU utilization
+    batch_size: int = 48,  # GPU-optimized default (increased from 32 for better utilization)
     epochs: int = 100,
     learning_rate: float = 1e-4,
     sample_rate: int = 22050,
@@ -66,13 +66,13 @@ def create_default_config(
     metadata_eval_file: Optional[str] = None,
     wavs_train_dir: Optional[str] = None,
     wavs_eval_dir: Optional[str] = None,
-    preprocessing_mode: str = "auto",
+    preprocessing_mode: str = "precompute",  # GPU-optimized default (changed from "auto" for cache files)
     # New GPU optimization parameters
     use_tf_native_loading: bool = True,
     enhanced_gpu_prefetch: bool = True,
     optimize_cpu_gpu_overlap: bool = True,
-    num_workers: int = 8,
-    prefetch_buffer_size: int = 8
+    num_workers: int = 16,  # GPU-optimized default (increased from 8 for better CPU-GPU overlap)
+    prefetch_buffer_size: int = 12  # GPU-optimized default (increased from 8 for sustained utilization)
 ) -> XTTSConfig:
     """
     Create a default configuration programmatically without requiring YAML.
@@ -300,7 +300,7 @@ def main():
     # Data and model options
     parser.add_argument("--data-path", default="../dataset/dataset_train", help="Path to training data")
     parser.add_argument("--language", default="en", help="Language code")
-    parser.add_argument("--batch-size", type=int, default=32, help="Training batch size (optimized for GPU)")
+    parser.add_argument("--batch-size", type=int, default=48, help="Training batch size (GPU-optimized default)")
     parser.add_argument("--epochs", type=int, default=100, help="Number of training epochs")
     parser.add_argument("--learning-rate", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--sample-rate", type=int, default=22050, help="Audio sample rate")
@@ -320,8 +320,8 @@ def main():
     
     # Dataset preprocessing options
     parser.add_argument("--preprocessing-mode", choices=["auto", "precompute", "runtime"], 
-                       default="auto", help="Dataset preprocessing mode: 'auto' (try precompute, fall back), "
-                       "'precompute' (fully preprocess before training), 'runtime' (process during training)")
+                       default="precompute", help="Dataset preprocessing mode: 'precompute' (GPU-optimized default), "
+                       "'auto' (try precompute, fall back), 'runtime' (process during training)")
     
     # GPU optimization options (NEW - for fixing CPU bottlenecks)
     parser.add_argument("--disable-tf-native-loading", action="store_true", 
@@ -330,9 +330,9 @@ def main():
                        help="Disable enhanced GPU prefetching (not recommended)")
     parser.add_argument("--disable-cpu-gpu-overlap", action="store_true",
                        help="Disable CPU-GPU overlap optimizations (not recommended)")
-    parser.add_argument("--num-workers", type=int, default=8,
-                       help="Number of data loading workers (default: 8)")
-    parser.add_argument("--prefetch-buffer-size", type=int, default=8,
+    parser.add_argument("--num-workers", type=int, default=16,
+                       help="Number of data loading workers (GPU-optimized default: 16)")
+    parser.add_argument("--prefetch-buffer-size", type=int, default=12,
                        help="Prefetch buffer size for GPU utilization (default: 8)")
     
     # Testing options
@@ -356,7 +356,7 @@ def main():
             # Override with command line arguments if provided
             if args.data_path != "./data/ljspeech":
                 config.data.dataset_path = args.data_path
-            if args.batch_size != 16:
+            if args.batch_size != 48:  # Updated to match new GPU-optimized default
                 config.data.batch_size = args.batch_size
             if args.epochs != 100:
                 config.training.epochs = args.epochs
