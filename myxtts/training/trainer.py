@@ -27,7 +27,6 @@ from ..utils.commons import (
     ensure_gpu_placement,
     setup_gpu_strategy
 )
-from ..utils.performance import PerformanceMonitor, time_operation
 from .losses import XTTSLoss, create_stop_targets
 
 
@@ -53,9 +52,6 @@ class XTTSTrainer:
         """
         self.config = config
         self.logger = setup_logging()
-        
-        # Initialize performance monitoring
-        self.performance_monitor = PerformanceMonitor()
         
         # Configure GPUs before any TensorFlow device queries
         try:
@@ -385,10 +381,6 @@ class XTTSTrainer:
         
         self.logger.info(f"Training samples: {self.train_dataset_size}")
         self.logger.info(f"Validation samples: {self.val_dataset_size}")
-        
-        # Log data loading performance
-        self.logger.info("Data loading performance:")
-        self.logger.info(train_ljs.get_performance_report())
         
         # Expose datasets for external training loops (e.g., notebooks)
         self.train_dataset = train_tf_dataset
@@ -894,8 +886,6 @@ class XTTSTrainer:
         self.logger.info(f"Starting training for {epochs} epochs")
         self.logger.info(f"Current step: {self.current_step}")
         
-        # Start performance monitoring
-        self.performance_monitor.start_monitoring()
         
         # Determine steps per epoch if not provided
         if steps_per_epoch is None:
@@ -929,10 +919,6 @@ class XTTSTrainer:
             # Log epoch results
             self.logger.info(f"Epoch {epoch}: Train Loss = {train_losses['total_loss']:.4f}")
             
-            # Performance monitoring report every 10 epochs
-            if epoch % 10 == 0:
-                self.logger.info("Performance Report:")
-                self.logger.info(self.performance_monitor.get_summary_report())
             
             # Wandb logging
             if self.config.training.use_wandb:
@@ -945,12 +931,6 @@ class XTTSTrainer:
                     else self.optimizer.learning_rate
                 })
         
-        # Stop performance monitoring
-        self.performance_monitor.stop_monitoring()
-        
-        # Final performance report
-        self.logger.info("Final Performance Report:")
-        self.logger.info(self.performance_monitor.get_summary_report())
         
         self.logger.info("Training completed")
     
@@ -1009,11 +989,6 @@ class XTTSTrainer:
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
-                
-                # Log timing for performance monitoring
-                self.performance_monitor.log_step_timing(
-                    data_loading_time, compute_time, self.config.data.batch_size
-                )
                 
                 # Accumulate losses
                 for key, value in step_losses.items():
