@@ -180,7 +180,7 @@ def main():
     )
     parser.add_argument("--checkpoint-dir", default="./checkpoints", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
     parser.add_argument(
         "--grad-accum",
         type=int,
