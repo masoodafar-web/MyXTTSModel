@@ -996,8 +996,15 @@ class LJSpeechDataset:
                 if gpus and len(gpus) > 0:
                     gpu_device = '/GPU:0'
                     
-                    # Enhanced GPU prefetching with larger buffer for sustained utilization
-                    gpu_buf = max(4, int(getattr(self.config, 'prefetch_buffer_size', 8)))
+                    # Intelligent buffer sizing based on hardware and auto-tuning
+                    base_buffer = getattr(self.config, 'prefetch_buffer_size', 8)
+                    if getattr(self.config, 'auto_tune_performance', True):
+                        # Auto-scale buffer based on number of workers and GPU count
+                        worker_factor = max(1, self.config.num_workers // 8)
+                        gpu_factor = len(gpus)
+                        gpu_buf = max(6, min(20, base_buffer * worker_factor * gpu_factor))
+                    else:
+                        gpu_buf = max(4, int(base_buffer))
                     
                     # Apply GPU prefetching with automatic memory management
                     dataset = dataset.apply(
@@ -1051,8 +1058,12 @@ class LJSpeechDataset:
             # Memory optimization
             options.experimental_optimization.apply_default_optimizations = True
             
-            # Threading optimization for GPU workloads
-            options.threading.private_threadpool_size = min(12, max(4, self.config.num_workers * 2))
+            # Threading optimization for GPU workloads - more aggressive for better CPU utilization
+            options.threading.private_threadpool_size = min(16, max(6, self.config.num_workers * 2))
+            
+            # Enhanced buffer management for sustained GPU feeding
+            if hasattr(options.experimental_optimization, 'use_global_threadpool'):
+                options.experimental_optimization.use_global_threadpool = True
         
         dataset = dataset.with_options(options)
 
@@ -1070,9 +1081,14 @@ class LJSpeechDataset:
                     pass
             self._mel_mmap_cache.clear()
             
-            # Optionally clear text cache if it gets too large
-            if len(self._text_cache) > 10000:  # Arbitrary threshold
+            # Intelligent cache management - clear oldest entries if cache gets too large
+            if len(self._text_cache) > 10000:  # Threshold for memory management
+                # Keep the most recently used 5000 items (LRU-like behavior)
+                items = list(self._text_cache.items())
                 self._text_cache.clear()
+                # Keep the last 5000 items (most recently added)
+                for key, value in items[-5000:]:
+                    self._text_cache[key] = value
     
     def __del__(self):
         """Cleanup resources when dataset is destroyed."""

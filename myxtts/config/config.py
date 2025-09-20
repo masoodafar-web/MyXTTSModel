@@ -93,9 +93,9 @@ class DataConfig:
     subset_seed: int = 42
     max_text_tokens: int = 1024
 
-    # Batching and workers (increased for GPU optimization)
-    batch_size: int = 48  # Increased from 32 for better GPU utilization  
-    num_workers: int = 16  # Increased from 8 for better CPU-GPU overlap
+    # Batching and workers (optimized for better GPU utilization)
+    batch_size: int = 56  # Increased further for better GPU utilization with 80GB+ memory
+    num_workers: int = 18  # Increased for better CPU-GPU overlap
 
     # Data pipeline performance (optimized for GPU)
     prefetch_buffer_size: int = 12  # Increased from 8 for sustained GPU utilization
@@ -123,6 +123,7 @@ class DataConfig:
     use_tf_native_loading: bool = True  # Use TensorFlow-native file loading instead of Python functions
     enhanced_gpu_prefetch: bool = True  # Enable advanced GPU prefetching strategies
     optimize_cpu_gpu_overlap: bool = True  # Enable maximum CPU-GPU overlap optimizations
+    auto_tune_performance: bool = True  # Automatically adjust performance settings based on hardware
 
     def __post_init__(self):
         if self.text_cleaners is None:
