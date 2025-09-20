@@ -68,11 +68,12 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
         Dictionary with recommended configuration settings
     """
     if gpu_memory_mb >= 20000:  # 20GB+ (RTX 4090, A100, etc.)
+        # Plenty of headroom: favour large per-step batches to keep the GPU busy.
         return {
-            'batch_size': 4,
-            'gradient_accumulation_steps': 8,
-            'max_attention_sequence_length': 512,
-            'max_memory_fraction': 0.85,
+            'batch_size': 48,
+            'gradient_accumulation_steps': 1,
+            'max_attention_sequence_length': 768,
+            'max_memory_fraction': 0.90,
             'enable_gradient_checkpointing': False,
             'text_encoder_dim': 512,
             'decoder_dim': 1024,
@@ -80,35 +81,35 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
         }
     elif gpu_memory_mb >= 12000:  # 12-20GB (RTX 3080 Ti, RTX 4070 Ti, etc.)
         return {
-            'batch_size': 2,
-            'gradient_accumulation_steps': 16,
+            'batch_size': 32,
+            'gradient_accumulation_steps': 1,
             'max_attention_sequence_length': 512,
-            'max_memory_fraction': 0.75,
+            'max_memory_fraction': 0.85,
             'enable_gradient_checkpointing': True,
-            'text_encoder_dim': 256,
-            'decoder_dim': 512,
+            'text_encoder_dim': 384,
+            'decoder_dim': 768,
             'description': "Mid-range GPU (12-20GB)"
         }
     elif gpu_memory_mb >= 8000:   # 8-12GB (RTX 3070, RTX 4060 Ti, etc.)
         return {
-            'batch_size': 1,
-            'gradient_accumulation_steps': 32,
+            'batch_size': 16,
+            'gradient_accumulation_steps': 2,
+            'max_attention_sequence_length': 384,
+            'max_memory_fraction': 0.75,
+            'enable_gradient_checkpointing': True,
+            'text_encoder_dim': 256,
+            'decoder_dim': 512,
+            'description': "Entry-level GPU (8-12GB)"
+        }
+    else:  # <8GB
+        return {
+            'batch_size': 8,
+            'gradient_accumulation_steps': 4,
             'max_attention_sequence_length': 256,
             'max_memory_fraction': 0.65,
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 128,
             'decoder_dim': 256,
-            'description': "Entry-level GPU (8-12GB)"
-        }
-    else:  # <8GB
-        return {
-            'batch_size': 1,
-            'gradient_accumulation_steps': 64,
-            'max_attention_sequence_length': 128,
-            'max_memory_fraction': 0.55,
-            'enable_gradient_checkpointing': True,
-            'text_encoder_dim': 64,
-            'decoder_dim': 128,
             'description': "Low-memory GPU (<8GB)"
         }
 

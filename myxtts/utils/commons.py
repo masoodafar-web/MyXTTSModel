@@ -157,26 +157,29 @@ def get_device() -> str:
         logger.info("🔄 Falling back to CPU mode (training will be much slower)")
         return "CPU"
     
+    # Try to enable memory growth without treating failures as fatal. TensorFlow raises
+    # RuntimeError once GPUs are initialized, but that doesn't mean the device is unusable.
+    for gpu in gpus:
+        try:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        except RuntimeError as e:
+            logger.debug(f"Memory growth already configured for {gpu}: {e}")
+        except Exception as e:  # pragma: no cover - keep GPU probing resilient
+            logger.warning(f"Could not adjust memory growth for {gpu}: {e}")
+
     # Test GPU functionality
     try:
-        # Enable memory growth to avoid allocating all GPU memory at once
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
-        
-        # Test GPU with actual computation
         with tf.device('/GPU:0'):
             test_tensor = tf.constant([1.0])
             result = test_tensor + 1
-            # Force execution to verify GPU works
-            _ = result.numpy()
-        
-        # Set up logical GPU devices for optimal utilization
+            _ = result.numpy()  # Force execution to verify GPU works
+
         logical_gpus = tf.config.list_logical_devices('GPU')
-        logger.info(f"✅ GPU device available and functional")
+        logger.info("✅ GPU device available and functional")
         logger.info(f"   Physical GPUs: {len(gpus)}, Logical GPUs: {len(logical_gpus)}")
         logger.info(f"   Primary GPU: {gpus[0]}")
         return "GPU"
-        
+
     except Exception as e:
         logger.error(f"❌ GPU device detected but not functional: {e}")
         logger.info("🔧 Common GPU Issues:")

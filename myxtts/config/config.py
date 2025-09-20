@@ -144,7 +144,9 @@ class TrainingConfig:
     weight_decay: float = 1e-6
     gradient_clip_norm: float = 1.0
     gradient_accumulation_steps: int = 1
-    
+    max_memory_fraction: float = 0.9
+    enable_memory_cleanup: bool = True
+
     # Optimizer
     optimizer: str = "adamw"
     beta1: float = 0.9
