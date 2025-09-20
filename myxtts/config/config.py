@@ -147,6 +147,9 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1
     max_memory_fraction: float = 0.9
     enable_memory_cleanup: bool = True
+    use_ema: bool = True
+    ema_decay: float = 0.999
+    ema_start_step: int = 0
 
     # Optimizer
     optimizer: str = "adamw"

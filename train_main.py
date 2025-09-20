@@ -95,6 +95,9 @@ def build_config(
         gradient_clip_norm=1.0,
         gradient_accumulation_steps=grad_accum,
         max_memory_fraction=max_memory_fraction,
+        use_ema=True,
+        ema_decay=0.999,
+        ema_start_step=1000,
 
         warmup_steps=2000,
         scheduler="noam",

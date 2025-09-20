@@ -7,7 +7,7 @@ data loading, model training, validation, and checkpointing.
 
 import os
 import time
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, List
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -79,7 +79,11 @@ class XTTSTrainer:
         # Memory optimization settings
         self.gradient_accumulation_steps = getattr(config.training, 'gradient_accumulation_steps', 1)
         self.enable_memory_cleanup = getattr(config.training, 'enable_memory_cleanup', True)
-        
+        self.use_ema = bool(getattr(config.training, 'use_ema', False))
+        self.ema_decay = float(getattr(config.training, 'ema_decay', 0.999))
+        self.ema_start_step = int(getattr(config.training, 'ema_start_step', 0))
+        self._ema_weights: List[tf.Variable] = []
+
         if self.gradient_accumulation_steps > 1:
             self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
         
@@ -169,8 +173,19 @@ class XTTSTrainer:
                 attention_loss_weight=config.training.kl_loss_weight,
                 duration_loss_weight=config.training.duration_loss_weight
             )
-        
+
+            if self.use_ema:
+                self._ema_weights = [
+                    tf.Variable(var.read_value(), trainable=False, name=f"ema_{var.name.replace(':', '_')}")
+                    for var in self.model.trainable_variables
+                ]
+
         # Initialize learning rate scheduler
+        if self.use_ema:
+            self.logger.info(
+                f"EMA enabled (decay={self.ema_decay}, start_step={self.ema_start_step})"
+            )
+            self._sync_ema_weights()
         self.lr_scheduler = self._create_lr_scheduler()
         
         # Training state
@@ -232,7 +247,7 @@ class XTTSTrainer:
     def _create_lr_scheduler(self) -> Optional[tf.keras.optimizers.schedules.LearningRateSchedule]:
         """Create learning rate scheduler."""
         config = self.config.training
-        
+
         if config.scheduler == "noam":
             model_dim = max(1, int(getattr(self.config.model, 'text_encoder_dim', 1)))
             warmup = max(1, int(getattr(config, 'warmup_steps', 1)))
@@ -257,6 +272,34 @@ class XTTSTrainer:
             )
         else:
             return None
+
+    def _sync_ema_weights(self):
+        if not self.use_ema or not self._ema_weights:
+            return
+        for ema_var, model_var in zip(self._ema_weights, self.model.trainable_variables):
+            ema_var.assign(model_var)
+
+    def _maybe_update_ema(self):
+        if not self.use_ema or not self._ema_weights:
+            return
+        if (self.current_step + 1) < self.ema_start_step:
+            return
+        for ema_var, model_var in zip(self._ema_weights, self.model.trainable_variables):
+            ema_var.assign(self.ema_decay * ema_var + (1.0 - self.ema_decay) * model_var)
+
+    def _swap_to_ema_weights(self):
+        if not self.use_ema or not self._ema_weights:
+            return None
+        backup = [tf.identity(var) for var in self.model.trainable_variables]
+        for var, ema_var in zip(self.model.trainable_variables, self._ema_weights):
+            var.assign(ema_var)
+        return backup
+
+    def _restore_from_backup(self, backup):
+        if backup is None:
+            return
+        for var, value in zip(self.model.trainable_variables, backup):
+            var.assign(value)
     
     def prepare_datasets(
         self,
@@ -526,6 +569,7 @@ class XTTSTrainer:
 
                 # Apply gradients (LossScaleOptimizer will unscale internally if used)
                 self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+                self._maybe_update_ema()
                 
                 # Get individual losses
                 individual_losses = self.criterion.get_losses()
@@ -807,6 +851,7 @@ class XTTSTrainer:
         if accumulated_gradients is not None:
             accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=1.0)
             self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
+            self._maybe_update_ema()
         
         # Average losses across micro-steps
         for key in list(total_losses.keys()):
@@ -1181,30 +1226,34 @@ class XTTSTrainer:
     
     def _validate_epoch(self, val_dataset: tf.data.Dataset) -> Dict[str, float]:
         """Validate for one epoch."""
+        backup_weights = self._swap_to_ema_weights()
         val_losses = {}
         num_batches = 0
         
-        for batch in tqdm(val_dataset, desc="Validation"):
-            text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
-            
-            # Use strategy-backed validation when strategy provides replica context
-            if (
-                getattr(self.config.training, 'multi_gpu', False)
-                and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-            ):
-                step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
-            else:
-                step_losses = self.validation_step(
-                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                )
-            
-            # Accumulate losses
-            for key, value in step_losses.items():
-                if key not in val_losses:
-                    val_losses[key] = 0.0
-                val_losses[key] += float(value)
-            
-            num_batches += 1
+        try:
+            for batch in tqdm(val_dataset, desc="Validation"):
+                text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
+                
+                # Use strategy-backed validation when strategy provides replica context
+                if (
+                    getattr(self.config.training, 'multi_gpu', False)
+                    and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+                ):
+                    step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
+                else:
+                    step_losses = self.validation_step(
+                        text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                    )
+                
+                # Accumulate losses
+                for key, value in step_losses.items():
+                    if key not in val_losses:
+                        val_losses[key] = 0.0
+                    val_losses[key] += float(value)
+                
+                num_batches += 1
+        finally:
+            self._restore_from_backup(backup_weights)
         
         # Average losses
         if num_batches > 0:
@@ -1225,15 +1274,19 @@ class XTTSTrainer:
             f"checkpoint_{checkpoint_name}"
         )
         
-        save_checkpoint(
-            self.model,
-            self.optimizer,
-            self.config.training.checkpoint_dir,
-            self.current_step,
-            self.best_val_loss,
-            config=self.config.to_dict()
-        )
-        
+        backup_weights = self._swap_to_ema_weights()
+        try:
+            save_checkpoint(
+                self.model,
+                self.optimizer,
+                self.config.training.checkpoint_dir,
+                self.current_step,
+                self.best_val_loss,
+                config=self.config.to_dict()
+            )
+        finally:
+            self._restore_from_backup(backup_weights)
+
         self.logger.info(f"Saved checkpoint: {checkpoint_path}")
     
     # Public helpers for notebooks / external loops
@@ -1245,10 +1298,6 @@ class XTTSTrainer:
         base = checkpoint_path
         checkpoint_dir = os.path.dirname(base) or "."
         os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        # Save model weights
-        self.model.save_weights(f"{base}_model.weights.h5")
-        
         # Save optimizer state (robust to wrappers like LossScaleOptimizer)
         def _unwrap(opt):
             for attr in ("optimizer", "inner_optimizer", "base_optimizer"):
@@ -1280,28 +1329,35 @@ class XTTSTrainer:
                 return [v.numpy() for v in vars_list]
             except Exception:
                 return []
-
-        try:
-            opt_weights = _get_opt_weights(self.optimizer)
-            if not opt_weights:
-                dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
-                self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
-                opt_weights = _get_opt_weights(self.optimizer)
-        except Exception:
-            opt_weights = []
-        import pickle
-        with open(f"{base}_optimizer.pkl", "wb") as f:
-            pickle.dump(opt_weights, f)
         
-        # Save metadata
-        import json
-        metadata = {
-            "step": int(self.current_step),
-            "loss": float(self.best_val_loss) if np.isfinite(self.best_val_loss) else None,
-            "config": self.config.to_dict() if hasattr(self.config, 'to_dict') else None,
-        }
-        with open(f"{base}_metadata.json", "w") as f:
-            json.dump(metadata, f, indent=2)
+        backup_weights = self._swap_to_ema_weights()
+        try:
+            # Save model weights
+            self.model.save_weights(f"{base}_model.weights.h5")
+            
+            try:
+                opt_weights = _get_opt_weights(self.optimizer)
+                if not opt_weights:
+                    dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
+                    self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
+                    opt_weights = _get_opt_weights(self.optimizer)
+            except Exception:
+                opt_weights = []
+            import pickle
+            with open(f"{base}_optimizer.pkl", "wb") as f:
+                pickle.dump(opt_weights, f)
+            
+            # Save metadata
+            import json
+            metadata = {
+                "step": int(self.current_step),
+                "loss": float(self.best_val_loss) if np.isfinite(self.best_val_loss) else None,
+                "config": self.config.to_dict() if hasattr(self.config, 'to_dict') else None,
+            }
+            with open(f"{base}_metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+        finally:
+            self._restore_from_backup(backup_weights)
         
         self.logger.info(f"Saved checkpoint to: {base}")
         return base
@@ -1346,6 +1402,8 @@ class XTTSTrainer:
         
         self.logger.info(f"Resumed from checkpoint: {checkpoint_path}")
         self.logger.info(f"Step: {self.current_step}, Best loss: {self.best_val_loss}")
+        if self.use_ema:
+            self._sync_ema_weights()
 
 
 class NoamSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
