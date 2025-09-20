@@ -1016,8 +1016,14 @@ class LJSpeechDataset:
                         except Exception:
                             pass  # Ignore if already configured
                         
+                    # Allow tf.data to further tune buffering on host side
+                    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
         except Exception as e:
             print(f"Could not prefetch to GPU: {e}")
+
+        if prefetch:
+            dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
         # CRITICAL PERFORMANCE OPTIMIZATION: Enhanced TensorFlow data pipeline options
         options = tf.data.Options()

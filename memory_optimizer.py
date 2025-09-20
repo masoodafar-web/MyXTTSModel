@@ -77,6 +77,9 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'enable_gradient_checkpointing': False,
             'text_encoder_dim': 512,
             'decoder_dim': 1024,
+            'num_workers': 16,
+            'prefetch_buffer_size': 32,
+            'shuffle_buffer_multiplier': 48,
             'description': "High-end GPU (20GB+)"
         }
     elif gpu_memory_mb >= 12000:  # 12-20GB (RTX 3080 Ti, RTX 4070 Ti, etc.)
@@ -88,6 +91,9 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 384,
             'decoder_dim': 768,
+            'num_workers': 12,
+            'prefetch_buffer_size': 24,
+            'shuffle_buffer_multiplier': 40,
             'description': "Mid-range GPU (12-20GB)"
         }
     elif gpu_memory_mb >= 8000:   # 8-12GB (RTX 3070, RTX 4060 Ti, etc.)
@@ -99,6 +105,9 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 256,
             'decoder_dim': 512,
+            'num_workers': 8,
+            'prefetch_buffer_size': 18,
+            'shuffle_buffer_multiplier': 32,
             'description': "Entry-level GPU (8-12GB)"
         }
     else:  # <8GB
@@ -110,6 +119,9 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 128,
             'decoder_dim': 256,
+            'num_workers': 4,
+            'prefetch_buffer_size': 12,
+            'shuffle_buffer_multiplier': 24,
             'description': "Low-memory GPU (<8GB)"
         }
 

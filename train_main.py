@@ -44,6 +44,8 @@ def build_config(
     max_attention_len: int = 256,
     enable_grad_checkpointing: bool = True,
     max_memory_fraction: float = 0.9,
+    prefetch_buffer_size: int = 12,
+    shuffle_buffer_multiplier: int = 30,
 ) -> XTTSConfig:
     # Model configuration (memory-optimized defaults as in notebook)
     m = ModelConfig(
@@ -135,8 +137,8 @@ def build_config(
         # Batching/workers and pipeline performance
         batch_size=batch_size,
         num_workers=num_workers,
-        prefetch_buffer_size=12,
-        shuffle_buffer_multiplier=30,
+        prefetch_buffer_size=prefetch_buffer_size,
+        shuffle_buffer_multiplier=shuffle_buffer_multiplier,
         enable_memory_mapping=True,
         cache_verification=True,
         prefetch_to_gpu=True,
@@ -180,7 +182,7 @@ def main():
     )
     parser.add_argument("--checkpoint-dir", default="./checkpoints", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=128, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument(
         "--grad-accum",
         type=int,
@@ -208,6 +210,7 @@ def main():
 
     batch_flag = any(arg.startswith("--batch-size") for arg in sys.argv[1:])
     grad_flag = any(arg.startswith("--grad-accum") for arg in sys.argv[1:])
+    workers_flag = any(arg.startswith("--num-workers") for arg in sys.argv[1:])
 
     recommended = None
     if gpu_available:
@@ -223,6 +226,12 @@ def main():
         args.batch_size = recommended['batch_size']
         logger.info(
             f"Auto-selected batch_size={args.batch_size} based on GPU category: {recommended['description']}"
+        )
+
+    if recommended and not workers_flag:
+        args.num_workers = recommended.get('num_workers', args.num_workers)
+        logger.info(
+            f"Auto-selected num_workers={args.num_workers} based on GPU category: {recommended['description']}"
         )
 
     # Auto-tune gradient accumulation for better GPU saturation when not provided
@@ -250,6 +259,8 @@ def main():
     max_attention_len = recommended['max_attention_sequence_length'] if recommended else 256
     enable_grad_ckpt = recommended['enable_gradient_checkpointing'] if recommended else True
     max_memory_fraction = recommended['max_memory_fraction'] if recommended else 0.9
+    prefetch_buffer_size = recommended['prefetch_buffer_size'] if recommended else 12
+    shuffle_buffer_multiplier = recommended['shuffle_buffer_multiplier'] if recommended else 30
 
     config = build_config(
         batch_size=args.batch_size,
@@ -263,6 +274,8 @@ def main():
         max_attention_len=max_attention_len,
         enable_grad_checkpointing=enable_grad_ckpt,
         max_memory_fraction=max_memory_fraction,
+        prefetch_buffer_size=prefetch_buffer_size,
+        shuffle_buffer_multiplier=shuffle_buffer_multiplier,
     )
 
     # Instantiate model and trainer (optionally resume)
