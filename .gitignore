@@ -136,3 +136,6 @@ wandb/
 *.json
 models/
 experiments/=*
+
+# Test files (temporary)
+test_train_main_gpu_improvements.py
