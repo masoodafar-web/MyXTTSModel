@@ -88,29 +88,104 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
     except Exception as e:
         logger.debug(f"GPU configuration note: {e}")
 
+def check_gpu_setup():
+    """
+    Comprehensive GPU setup validation with actionable feedback.
+    
+    Returns:
+        Tuple of (success: bool, device: str, recommendations: List[str])
+    """
+    logger = logging.getLogger("MyXTTS")
+    recommendations = []
+    
+    # Check 1: NVIDIA driver
+    try:
+        import subprocess
+        result = subprocess.run(['nvidia-smi'], capture_output=True, text=True, timeout=5)
+        if result.returncode != 0:
+            recommendations.append("Install NVIDIA GPU drivers (visit: https://www.nvidia.com/drivers)")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        recommendations.append("NVIDIA drivers not found - install from https://www.nvidia.com/drivers")
+    
+    # Check 2: CUDA availability in TensorFlow
+    if not tf.test.is_built_with_cuda():
+        recommendations.append("TensorFlow not built with CUDA - install tensorflow[and-cuda] or tensorflow-gpu")
+    
+    # Check 3: GPU devices
+    gpus = tf.config.list_physical_devices('GPU')
+    if not gpus:
+        recommendations.append("No GPU devices detected by TensorFlow")
+        recommendations.append("Verify: 1) GPU drivers installed, 2) CUDA toolkit installed, 3) TensorFlow-GPU installed")
+    
+    # Check 4: GPU functionality
+    device = "CPU"
+    try:
+        if gpus:
+            with tf.device('/GPU:0'):
+                test_tensor = tf.constant([[1.0, 2.0], [3.0, 4.0]])
+                result = tf.matmul(test_tensor, test_tensor)
+                _ = result.numpy()  # Force execution
+            device = "GPU"
+            logger.info("✅ GPU setup validation passed")
+    except Exception as e:
+        recommendations.append(f"GPU computation failed: {str(e)}")
+        recommendations.append("Try: nvidia-smi to check GPU status")
+    
+    success = device == "GPU" and len(recommendations) == 0
+    return success, device, recommendations
+
+
 def get_device() -> str:
     """
-    Get the appropriate device for computation.
+    Get the appropriate device for computation with detailed GPU availability checking.
     
     Returns:
         Device string ("GPU" or "CPU")
     """
     logger = logging.getLogger("MyXTTS")
+    
+    # Check for physical GPU devices
     gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        try:
-            # Enable memory growth to avoid allocating all GPU memory at once
-            for gpu in gpus:
-                tf.config.experimental.set_memory_growth(gpu, True)
-            
-            # Set up logical GPU devices for optimal utilization
-            logical_gpus = tf.config.list_logical_devices('GPU')
-            logger.debug(f"Physical GPUs: {len(gpus)}, Logical GPUs: {len(logical_gpus)}")
-            return "GPU"
-        except RuntimeError as e:
-            logger.debug(f"GPU setup note: {e}")
-            return "CPU"
-    else:
+    if not gpus:
+        logger.warning("❌ No GPU devices detected")
+        logger.info("📋 GPU Setup Required:")
+        logger.info("   1. Install NVIDIA GPU drivers (version 450.80.02+)")
+        logger.info("   2. Install CUDA toolkit (version 11.2+)")
+        logger.info("   3. Install cuDNN (version 8.1+)")
+        logger.info("   4. Verify with: nvidia-smi")
+        logger.info("   5. Install TensorFlow-GPU: pip install tensorflow[and-cuda]")
+        logger.info("🔄 Falling back to CPU mode (training will be much slower)")
+        return "CPU"
+    
+    # Test GPU functionality
+    try:
+        # Enable memory growth to avoid allocating all GPU memory at once
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        
+        # Test GPU with actual computation
+        with tf.device('/GPU:0'):
+            test_tensor = tf.constant([1.0])
+            result = test_tensor + 1
+            # Force execution to verify GPU works
+            _ = result.numpy()
+        
+        # Set up logical GPU devices for optimal utilization
+        logical_gpus = tf.config.list_logical_devices('GPU')
+        logger.info(f"✅ GPU device available and functional")
+        logger.info(f"   Physical GPUs: {len(gpus)}, Logical GPUs: {len(logical_gpus)}")
+        logger.info(f"   Primary GPU: {gpus[0]}")
+        return "GPU"
+        
+    except Exception as e:
+        logger.error(f"❌ GPU device detected but not functional: {e}")
+        logger.info("🔧 Common GPU Issues:")
+        logger.info("   • CUDA driver version mismatch with TensorFlow")
+        logger.info("   • Insufficient GPU memory available")
+        logger.info("   • TensorFlow-GPU not properly installed")
+        logger.info("   • GPU is being used by another process")
+        logger.info("   • Virtual environment missing GPU libraries")
+        logger.info("🔄 Falling back to CPU mode")
         return "CPU"
 
 
