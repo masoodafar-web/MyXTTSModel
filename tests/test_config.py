@@ -31,7 +31,7 @@ class TestConfig(unittest.TestCase):
         
         self.assertEqual(config.sample_rate, 22050)
         self.assertEqual(config.language, "en")
-        self.assertEqual(config.batch_size, 32)
+        self.assertEqual(config.batch_size, 56)  # GPU-optimized default
         self.assertTrue(config.normalize_audio)
         self.assertIsInstance(config.text_cleaners, list)
         
@@ -218,7 +218,7 @@ class TestConfig(unittest.TestCase):
         
         # Should have default values
         self.assertEqual(config.training.epochs, 1000)
-        self.assertEqual(config.data.batch_size, 32)
+        self.assertEqual(config.data.batch_size, 56)  # GPU-optimized default
         self.assertEqual(config.model.text_encoder_dim, 512)
 
 

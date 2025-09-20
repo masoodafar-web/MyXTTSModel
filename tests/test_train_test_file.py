@@ -79,15 +79,15 @@ class TestTrainTestFile(unittest.TestCase):
         """Test that default configuration has expected values."""
         config = create_default_config()
         
-        # Check defaults match expected values
+        # Check defaults match expected values (updated for GPU optimizations)
         self.assertEqual(config.data.dataset_path, "./data/ljspeech")
         self.assertEqual(config.data.language, "en")
-        self.assertEqual(config.data.batch_size, 32)  # Updated default
+        self.assertEqual(config.data.batch_size, 48)  # trainTestFile GPU-optimized default
         self.assertEqual(config.training.epochs, 100)
         self.assertEqual(config.training.learning_rate, 1e-4)
         self.assertEqual(config.model.sample_rate, 22050)
         self.assertEqual(config.training.checkpoint_dir, "./checkpoints")
-        self.assertEqual(config.data.preprocessing_mode, "auto")  # New default
+        self.assertEqual(config.data.preprocessing_mode, "precompute")  # GPU-optimized default
 
 
 if __name__ == '__main__':

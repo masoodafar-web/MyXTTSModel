@@ -22,7 +22,7 @@ class TestPreprocessingMode(unittest.TestCase):
     def test_data_config_preprocessing_mode_default(self):
         """Test that DataConfig has the correct default preprocessing mode."""
         config = DataConfig()
-        self.assertEqual(config.preprocessing_mode, "auto")
+        self.assertEqual(config.preprocessing_mode, "precompute")  # GPU-optimized default
     
     def test_data_config_preprocessing_mode_validation(self):
         """Test that DataConfig validates preprocessing mode values."""
