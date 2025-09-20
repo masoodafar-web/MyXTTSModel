@@ -169,12 +169,55 @@ def train_model(config: XTTSConfig, resume_checkpoint: Optional[str] = None):
     
     logger = setup_logging()
     
+    # CRITICAL: GPU Setup Validation (addresses the Persian user's issue)
+    logger.info("=" * 60)
+    logger.info("🔍 CHECKING GPU SETUP (resolving CPU usage issue)...")
+    logger.info("=" * 60)
+    
+    from myxtts.utils.commons import check_gpu_setup
+    gpu_success, device, recommendations = check_gpu_setup()
+    
+    if not gpu_success:
+        logger.error("❌ GPU SETUP ISSUES DETECTED:")
+        for i, rec in enumerate(recommendations, 1):
+            logger.error(f"   {i}. {rec}")
+        
+        logger.error("")
+        logger.error("🚨 THIS IS WHY CPU IS BEING USED INSTEAD OF GPU!")
+        logger.error("   The system cannot access GPU for computation.")
+        logger.error("")
+        logger.error("🔧 IMMEDIATE SOLUTIONS:")
+        logger.error("   • For local setup: Install NVIDIA drivers + CUDA + TensorFlow-GPU")
+        logger.error("   • For cloud/server: Enable GPU instance or add GPU acceleration")
+        logger.error("   • For development: Use CPU mode temporarily (much slower)")
+        logger.error("")
+        
+        # Ask user if they want to continue with CPU
+        try:
+            import sys
+            if sys.stdin.isatty():  # Interactive terminal
+                response = input("Continue with CPU training (much slower)? [y/N]: ").lower()
+                if response not in ['y', 'yes']:
+                    logger.info("Training cancelled. Fix GPU setup and try again.")
+                    return
+            else:
+                logger.warning("🔄 Non-interactive mode: proceeding with CPU (very slow!)")
+        except (KeyboardInterrupt, EOFError):
+            logger.info("\nTraining cancelled.")
+            return
+    else:
+        logger.info("✅ GPU setup validation successful!")
+        logger.info(f"   Using device: {device}")
+    
+    logger.info("=" * 60)
+    
     logger.info("Starting XTTS training...")
     logger.info(f"Data path: {config.data.dataset_path}")
     logger.info(f"Language: {config.data.language}")
     logger.info(f"Batch size: {config.data.batch_size}")
     logger.info(f"Epochs: {config.training.epochs}")
     logger.info(f"Learning rate: {config.training.learning_rate}")
+    logger.info(f"Compute device: {device}")
     
     # Create model
     logger.info("Creating XTTS model...")
