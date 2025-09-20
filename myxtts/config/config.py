@@ -91,6 +91,7 @@ class DataConfig:
     train_subset_fraction: float = 1.0  # 0-1 fraction of train to use
     eval_subset_fraction: float = 1.0   # 0-1 fraction of val/test to use
     subset_seed: int = 42
+    max_text_tokens: int = 1024
 
     # Batching and workers (increased for GPU optimization)
     batch_size: int = 48  # Increased from 32 for better GPU utilization  

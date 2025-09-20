@@ -68,11 +68,11 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
         Dictionary with recommended configuration settings
     """
     if gpu_memory_mb >= 20000:  # 20GB+ (RTX 4090, A100, etc.)
-        # Plenty of headroom: favour large per-step batches to keep the GPU busy.
+        # Plenty of headroom: favour large per-step batches while keeping decoder length manageable.
         return {
             'batch_size': 48,
             'gradient_accumulation_steps': 1,
-            'max_attention_sequence_length': 768,
+            'max_attention_sequence_length': 512,
             'max_memory_fraction': 0.90,
             'enable_gradient_checkpointing': False,
             'text_encoder_dim': 512,

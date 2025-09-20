@@ -122,6 +122,7 @@ def build_config(
         train_split=0.9,
         val_split=0.1,
         subset_seed=42,
+        max_text_tokens=max_attention_len,
 
         # Audio/text processing
         sample_rate=22050,
@@ -139,7 +140,7 @@ def build_config(
         enable_memory_mapping=True,
         cache_verification=True,
         prefetch_to_gpu=True,
-        max_mel_frames=1024,
+        max_mel_frames=max_attention_len,
         enable_xla=True,
         enable_tensorrt=False,
         mixed_precision=True,

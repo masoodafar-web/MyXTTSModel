@@ -831,96 +831,51 @@ class LJSpeechDataset:
                 shuffle_buffer_size = min(len(token_paths), max(1000, batch_size * buffer_size_multiplier))
                 ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
 
-            # CRITICAL OPTIMIZATION: Pure TensorFlow file loading without Python functions
-            # This eliminates CPU bottlenecks and enables proper GPU utilization
-            def _load_from_cache_optimized_tf_native(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor, 
-                                                     audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
-                """
-                TensorFlow-native cache loading for maximum GPU utilization.
-                Eliminates Python function calls that create CPU bottlenecks.
-                """
+            # Optimized loading using numpy to respect real .npy headers while staying inside tf.data
+            max_tokens = int(getattr(self.config, 'max_text_tokens', 0) or 0)
+
+            def _load_from_cache_numpy(tok_path, mel_path):
+                tok_path = tok_path.decode('utf-8')
+                mel_path = mel_path.decode('utf-8')
                 try:
-                    # PRAGMATIC TF-NATIVE APPROACH: Graceful handling for missing/corrupted files
-                    # This maintains GPU optimization while providing robust fallback
-                    
-                    # Check if files exist first
-                    tok_exists = tf.io.gfile.exists(tok_path_t)
-                    mel_exists = tf.io.gfile.exists(mel_path_t)
-                    
-                    def load_valid_files():
-                        # Load token cache - try standard .npy header offset
-                        tok_raw = tf.io.read_file(tok_path_t)
-                        tok_file_size = tf.shape(tok_raw)[0]
-                        
-                        # Most .npy files have ~128 byte headers, use safe offset
-                        tok_data = tf.cond(
-                            tf.greater(tok_file_size, 128),
-                            lambda: tf.io.decode_raw(tok_raw[128:], tf.int32),
-                            lambda: tf.constant([0], dtype=tf.int32)
-                        )
-                        
-                        # Load mel cache with similar approach
-                        mel_raw = tf.io.read_file(mel_path_t)
-                        mel_file_size = tf.shape(mel_raw)[0]
-                        
-                        mel_data = tf.cond(
-                            tf.greater(mel_file_size, 128),
-                            lambda: tf.io.decode_raw(mel_raw[128:], tf.float32),
-                            lambda: tf.zeros([self.audio_processor.n_mels], dtype=tf.float32)
-                        )
-                        
-                        # Reshape mel data safely
-                        n_mels = self.audio_processor.n_mels
-                        mel_flat_size = tf.shape(mel_data)[0]
-                        mel_time_steps = tf.maximum(1, mel_flat_size // n_mels)
-                        
-                        # Create valid mel spectrogram
-                        valid_mel_size = mel_time_steps * n_mels
-                        mel_spec = tf.reshape(mel_data[:valid_mel_size], [mel_time_steps, n_mels])
-                        
-                        return tok_data, mel_spec, tf.shape(tok_data)[0], mel_time_steps
-                    
-                    def load_dummy_data():
-                        # Return minimal valid data when files are missing
-                        dummy_tokens = tf.constant([0], dtype=tf.int32)
-                        dummy_mel = tf.zeros([1, self.audio_processor.n_mels], dtype=tf.float32)
-                        return dummy_tokens, dummy_mel, tf.constant(1, dtype=tf.int32), tf.constant(1, dtype=tf.int32)
-                    
-                    # Use conditional execution based on file existence
-                    return tf.cond(
-                        tf.logical_and(tok_exists, mel_exists),
-                        load_valid_files,
-                        load_dummy_data
-                    )
-                    
+                    if os.path.exists(tok_path):
+                        tokens = np.load(tok_path)
+                    else:
+                        tokens = np.zeros([1], dtype=np.int32)
+                    if os.path.exists(mel_path):
+                        mel = np.load(mel_path)
+                    else:
+                        mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
                 except Exception:
-                    # CRITICAL FIX: Use TensorFlow-native dummy data instead of Python functions
-                    # This eliminates the CPU bottleneck completely
-                    dummy_tokens = tf.constant([0], dtype=tf.int32)
-                    dummy_mel = tf.zeros([1, self.audio_processor.n_mels], dtype=tf.float32)
-                    dummy_text_len = tf.constant(1, dtype=tf.int32)
-                    dummy_mel_len = tf.constant(1, dtype=tf.int32)
-                    return dummy_tokens, dummy_mel, dummy_text_len, dummy_mel_len
-            
-            # Try TensorFlow-native loading first, fallback to Python if needed
-            def _load_from_cache_optimized(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor, 
+                    tokens = np.zeros([1], dtype=np.int32)
+                    mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
+                if max_tokens > 0 and tokens.shape[0] > max_tokens:
+                    tokens = tokens[:max_tokens]
+                text_len = np.array([tokens.shape[0]], dtype=np.int32)
+
+                mel_frames_cap = getattr(self.config, 'max_mel_frames', None)
+                if mel_frames_cap and mel.shape[0] > mel_frames_cap:
+                    mel = mel[:mel_frames_cap]
+                mel_len = np.array([mel.shape[0]], dtype=np.int32)
+                return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
+
+            def _load_from_cache_optimized(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor,
                                           audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
-                
-                # Check if TensorFlow-native loading is enabled
-                use_tf_native = getattr(self.config, 'use_tf_native_loading', True)
-                
-                if use_tf_native:
-                    # TF-native loading handles missing files with dummy data for sustained GPU utilization
-                    return _load_from_cache_optimized_tf_native(tok_path_t, mel_path_t, audio_path_t, norm_text_t)
-                
-                # CRITICAL FIX: Always use TF-native loading when enabled to avoid CPU bottleneck
-                # The old py_function fallback was causing the 4% GPU utilization issue
-                return _load_from_cache_optimized_tf_native(tok_path_t, mel_path_t, audio_path_t, norm_text_t)
+                tokens, mel, text_len, mel_len = tf.numpy_function(
+                    func=_load_from_cache_numpy,
+                    inp=[tok_path_t, mel_path_t],
+                    Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
+                )
+                tokens.set_shape([None])
+                mel.set_shape([None, self.audio_processor.n_mels])
+                text_len.set_shape([1])
+                mel_len.set_shape([1])
+                return tokens, mel, tf.squeeze(text_len, axis=0), tf.squeeze(mel_len, axis=0)
 
             # Map with parallel processing
             dataset = ds.map(
                 _load_from_cache_optimized, 
-                num_parallel_calls=num_parallel_calls,
+                num_parallel_calls=tf.data.AUTOTUNE,
                 deterministic=False  # Allow non-deterministic for better performance
             )
 
