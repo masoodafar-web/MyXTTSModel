@@ -652,3 +652,70 @@ class EarlyStopping:
             return True
         
         return False
+
+
+def auto_tune_performance_settings(config):
+    """
+    Automatically tune performance settings based on available hardware.
+    
+    Args:
+        config: Configuration object to modify
+    
+    Returns:
+        Modified configuration with optimized settings
+    """
+    import psutil
+    
+    logger = logging.getLogger("MyXTTS")
+    
+    try:
+        # Get system information
+        cpu_count = psutil.cpu_count(logical=True)
+        memory_gb = psutil.virtual_memory().total / (1024**3)
+        
+        # Get GPU information if available
+        gpu_count = 0
+        gpu_memory_gb = 0
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            gpu_count = len(gpus)
+            if gpu_count > 0:
+                # Try to get GPU memory info
+                try:
+                    gpu_memory_info = tf.config.experimental.get_memory_info('GPU:0')
+                    gpu_memory_gb = gpu_memory_info.get('current', 8*1024**3) / (1024**3)
+                except:
+                    gpu_memory_gb = 8  # Default assumption
+        except:
+            pass
+        
+        # Auto-tune settings
+        if hasattr(config, 'data'):
+            # Optimize batch size based on available memory
+            if gpu_memory_gb >= 24:
+                config.data.batch_size = min(64, max(32, config.data.batch_size))
+            elif gpu_memory_gb >= 12:
+                config.data.batch_size = min(48, max(24, config.data.batch_size))
+            else:
+                config.data.batch_size = min(32, max(16, config.data.batch_size))
+            
+            # Optimize number of workers based on CPU cores
+            optimal_workers = min(20, max(4, cpu_count // 2))
+            config.data.num_workers = optimal_workers
+            
+            # Optimize prefetch buffer based on memory and workers
+            config.data.prefetch_buffer_size = min(16, max(4, optimal_workers // 2))
+            
+            # Enable memory optimizations for limited memory systems
+            if memory_gb < 16:
+                config.data.enable_memory_mapping = True
+                config.data.persistent_workers = False
+            
+        logger.info(f"Auto-tuned performance settings: batch_size={getattr(config.data, 'batch_size', 'N/A')}, "
+                   f"num_workers={getattr(config.data, 'num_workers', 'N/A')}, "
+                   f"prefetch_buffer={getattr(config.data, 'prefetch_buffer_size', 'N/A')}")
+        
+    except Exception as e:
+        logger.debug(f"Auto-tuning failed, using default settings: {e}")
+    
+    return config
