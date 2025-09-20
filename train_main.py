@@ -156,8 +156,17 @@ def build_config(
 
 def main():
     parser = argparse.ArgumentParser(description="MyXTTS training-only script (config-inlined)")
-    parser.add_argument("--train-data", required=True, help="Path to train subset root (e.g., ../dataset/dataset_train)")
-    parser.add_argument("--val-data", required=True, help="Path to val subset root (e.g., ../dataset/dataset_eval)")
+    # Make dataset paths optional with sensible defaults (matching the notebook)
+    parser.add_argument(
+        "--train-data",
+        default="../dataset/dataset_train",
+        help="Path to train subset root (default: ../dataset/dataset_train)"
+    )
+    parser.add_argument(
+        "--val-data",
+        default="../dataset/dataset_eval",
+        help="Path to val subset root (default: ../dataset/dataset_eval)"
+    )
     parser.add_argument("--checkpoint-dir", default="./checkpoints", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
@@ -212,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

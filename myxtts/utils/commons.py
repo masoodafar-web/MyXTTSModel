@@ -210,6 +210,78 @@ def setup_mixed_precision():
         logger.debug(f"Could not enable mixed precision: {e}")
 
 
+def _unwrap_optimizer(optimizer):
+    """Return the underlying/base optimizer if wrapped (e.g., LossScaleOptimizer)."""
+    for attr in ("optimizer", "inner_optimizer", "base_optimizer"):
+        if hasattr(optimizer, attr):
+            try:
+                inner = getattr(optimizer, attr)
+                if inner is not None:
+                    return inner
+            except Exception:
+                pass
+    return optimizer
+
+
+def _get_optimizer_weights(optimizer):
+    """Best-effort retrieval of optimizer weights across Keras/TF variants.
+
+    Tries get_weights(); if not available, unwraps known wrappers and falls back to variables().
+    Returns a Python list (may be empty if unavailable)."""
+    # Direct
+    try:
+        return optimizer.get_weights()
+    except Exception:
+        pass
+    # Unwrap wrappers like LossScaleOptimizer
+    base = _unwrap_optimizer(optimizer)
+    if base is not optimizer:
+        try:
+            return base.get_weights()
+        except Exception:
+            pass
+    # Fallback: variables list
+    try:
+        vars_fn = getattr(base, "variables", None)
+        if callable(vars_fn):
+            vars_list = vars_fn()
+        else:
+            vars_list = getattr(base, "weights", [])
+        return [v.numpy() for v in vars_list]
+    except Exception:
+        return []
+
+
+def _set_optimizer_weights(optimizer, weights) -> bool:
+    """Best-effort setter for optimizer weights. Returns True on success."""
+    # Direct
+    try:
+        optimizer.set_weights(weights)
+        return True
+    except Exception:
+        pass
+    # Unwrap
+    base = _unwrap_optimizer(optimizer)
+    if base is not optimizer:
+        try:
+            base.set_weights(weights)
+            return True
+        except Exception:
+            pass
+    # Fallback: assign to variables
+    try:
+        vars_fn = getattr(base, "variables", None)
+        if callable(vars_fn):
+            vars_list = vars_fn()
+        else:
+            vars_list = getattr(base, "weights", [])
+        for v, w in zip(vars_list, weights):
+            v.assign(w)
+        return True
+    except Exception:
+        return False
+
+
 def save_checkpoint(
     model: tf.keras.Model,
     optimizer: tf.keras.optimizers.Optimizer,
@@ -241,8 +313,16 @@ def save_checkpoint(
     # Save model weights
     model.save_weights(f"{checkpoint_path}_model.weights.h5")
     
-    # Save optimizer state
-    optimizer_weights = optimizer.get_weights()
+    # Save optimizer state (robust to wrappers like LossScaleOptimizer)
+    try:
+        optimizer_weights = _get_optimizer_weights(optimizer)
+        # Ensure optimizer is built if empty
+        if not optimizer_weights:
+            dummy_grads = [tf.zeros_like(var) for var in model.trainable_variables]
+            optimizer.apply_gradients(zip(dummy_grads, model.trainable_variables))
+            optimizer_weights = _get_optimizer_weights(optimizer)
+    except Exception:
+        optimizer_weights = []
     with open(f"{checkpoint_path}_optimizer.pkl", "wb") as f:
         pickle.dump(optimizer_weights, f)
     
@@ -251,8 +331,15 @@ def save_checkpoint(
         "step": step,
         "loss": loss,
         "model_config": model.get_config() if hasattr(model, 'get_config') else None,
-        "optimizer_config": optimizer.get_config(),
+        "optimizer_config": None,
     }
+    try:
+        metadata["optimizer_config"] = optimizer.get_config()
+    except Exception:
+        try:
+            metadata["optimizer_config"] = _unwrap_optimizer(optimizer).get_config()
+        except Exception:
+            metadata["optimizer_config"] = None
     
     if config is not None:
         metadata["config"] = config
@@ -296,14 +383,18 @@ def load_checkpoint(
     if os.path.exists(optimizer_path):
         with open(optimizer_path, "rb") as f:
             optimizer_weights = pickle.load(f)
-        
         # Build optimizer first if needed
-        dummy_grads = [tf.zeros_like(var) for var in model.trainable_variables]
-        optimizer.apply_gradients(zip(dummy_grads, model.trainable_variables))
-        
-        # Load optimizer weights
-        optimizer.set_weights(optimizer_weights)
-        print(f"Loaded optimizer state from {optimizer_path}")
+        try:
+            dummy_grads = [tf.zeros_like(var) for var in model.trainable_variables]
+            optimizer.apply_gradients(zip(dummy_grads, model.trainable_variables))
+        except Exception:
+            pass
+        # Load optimizer weights (robust to wrappers)
+        if optimizer_weights:
+            if _set_optimizer_weights(optimizer, optimizer_weights):
+                print(f"Loaded optimizer state from {optimizer_path}")
+            else:
+                print("Warning: Failed to restore optimizer weights; continuing with fresh optimizer state")
     
     # Load metadata
     metadata_path = f"{checkpoint_path}_metadata.json"

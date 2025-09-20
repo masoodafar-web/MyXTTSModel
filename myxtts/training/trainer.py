@@ -219,11 +219,6 @@ class XTTSTrainer:
         # Clip norm if requested
         if getattr(config, 'gradient_clip_norm', 0) and config.gradient_clip_norm > 0:
             common_kwargs["global_clipnorm"] = config.gradient_clip_norm
-        # Only include gradient_accumulation_steps when >= 2 (Keras requirement)
-        ga_steps = int(getattr(config, 'gradient_accumulation_steps', 1) or 1)
-        if ga_steps >= 2:
-            common_kwargs["gradient_accumulation_steps"] = ga_steps
-
         if config.optimizer.lower() == "adam":
             return tf.keras.optimizers.Adam(**common_kwargs)
         elif config.optimizer.lower() == "adamw":
@@ -239,9 +234,14 @@ class XTTSTrainer:
         config = self.config.training
         
         if config.scheduler == "noam":
+            model_dim = max(1, int(getattr(self.config.model, 'text_encoder_dim', 1)))
+            warmup = max(1, int(getattr(config, 'warmup_steps', 1)))
+            base = (float(model_dim) ** -0.5) * (float(warmup) ** -0.5)
+            scale = config.learning_rate / base if base > 0 else config.learning_rate
             return NoamSchedule(
-                self.config.model.text_encoder_dim,
-                warmup_steps=config.warmup_steps
+                model_dim,
+                warmup_steps=warmup,
+                scale=scale
             )
         elif config.scheduler == "cosine":
             return tf.keras.optimizers.schedules.CosineDecay(
@@ -459,19 +459,14 @@ class XTTSTrainer:
         device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
         
         with device_context:
-            # Memory optimization: limit sequence lengths to prevent OOM
-            max_text_len = getattr(self.config.model, 'max_attention_sequence_length', 512)
-            max_mel_len = getattr(self.config.model, 'max_attention_sequence_length', 512)
-            
-            # Truncate sequences if they're too long
-            text_seq_len = tf.shape(text_sequences)[1]
-            mel_seq_len = tf.shape(mel_spectrograms)[1]
-            
-            if text_seq_len > max_text_len:
+            # Memory optimization: cap text/mel lengths independently to avoid OOM
+            max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
+            if max_text_len:
                 text_sequences = text_sequences[:, :max_text_len]
                 text_lengths = tf.minimum(text_lengths, max_text_len)
-            
-            if mel_seq_len > max_mel_len:
+
+            max_mel_len = getattr(self.config.data, 'max_mel_frames', None)
+            if max_mel_len:
                 mel_spectrograms = mel_spectrograms[:, :max_mel_len, :]
                 mel_lengths = tf.minimum(mel_lengths, max_mel_len)
             
@@ -709,6 +704,16 @@ class XTTSTrainer:
         if batch_data is None:
             batch_data = self._next_batch()
         text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_data
+
+        max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
+        if max_text_len:
+            text_sequences = text_sequences[:, :max_text_len]
+            text_lengths = tf.minimum(text_lengths, max_text_len)
+
+        max_mel_len = getattr(self.config.data, 'max_mel_frames', None)
+        if max_mel_len:
+            mel_spectrograms = mel_spectrograms[:, :max_mel_len, :]
+            mel_lengths = tf.minimum(mel_lengths, max_mel_len)
         
         # Split batch into micro-batches
         micro_batch_size = tf.shape(text_sequences)[0] // accumulation_steps
@@ -1244,14 +1249,46 @@ class XTTSTrainer:
         # Save model weights
         self.model.save_weights(f"{base}_model.weights.h5")
         
-        # Save optimizer state
+        # Save optimizer state (robust to wrappers like LossScaleOptimizer)
+        def _unwrap(opt):
+            for attr in ("optimizer", "inner_optimizer", "base_optimizer"):
+                if hasattr(opt, attr):
+                    try:
+                        inner = getattr(opt, attr)
+                        if inner is not None:
+                            return inner
+                    except Exception:
+                        pass
+            return opt
+
+        def _get_opt_weights(opt):
+            # Try direct
+            try:
+                return opt.get_weights()
+            except Exception:
+                pass
+            base = _unwrap(opt)
+            if base is not opt:
+                try:
+                    return base.get_weights()
+                except Exception:
+                    pass
+            # Fallback to variables
+            try:
+                vars_fn = getattr(base, "variables", None)
+                vars_list = vars_fn() if callable(vars_fn) else getattr(base, "weights", [])
+                return [v.numpy() for v in vars_list]
+            except Exception:
+                return []
+
         try:
-            opt_weights = self.optimizer.get_weights()
+            opt_weights = _get_opt_weights(self.optimizer)
+            if not opt_weights:
+                dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
+                self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
+                opt_weights = _get_opt_weights(self.optimizer)
         except Exception:
-            # Some wrappers may require building before getting weights
-            dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
-            self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
-            opt_weights = self.optimizer.get_weights()
+            opt_weights = []
         import pickle
         with open(f"{base}_optimizer.pkl", "wb") as f:
             pickle.dump(opt_weights, f)
@@ -1312,23 +1349,25 @@ class XTTSTrainer:
 
 
 class NoamSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
-    """
-    Noam learning rate schedule from "Attention is All You Need".
-    """
-    
-    def __init__(self, d_model: int, warmup_steps: int = 4000):
+    """Noam learning rate schedule from "Attention is All You Need"."""
+
+    def __init__(self, d_model: int, warmup_steps: int = 4000, scale: float = 1.0):
         super().__init__()
         self.d_model = tf.cast(d_model, tf.float32)
-        self.warmup_steps = warmup_steps
-    
+        self.warmup_steps = tf.cast(max(1, warmup_steps), tf.float32)
+        self.scale = tf.cast(scale, tf.float32)
+
     def __call__(self, step):
         step = tf.cast(step, tf.float32)
+        step = tf.maximum(step, 1.0)
         arg1 = tf.math.rsqrt(step)
-        arg2 = step * (self.warmup_steps ** -1.5)
-        return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
-    
+        arg2 = step * tf.pow(self.warmup_steps, -1.5)
+        base = tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+        return self.scale * base
+
     def get_config(self):
         return {
-            "d_model": int(self.d_model),
-            "warmup_steps": self.warmup_steps
+            "d_model": int(self.d_model.numpy()),
+            "warmup_steps": int(self.warmup_steps.numpy()),
+            "scale": float(self.scale.numpy()),
         }
