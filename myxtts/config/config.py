@@ -14,21 +14,21 @@ from typing import List, Dict, Any, Optional
 class ModelConfig:
     """Model architecture configuration."""
     
-    # Text encoder settings
+    # Text encoder settings - Enhanced for better text understanding
     text_encoder_dim: int = 512
-    text_encoder_layers: int = 6
+    text_encoder_layers: int = 8  # Increased from 6 for better text representation
     text_encoder_heads: int = 8
     text_vocab_size: int = 256_256  # Updated for NLLB-200 tokenizer
     
-    # Audio encoder settings (for voice conditioning)
-    audio_encoder_dim: int = 512
-    audio_encoder_layers: int = 6
-    audio_encoder_heads: int = 8
+    # Audio encoder settings (for voice conditioning) - Enhanced for better voice cloning
+    audio_encoder_dim: int = 768  # Increased from 512 for better audio representation
+    audio_encoder_layers: int = 8  # Increased from 6 for deeper audio understanding
+    audio_encoder_heads: int = 12  # Increased from 8 for better attention
     
-    # Decoder settings
-    decoder_dim: int = 1024
-    decoder_layers: int = 12
-    decoder_heads: int = 16
+    # Decoder settings - Significantly enhanced for higher quality output
+    decoder_dim: int = 1536  # Increased from 1024 for higher quality synthesis
+    decoder_layers: int = 16  # Increased from 12 for more complex modeling
+    decoder_heads: int = 24  # Increased from 16 for better attention patterns
     
     # Mel spectrogram settings
     n_mels: int = 80
@@ -37,9 +37,13 @@ class ModelConfig:
     win_length: int = 1024
     sample_rate: int = 22050
     
-    # Voice conditioning
-    speaker_embedding_dim: int = 256
+    # Voice conditioning - Enhanced for superior voice cloning
+    speaker_embedding_dim: int = 512  # Increased from 256 for better voice representation
     use_voice_conditioning: bool = True
+    voice_conditioning_layers: int = 4  # New: dedicated voice conditioning layers
+    voice_similarity_threshold: float = 0.75  # New: minimum similarity for voice cloning
+    enable_voice_adaptation: bool = True  # New: adaptive voice conditioning
+    voice_encoder_dropout: float = 0.1  # New: regularization for voice encoder
     
     # Language support
     languages: List[str] = None
@@ -48,6 +52,16 @@ class ModelConfig:
     # Tokenizer settings
     tokenizer_type: str = "nllb"  # "custom" or "nllb"
     tokenizer_model: str = "facebook/nllb-200-distilled-600M"
+    
+    # Advanced Voice Cloning Features - NEW for better voice cloning capability
+    enable_speaker_interpolation: bool = True  # Allow blending multiple voices
+    voice_cloning_temperature: float = 0.7  # Default temperature for voice cloning
+    voice_conditioning_strength: float = 1.0  # Strength of voice conditioning
+    max_reference_audio_length: int = 10  # Maximum reference audio length in seconds
+    min_reference_audio_length: float = 2.0  # Minimum reference audio length in seconds
+    voice_feature_dim: int = 256  # Dimension for voice feature extraction
+    enable_voice_denoising: bool = True  # Denoise reference audio for better cloning
+    voice_cloning_loss_weight: float = 2.0  # Weight for voice similarity loss
     
     # Memory optimization settings
     enable_gradient_checkpointing: bool = False
@@ -159,10 +173,17 @@ class TrainingConfig:
     scheduler: str = "noam"
     scheduler_params: Dict[str, Any] = None
     
-    # Loss weights (adjusted for better balance)
+    # Loss weights (adjusted for better balance and voice cloning)
     mel_loss_weight: float = 35.0  # Reduced from 45.0 for better stability
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 1.0
+    
+    # Voice Cloning Loss Components - NEW for enhanced voice cloning
+    voice_similarity_loss_weight: float = 3.0    # Weight for voice similarity loss
+    speaker_classification_loss_weight: float = 1.5  # Weight for speaker classification
+    voice_reconstruction_loss_weight: float = 2.0    # Weight for voice reconstruction
+    prosody_matching_loss_weight: float = 1.0        # Weight for prosody matching
+    spectral_consistency_loss_weight: float = 1.5    # Weight for spectral consistency
     
     # Training stability improvements
     use_adaptive_loss_weights: bool = True      # Enable adaptive loss weight scaling
