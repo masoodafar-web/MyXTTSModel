@@ -244,8 +244,8 @@ class XTTSLoss(tf.keras.losses.Loss):
         self,
         mel_loss_weight: float = 45.0,
         stop_loss_weight: float = 1.0,
-        attention_loss_weight: float = 0.0,  # Disabled: model doesn't return attention_weights
-        duration_loss_weight: float = 0.0,   # Disabled: model doesn't return duration predictions
+        attention_loss_weight: float = 1.0,  # Enabled: model now returns attention_weights
+        duration_loss_weight: float = 0.1,   # Enabled: model now returns duration predictions
         # Stability improvements
         use_adaptive_weights: bool = True,
         loss_smoothing_factor: float = 0.1,
