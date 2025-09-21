@@ -45,6 +45,17 @@ class ModelConfig:
     enable_voice_adaptation: bool = True  # New: adaptive voice conditioning
     voice_encoder_dropout: float = 0.1  # New: regularization for voice encoder
     
+    # Modern decoding strategies
+    decoder_strategy: str = "autoregressive"  # "autoregressive" or "non_autoregressive"
+    
+    # Neural vocoder settings
+    vocoder_type: str = "griffin_lim"  # "griffin_lim", "hifigan", "bigvgan"
+    vocoder_upsample_rates: List[int] = None  # Will be set in __post_init__
+    vocoder_upsample_kernel_sizes: List[int] = None  # Will be set in __post_init__
+    vocoder_resblock_kernel_sizes: List[int] = None  # Will be set in __post_init__
+    vocoder_resblock_dilation_sizes: List[List[int]] = None  # Will be set in __post_init__
+    vocoder_initial_channel: int = 512
+    
     # Language support
     languages: List[str] = None
     max_text_length: int = 500
@@ -71,6 +82,19 @@ class ModelConfig:
     def __post_init__(self):
         if self.languages is None:
             self.languages = ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]
+        
+        # Set default vocoder configurations if not provided
+        if self.vocoder_upsample_rates is None:
+            self.vocoder_upsample_rates = [8, 8, 2, 2]
+        
+        if self.vocoder_upsample_kernel_sizes is None:
+            self.vocoder_upsample_kernel_sizes = [16, 16, 4, 4]
+        
+        if self.vocoder_resblock_kernel_sizes is None:
+            self.vocoder_resblock_kernel_sizes = [3, 7, 11]
+        
+        if self.vocoder_resblock_dilation_sizes is None:
+            self.vocoder_resblock_dilation_sizes = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 
 
 @dataclass

@@ -1,0 +1,95 @@
+# High Quality Configuration for MyXTTS with Neural Vocoder
+# Optimized for best audio quality using HiFi-GAN vocoder and autoregressive decoding
+
+model:
+  # Text encoder settings
+  text_encoder_dim: 512
+  text_encoder_layers: 8
+  text_encoder_heads: 8
+  text_vocab_size: 256256
+  
+  # Audio encoder settings
+  audio_encoder_dim: 768
+  audio_encoder_layers: 8
+  audio_encoder_heads: 12
+  
+  # Decoder settings - Enhanced for highest quality
+  decoder_strategy: "autoregressive"
+  decoder_dim: 1536
+  decoder_layers: 16
+  decoder_heads: 24
+  
+  # Neural vocoder settings
+  vocoder_type: "hifigan"
+  vocoder_upsample_rates: [8, 8, 2, 2]
+  vocoder_upsample_kernel_sizes: [16, 16, 4, 4]
+  vocoder_resblock_kernel_sizes: [3, 7, 11]
+  vocoder_resblock_dilation_sizes: [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
+  vocoder_initial_channel: 512
+  
+  # Mel spectrogram settings
+  n_mels: 80
+  n_fft: 1024
+  hop_length: 256
+  win_length: 1024
+  sample_rate: 22050
+  
+  # Voice conditioning
+  speaker_embedding_dim: 512
+  use_voice_conditioning: true
+  voice_conditioning_layers: 4
+  voice_similarity_threshold: 0.75
+  enable_voice_adaptation: true
+  voice_encoder_dropout: 0.1
+  
+  # Advanced features
+  enable_gradient_checkpointing: false
+  max_attention_sequence_length: 512
+  use_memory_efficient_attention: true
+
+training:
+  # Two-stage training configuration
+  use_two_stage_training: true
+  
+  # Stage 1: Text-to-Mel
+  stage1_epochs: 100
+  stage1_learning_rate: 1e-4
+  stage1_checkpoint_path: "checkpoints/hq_stage1"
+  
+  # Stage 2: Mel-to-Audio (Vocoder)
+  stage2_epochs: 200
+  stage2_learning_rate: 2e-4
+  stage2_checkpoint_path: "checkpoints/hq_stage2"
+  
+  # General training settings
+  batch_size: 32
+  num_workers: 8
+  enable_mixed_precision: true
+  gradient_clip_norm: 1.0
+  weight_decay: 0.01
+  
+  # Loss weights
+  mel_loss_weight: 1.0
+  stop_loss_weight: 0.5
+  vocoder_mel_loss_weight: 45.0
+  vocoder_feature_loss_weight: 2.0
+
+data:
+  dataset_path: ""
+  dataset_name: "ljspeech"
+  sample_rate: 22050
+  trim_silence: true
+  normalize_audio: true
+  language: "en"
+  
+  # Batching optimized for quality
+  batch_size: 32
+  num_workers: 8
+  prefetch_buffer_size: 8
+  shuffle_buffer_multiplier: 20
+
+# Usage notes:
+# This configuration prioritizes audio quality over speed
+# Use for final production models where quality is paramount
+# Requires significant computational resources
+# Expected training time: 2-3x longer than fast config
