@@ -78,11 +78,28 @@ class XTTSInference:
         
         self.logger.info("XTTS inference engine initialized")
     
+    def _ensure_model_is_built(self) -> None:
+        """Ensure the underlying Keras model is built before weight loading."""
+        if getattr(self.model, "built", False):
+            return
+
+        # Minimal dummy tensors initialise layer weights so load_weights succeeds.
+        dummy_text = tf.zeros((1, 1), dtype=tf.int32)
+        dummy_mel = tf.zeros((1, 1, self.config.model.n_mels), dtype=tf.float32)
+        try:
+            self.model(dummy_text, dummy_mel, training=False)
+        except Exception as exc:  # pragma: no cover - defensive logging for unexpected shapes
+            self.logger.debug(f"Model warm-up failed: {exc}", exc_info=True)
+            raise
+
     def _load_checkpoint(self, checkpoint_path: str):
         """Load model from checkpoint."""
         try:
             # Create dummy optimizer for loading (not used in inference)
             dummy_optimizer = tf.keras.optimizers.Adam()
+
+            # Subclassed models need to be built before loading weights.
+            self._ensure_model_is_built()
             
             # Load checkpoint
             metadata = load_checkpoint(self.model, dummy_optimizer, checkpoint_path)

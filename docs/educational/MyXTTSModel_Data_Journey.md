@@ -1,142 +1,233 @@
-# گام‌به‌گام جریان داده از ورودی تا خروجی در MyXTTSModel
+# End-to-End Data Journey in MyXTTSModel
 
-این سند فرآیند حرکت داده را از لحظه‌ای که فایل‌های متنی/صوتی وارد پایپ‌لاین می‌شوند تا زمانی که خروجی مدل (mel spectrogram و stop tokens) تولید می‌شود، به‌صورت مرحله‌به‌مرحله توضیح می‌دهد. ارجاع‌ها به فایل‌های اصلی پروژه آورده شده‌اند تا بتوانید به سادگی مسیر را در کد دنبال کنید.
+This note walks through **every stage** a sample touches, from raw disk up to the model’s mel/stop predictions. References to implementation hot-spots are included so you can jump into code immediately.
 
 ---
 
-## نمای زمانی (Timeline) فشرده
+## Bird’s-Eye Timeline
 ```mermaid
 sequenceDiagram
-    participant Disk as داده روی دیسک
+    participant Disk as Raw Disk
     participant Loader as LJSpeechDataset
     participant TFDS as tf.data.Dataset
     participant Trainer as XTTSTrainer
     participant Model as XTTS
     participant Decoder as MelDecoder
 
-    Disk->>Loader: متادیتا + فایل‌های wav
-    Loader-->>Loader: نرمال‌سازی متن، استخراج mel، کش‌سازی
-    Loader->>TFDS: نمونه‌های ساختار یافته (text, mel, lengths)
-    TFDS->>Trainer: mini-batch آماده
-    Trainer->>Model: فراخوانی forward با batch
-    Model->>Decoder: Cross/Self Attention روی متن و صدا
+    Disk->>Loader: metadata + wav files
+    Loader-->>Loader: normalize text, compute/cached mel
+    Loader->>TFDS: structured tuples (tokens, mel, lengths)
+    TFDS->>Trainer: padded batches
+    Trainer->>Model: forward(pass_batch)
+    Model->>Decoder: self/cross attention fusion
     Decoder->>Trainer: mel_output + stop_tokens
-    Trainer->>Disk: ذخیره checkpoint و لاگ
+    Trainer->>Disk: checkpoints, logs
 ```
 
----
-
-## مرحله ۱: خواندن و آماده‌سازی دیتاست
-1. **بارگذاری متادیتا و فایل‌ها** (`myxtts/data/ljspeech.py`):
-   - در سازنده‌ی `LJSpeechDataset`, مسیرهای csv (`metadata_train.csv` یا `metadata_eval.csv`) و پوشه‌ی `wavs/` مشخص می‌شوند.
-   - صدا توسط `AudioProcessor` به نمونه‌های 22.05kHz و 80 مل تبدیل می‌شود؛ متن با `TextProcessor` پاکسازی و توکنیزه می‌گردد.
-2. **پیش‌پردازش و کش**: بسته به `DataConfig.preprocessing_mode`، فرمان‌هایی مثل `precompute_mels` و `precompute_tokens` اجرا می‌شوند تا mel و توکن‌ها ذخیره شوند.
-3. **تشکیل splitها**: اگر از متادیتای پیش‌فرض استفاده شود، فایل `splits.json` ایجاد شده و اندیس‌های train/val جدا می‌شوند.
-
-**خروجی این مرحله**: لیستی از نمونه‌ها که هر کدام شامل مسیر فایل صوتی، متن نرمال شده، حاشیه‌ی زمانی و متادیتای کمکی است.
+Use the timeline as a compass; the sections below expand each arrow into concrete steps.
 
 ---
 
-## مرحله ۲: ساخت `tf.data.Dataset`
-1. تابع `create_tf_dataset` در `LJSpeechDataset` برای هر زیرمجموعه صدا و متن را به `tf.data.Dataset` برمی‌گرداند.
-2. عملیات کلیدی pipeline:
-   - `shuffle(buffer)` با ضریب `shuffle_buffer_multiplier`.
-   - `map` برای بارگذاری/کشیدن mel و توکن.
-   - `padded_batch` برای یکدست کردن طول متن و mel (پد کردن با صفر).
-   - `prefetch` و در صورت فعال بودن `prefetch_to_gpu`، انتقال بافری به GPU.
-3. این دیتاست در `XTTSTrainer.prepare_datasets` فراخوانی شده و برای train و val تنظیم می‌شود (`myxtts/training/trainer.py:244`).
-
-**خروجی این مرحله**: generatorی که هر بار یک batch شامل `(text_ids, mel_frames, text_lengths, mel_lengths)` تولید می‌کند. شکل‌ها:
-- `text_ids`: `[B, T_txt]`
-- `mel_frames`: `[B, T_mel, 80]`
-- `text_lengths`, `mel_lengths`: `[B]`
+## Stage 0 – Dataset Files on Disk
+- **Where:** `data/` (custom) or the standard LJSpeech folder; metadata in `metadata_train.csv`, `metadata_eval.csv`.
+- **Metadata columns:** sample identifier, relative wav path, raw transcription, normalized transcription, optional duration.
+- **Audio format expectation:** mono 22.05 kHz WAV; MyXTTS converts any other sample rate during preprocessing.
+- **Text encoding:** ASCII/UTF-8; later normalised via cleaner list in `DataConfig.text_cleaners` (defaults: `english_cleaners`).
 
 ---
 
-## مرحله ۳: ورود batch به لوپ آموزش
-1. `XTTSTrainer.train_step` (یا `distributed_train_step`) mini-batch را دریافت می‌کند (`myxtts/training/trainer.py:351`).
-2. پیش از ورود به مدل:
-   - در صورت تعریف `max_attention_sequence_length` یا `max_mel_frames`, طول‌ها کپ می‌شوند تا از OOM جلوگیری شود.
-   - با `ensure_gpu_placement` تنسورها به GPU منتقل می‌شوند.
-3. `GradientTape` فعال می‌شود تا گرادیان‌ها محاسبه شوند.
+## Stage 1 – Dataset Object Assembly
+**File:** `myxtts/data/ljspeech.py`
 
-**خروجی موقت**: همان batch آماده که روی GPU قرار دارد و آماده‌ی forward است.
+1. `LJSpeechDataset.__init__` collects paths, config, subset name, and creates helper caches (text + mel).  (see `myxtts/data/ljspeech.py:37`)
+2. `AudioProcessor` (sample rate, FFT sizes) and `TextProcessor` (tokeniser, language, cleaner) are instantiated once per dataset object.  (`ljspeech.py:66`)
+3. `_prepare_dataset()` ensures the metadata file exists, optionally downloads data, and prepares internal indices.
+4. If no custom metadata is provided, `_create_splits()` splits a single metadata file into train/val/test using ratios from `DataConfig`.
 
----
-
-## مرحله ۴: عبور از Text Encoder
-1. فراخوانی `self.model(...)` باعث اجرای `XTTS.call` می‌شود (`myxtts/models/xtts.py:246`).
-2. `text_encoder` ورودی متنی را فرآوری می‌کند:
-   - Embedding + positional encoding → `text_encoded` با شکل `[B, T_txt, d_model]`.
-   - ماسک‌های attention از `text_lengths` ساخته می‌شوند تا padding دیده نشود.
-3. اگر `use_voice_conditioning=True`, مسیر صوتی موازی برای تولید `audio_encoded` و `speaker_embedding` فعال می‌گردد.
-
-**خروجی این مرحله**: تنسور زمینه‌ای متن و در صورت فعال بودن، بردار گوینده.
+**Outputs of Stage 1:** an in-memory dataframe (`self.metadata`) plus indexing arrays (`self.items` or `_custom_index_map`) describing which rows belong to the active subset.
 
 ---
 
-## مرحله ۵: آماده‌سازی ورودی رمزگشا
-1. در حالت آموزش (teacher forcing)، `mel_inputs` یک گام به عقب شیفت می‌شوند (`myxtts/models/xtts.py:303`).
-2. ماسک علّی با `tf.linalg.band_part` ساخته می‌شود تا هر فریم فقط گذشته‌ی خود را ببیند (`causal_mask`).
-3. اگر `mel_lengths` داده شده باشد، padding در ماسک لحاظ می‌شود تا روی فریم‌های خالی attention نشود.
+## Stage 2 – Heavy-Lifting Precomputation
+**Key methods:** `precompute_mels`, `precompute_tokens`, `verify_and_fix_cache`, `filter_items_by_cache`
 
-**خروجی**: `decoder_inputs` با شکل `[B, T_mel, 80]` و `causal_mask` در ابعاد `[B, T_mel, T_mel]`.
+- Triggered from `XTTSTrainer.prepare_datasets` depending on `DataConfig.preprocessing_mode` (`precompute`, `runtime`, or `auto`).
+- For mel caches: each item loads the wav, normalizes if requested, converts to mel via `AudioProcessor.wav_to_mel` and stores `float32[time, 80]` at `processed/mels_*/<sample-id>.npy`.
+- For token caches: `TextProcessor.text_to_sequence` generates `int` ids saved at `processed/tokens_*/<sample-id>.npy`.
+- `verify_and_fix_cache` catches corrupt files, automatically re-generating them.
+- `filter_items_by_cache` removes rows that lack valid cached data, preventing runtime failures.
 
----
-
-## مرحله ۶: Mel Decoder و ترکیب اطلاعات
-1. در `MelDecoder.call` (`myxtts/models/xtts.py:207`):
-   - `decoder_inputs` به `decoder_dim` پرجکت می‌شود.
-   - اگر `speaker_embedding` موجود باشد، به هر time-step الصاق و دوباره به همان فضا نگاشته می‌شود.
-   - positional encoding و dropout اعمال می‌گردد.
-2. بلاک‌های ترنسفورمر داخل رمزگشا دو جریان توجه دارند:
-   - Self-Attention با ماسک علّی.
-   - Cross-Attention روی `text_encoded` و در صورت فعال بودن، `audio_encoded`.
-3. خروجی نهایی:
-   - `mel_projection` → `[B, T_mel, 80]`
-   - `stop_projection` → `[B, T_mel, 1]`
-
-**نتیجه‌ی مستقیم مدل**: dict با کلیدهای `mel_output`, `stop_tokens`, و در صورت موجود بودن `speaker_embedding`.
+**Outputs of Stage 2:** matched `.npy` files for tokens/mels, along with curated lists of valid sample indices.
 
 ---
 
-## مرحله ۷: محاسبه‌ی Loss و انتشار معکوس
-1. در `train_step` پس از دریافت خروجی مدل:
-   - `create_stop_targets` بردار لبه‌ی توقف را از `mel_lengths` می‌سازد (`myxtts/training/losses.py`).
-   - دیکشنری `y_true` و `y_pred` به `XTTSLoss.__call__` پاس داده می‌شود تا lossهای mel، stop، attention و duration ترکیب شوند.
-2. `tape.gradient(loss, model.trainable_variables)` گرادیان‌ها را می‌سازد و در صورت استفاده از mixed precision، داخل `LossScaleOptimizer` به سطح قبلی برگردانده می‌شود.
-3. `optimizer.apply_gradients` وزن‌ها را به‌روزرسانی می‌کند؛ سپس معیارهایی مانند `gradient_norm` برای نظارت ثبت می‌شوند.
+## Stage 3 – Building the `tf.data` Pipeline
+**Function:** `LJSpeechDataset.create_tf_dataset` (`myxtts/data/ljspeech.py:769`)
 
-**خروجی این مرحله**: ضرایب loss و وضعیت به‌روزشده‌ی مدل.
+1. **Source tensors:** `tf.data.Dataset.from_tensor_slices` pairs token paths, mel paths, optional audio paths, normalised text.
+2. **Shuffle early:** buffer size uses `batch_size * buffer_size_multiplier` (with caps) for better randomness.
+3. **Parallel map:** `_load_from_cache_optimized` uses `tf.numpy_function` to load `.npy` files concurrently (`num_parallel_calls=tf.data.AUTOTUNE`). Shapes are explicitly set to keep graph tracing stable.
+4. **Length capping:** `_cap_lengths` enforces `DataConfig.max_mel_frames` if present.
+5. **Filtering:** `dataset.filter` removes zero-length sequences early.
+6. **Padding + batching:** `padded_batch` yields `[B, Tmax_txt]`, `[B, Tmax_mel, 80]`, `[B]`, `[B]`.
+7. **Repeat & prefetch:** controlled by `repeat`, `prefetch_buffer_size`, and optional `tf.data.experimental.prefetch_to_device('/GPU:0', buffer_size=...)` when `prefetch_to_gpu=True`.
+8. **Pipeline options:** `dataset.with_options` toggles `map_fusion`, `map_parallelization`, thread pools, etc., to reduce latency and host/GPU contention.
 
----
-
-## مرحله ۸: پس‌پردازش و ثبت خروجی
-1. اگر گام فعلی به آستانه‌ی `save_step` رسید، `XTTSTrainer` با `save_checkpoint` وزن‌ها و optimizer را در مسیر `checkpoint_dir` ذخیره می‌کند.
-2. مقادیر ثبت‌شده شامل `mel_loss`, `stop_loss`, `gradient_norm` و سایر معیارهای پایداری هستند؛ در صورت فعال بودن `wandb`, این مقادیر به داشبورد ارسال می‌شود.
-3. حلقه‌ی آموزش تا رسیدن به `epochs` یا شرط توقف زودهنگام (`EarlyStopping`) ادامه دارد.
-
-**نتیجه نهایی**: مدل وزن‌گذاری‌شده در مسیر checkpoint، به‌همراه لاگ‌های روند یادگیری.
+**Outputs of Stage 3:** a ready-to-iterate `tf.data.Dataset` producing padded mini-batches already shaped for the model.
 
 ---
 
-## حالت تولید (Inference)
-- `XTTS.generate` (`myxtts/models/xtts.py:333`) مراحل ۴ تا ۶ را با تفاوت‌های زیر تکرار می‌کند:
-  1. ورودی رمزگشا با فریم صفر شروع می‌شود و در هر گام فریم قبلی به آن اضافه می‌گردد.
-  2. حلقه‌ی خودبازگشتی تا زمانی ادامه دارد که `stop_tokens` بالای آستانه باشد یا به `max_length` برسد.
-  3. خروجی نهایی، دنباله‌ای از mel spectrogramها و بردار `stop_probs` است که برای تبدیل به موج صوتی (مثلاً با vocoder) آماده‌اند.
+## Stage 4 – Trainer Hooks the Dataset
+**File:** `myxtts/training/trainer.py`
+
+1. `XTTSTrainer.prepare_datasets` returns `(train_ds, val_ds)` and stores internal iterators.  (line `244`)
+2. Dataset sizes are recorded to derive `default_steps_per_epoch`.
+3. When multi-GPU is enabled, `strategy.experimental_distribute_dataset` wraps the dataset in a distributed form.
+4. During training, `train_step` and `distributed_train_step` fetch batches lazily from the dataset.
+
+**Key shapes at entry:**
+- `text_sequences`: `int32[B, T_txt]`
+- `mel_spectrograms`: `float32[B, T_mel, 80]`
+- `text_lengths`, `mel_lengths`: `int32[B]`
 
 ---
 
-## چک‌لیست دیباگ مسیر داده
-- مطمئن شوید شکل‌های تولیدشده توسط `tf.data` با `ModelConfig` همخوانی دارد؛ تفاوت در `n_mels` یا `max_text_length` باعث خطا می‌شود.
-- در صورت فعال بودن voice conditioning، با `audio_conditioning is None` به مدل ورودی ندهید؛ یا `use_voice_conditioning=False` تنظیم کنید.
-- اگر gradient norm به‌طور مداوم بالا است، مقادیر `max_mel_frames` یا `batch_size` را کاهش دهید تا طول توالی کنترل شود.
-- برای بررسی سریع، می‌توانید یک batch را به‌صورت دستی از دیتاست بگیرید و مراحل ۴ تا ۶ را در نوت‌بوک اجرا کنید تا شکل تنسورها را ببینید.
+## Stage 5 – Per-Batch Preparation inside `train_step`
+**Function:** `XTTSTrainer.train_step` (`trainer.py:351`)
+
+1. **Length guards:** slices sequences to `ModelConfig.max_attention_sequence_length` and `DataConfig.max_mel_frames` if defined.
+2. **Device placement:** `ensure_gpu_placement` coerces tensors onto `/GPU:0`; the gradient tape and forward call also sit inside an explicit `tf.device` context.
+3. **GradientTape:** created with default persistent behaviour; captures operations until loss calculation finishes.
+4. **Forward call:** `self.model(...)` receives the batch (see next stage).
+
+**Intermediates (on GPU):** truncated/padded copies of batch tensors ready for the model call.
 
 ---
 
-### مسیرهای تکمیلی پیشنهاد شده
-1. افزودن Mermaid classDiagram جهت نمایش کلاس‌های `XTTSTrainer`, `LJSpeechDataset`, `XTTS` و ارتباط آن‌ها.
-2. توسعه‌ی سناریوهای «وقتی این خطا رخ داد چه کنیم» با تمرکز بر mismatch طول‌ها، OOM و خرابی کش.
-3. تبدیل این سند به HTML همراه با اینتراکتیو JS برای نمایش تنسورها در هر مرحله.
+## Stage 6 – Text Branch (Encoder)
+**Class:** `TextEncoder` in `myxtts/models/xtts.py`
+
+1. **Embedding:** `token_embedding` maps ids → `float32[B, T_txt, d_model]` and scales by `sqrt(d_model)`.
+2. **Position encoding:** `PositionalEncoding` (sinusoidal) injects ordering information.
+3. **Attention mask preparation:** `text_mask = sequence_mask(text_lengths)` → `[B, T_txt]`, expanded to `[B, 1, 1, T_txt]` with `0/-1e9` entries.
+4. **Transformer stack:** `config.text_encoder_layers` repetitions of `TransformerBlock` with memory-efficient multi-head attention.
+5. **Output norm:** `LayerNormalization` yields `text_encoded`.
+
+**Output handed forward:** `text_encoded` `[B, T_txt, d_model]` (float32 or float16 if mixed precision).
+
+---
+
+## Stage 7 – Audio Branch (Optional Voice Conditioning)
+**Class:** `AudioEncoder` (`xtts.py:134`)
+
+1. **Convolutional trio:** extracts local temporal patterns from `mel_conditioning` `[B, T_ref, 80]`.
+2. **Projection:** Dense → `audio_encoder_dim` to align dimensions with the decoder.
+3. **Transformer stack:** similar to text branch, preserving time axis.
+4. **Speaker embedding:** `GlobalAveragePooling1D` + Dense(`tanh`) → `[B, speaker_embedding_dim]`.
+
+**Outputs:**
+- `audio_encoded` `[B, T_ref, audio_encoder_dim]` for cross-attention.
+- `speaker_embedding` `[B, speaker_dim]` broadcast later into the decoder.
+
+If `ModelConfig.use_voice_conditioning=False`, this entire stage is skipped and downstream logic must accept `None` embeddings.
+
+---
+
+## Stage 8 – Decoder Input Conditioning
+**Site:** `XTTS.call` (`xtts.py:283`)
+
+1. **Teacher forcing:** during training, `mel_inputs` shifts right by one frame (`tf.pad`), producing `[B, T_mel, 80]` with a leading all-zero frame.
+2. **Inference alternative:** in `XTTS.generate`, the first frame starts as zeros and grows autoregressively.
+3. **Causal mask:** `tf.linalg.band_part` builds `[T_mel, T_mel]` lower-triangular mask, tiled to `[B, T_mel, T_mel]`; combined with padding mask when `mel_lengths` are present.
+
+**Result:** `decoder_inputs`, `causal_mask`, and `text_mask`/`audio_mask` are ready for the decoder stack.
+
+---
+
+## Stage 9 – Mel Decoder Fusion
+**Class:** `MelDecoder` (`xtts.py:192`)
+
+1. **Dense projection:** `decoder_inputs` → `decoder_dim`.
+2. **Speaker concat (optional):** `speaker_embedding` is tiled to `[B, T_mel, speaker_dim]`, concatenated, then projected back to `decoder_dim`.
+3. **Positional encoding + dropout:** ensures time-awareness and regularization.
+4. **Transformer blocks:** each block performs
+   - **Self-attention:** respects `decoder_mask` to enforce autoregressive behaviour.
+   - **Cross-attention:** queries on decoder states, keys/values from `text_encoded` (and implicitly uses `encoder_mask`).
+5. **Final projections:**
+   - `mel_projection` → predicted mel frames `[B, T_mel, 80]`.
+   - `stop_projection (sigmoid)` → `[B, T_mel, 1]` stop probabilities.
+
+**Outputs merged into dictionary:** `{"mel_output", "stop_tokens", "text_encoded", (optional) "speaker_embedding"}`.
+
+---
+
+## Stage 10 – Loss Assembly & Backward Pass
+**File:** `myxtts/training/trainer.py` & `myxtts/training/losses.py`
+
+1. `create_stop_targets` builds a binary mask (`1` at and after the target stop frame). Shape: `[B, T_mel, 1]`.
+2. `y_true`/`y_pred` dictionaries are fed into `XTTSLoss.__call__`, which internally computes:
+   - **Mel loss:** Huber/L1 hybrid with optional label smoothing, masked by `mel_lengths`. (`losses.py:13`)
+   - **Stop loss:** weighted BCE with positive class emphasis. (`losses.py:54`)
+   - **Attention & duration losses:** encourage monotonic alignments and accurate frame counts.
+3. **Gradient scaling:** if mixed precision is active, `LossScaleOptimizer` rescales losses before `tape.gradient`.
+4. **Gradient computation:** `gradients = tape.gradient(total_loss, model.trainable_variables)`.
+5. **Optional accumulation:** if `gradient_accumulation_steps > 1`, gradients are temporarily stacked and applied less frequently (handled inside the trainer logic not shown here).
+6. **Optimizer update:** `optimizer.apply_gradients(zip(gradients, variables))` with optional `global_clipnorm` from config.
+7. **Metrics capture:** `criterion.get_losses()` exposes per-component losses plus `gradient_norm` and stability heuristics.
+
+**Outputs of Stage 10:** updated model weights, logged scalars, and cleaned-up temporary tensors.
+
+---
+
+## Stage 11 – Scheduler, Logging, and Checkpoints
+- **Learning rate scheduler:** created in `_create_lr_scheduler` (Noam, cosine, exponential). For Noam, the schedule depends on `text_encoder_dim` and `warmup_steps`.
+- **Early stopping:** monitors validation loss with `patience`/`min_delta` (`trainer.py:121`).
+- **Checkpointing:** `save_checkpoint` persists model weights, optimizer state, scheduler state to `config.training.checkpoint_dir` whenever `step % save_step == 0` or at training end.
+- **WandB logging (optional):** if `use_wandb=True`, metrics are streamed each `log_step`.
+
+---
+
+## Stage 12 – Autoregressive Inference Loop
+**Function:** `XTTS.generate` (`xtts.py:333`)
+
+1. Text (and optional reference audio) is encoded exactly as in Stages 6–7.
+2. Initialise `current_mel = zeros([B, 1, n_mels])`.
+3. For each step up to `max_length`:
+   - Run `mel_decoder` on the accumulated frames.
+   - Take the last frame `mel_frame` and stop probability `stop_prob`.
+   - Append `mel_frame` to `current_mel`.
+   - Break when **all** stop probabilities exceed 0.5 (threshold tunable).
+4. Concatenate collected frames into `[B, T_generated, 80]`; return along with stop probabilities and conditioning embeddings.
+
+**Next typical stage (outside this repo):** pass `mel_output` into a neural vocoder (e.g., HiFi-GAN) to synthesize waveform audio.
+
+---
+
+## Shape & Dtype Cheat Sheet
+| Tensor | Shape | Dtype | Produced At |
+|--------|-------|-------|-------------|
+| `text_sequences` | `[B, T_txt]` | `int32` | `tf.data` pipeline (Stage 3) |
+| `mel_spectrograms` | `[B, T_mel, 80]` | `float32` | `tf.data` pipeline |
+| `text_encoded` | `[B, T_txt, d_model]` | `float16/32` | Text encoder (Stage 6) |
+| `audio_encoded` | `[B, T_ref, d_audio]` | `float16/32` | Audio encoder (Stage 7) |
+| `speaker_embedding` | `[B, speaker_dim]` | `float16/32` | Audio encoder |
+| `decoder_inputs` | `[B, T_mel, 80]` | `float32` | Stage 8 |
+| `mel_output` | `[B, T_mel, 80]` | `float32` | Stage 9 |
+| `stop_tokens` | `[B, T_mel, 1]` | `float32` | Stage 9 |
+| `stop_targets` | `[B, T_mel, 1]` | `float32` | Stage 10 |
+
+---
+
+## Debug Checklist (Quick Reminders)
+- **Cache integrity:** run `precompute_*` and check `verify_and_fix_cache` before long runs.
+- **Shape mismatches:** compare dataset output shapes with `ModelConfig.n_mels`, `max_text_length`, `max_attention_sequence_length`.
+- **Voice conditioning:** either supply `audio_conditioning` every batch or set `use_voice_conditioning=False`.
+- **OOM mitigation:** tighten `max_mel_frames`, reduce batch size, or bump `gradient_accumulation_steps`.
+- **Gradient spikes:** watch `gradient_norm` metric; if it explodes, inspect latest batches for very long sequences or corrupted mel files.
+
+---
+
+## Where to Go Next
+1. Add a Mermaid `classDiagram` to visualise object relationships (`Trainer ↔ Dataset ↔ Model`).
+2. Create HTML from this Markdown via `pandoc` and enhance with interactive tensor inspectors (JS + CSS).
+3. Extend the cheat sheet with downstream vocoder expectations if audio synthesis is part of your pipeline.

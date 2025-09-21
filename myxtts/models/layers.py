@@ -103,7 +103,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         k_seq_len = tf.shape(k)[2]
         
         # Memory optimization: limit maximum sequence length for attention
-        max_seq_len = 512  # Reduce from potential 1024+ to prevent OOM
+        # Use a generous cap so inference up to ~2k frames is unaffected.
+        max_seq_len = 2048
         
         if q_seq_len > max_seq_len or k_seq_len > max_seq_len:
             # Truncate sequences to prevent memory explosion
@@ -169,11 +170,11 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             Output tensor [batch, seq_len, d_model]
         """
         batch_size = tf.shape(inputs)[0]
-        seq_len = tf.shape(inputs)[1]
-        
+
         # Linear projections
         q = self.wq(inputs)  # [batch, seq_len, d_model]
-        
+        seq_len_q = tf.shape(q)[1]
+
         if key_value is not None:
             # Cross-attention
             k = self.wk(key_value)
@@ -184,13 +185,13 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             v = self.wv(inputs)
         
         # Reshape for multi-head attention
-        q = tf.reshape(q, [batch_size, seq_len, self.num_heads, self.d_k])
+        q = tf.reshape(q, [batch_size, seq_len_q, self.num_heads, self.d_k])
         q = tf.transpose(q, [0, 2, 1, 3])  # [batch, heads, seq_len, d_k]
-        
+
         k_seq_len = tf.shape(k)[1]
         k = tf.reshape(k, [batch_size, k_seq_len, self.num_heads, self.d_k])
         k = tf.transpose(k, [0, 2, 1, 3])  # [batch, heads, seq_len, d_k]
-        
+
         v = tf.reshape(v, [batch_size, k_seq_len, self.num_heads, self.d_k])
         v = tf.transpose(v, [0, 2, 1, 3])  # [batch, heads, seq_len, d_k]
         
@@ -199,8 +200,9 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         
         # Concatenate heads
         attention_output = tf.transpose(attention_output, [0, 2, 1, 3])
+        seq_len_out = tf.shape(attention_output)[1]
         attention_output = tf.reshape(
-            attention_output, [batch_size, seq_len, self.d_model]
+            attention_output, [batch_size, seq_len_out, self.d_model]
         )
         
         # Final linear projection
