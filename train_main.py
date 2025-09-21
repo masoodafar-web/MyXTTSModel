@@ -38,7 +38,7 @@ def build_config(
     num_workers: int = 8,
     epochs: int = 200,
     lr: float = 5e-5,
-    checkpoint_dir: str = "./checkpoints_main",
+    checkpoint_dir: str = "./checkpointsmain",
     text_dim: int = 256,
     decoder_dim: int = 512,
     max_attention_len: int = 256,
@@ -180,7 +180,7 @@ def main():
         default="../dataset/dataset_eval",
         help="Path to val subset root (default: ../dataset/dataset_eval)"
     )
-    parser.add_argument("--checkpoint-dir", default="./checkpoints_main", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", default="./checkpointsmain", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument(
