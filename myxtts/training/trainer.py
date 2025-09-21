@@ -252,10 +252,45 @@ class XTTSTrainer:
                 scale=scale
             )
         elif config.scheduler == "cosine":
+            params = dict(getattr(config, "scheduler_params", {}) or {})
+            min_lr = params.pop("min_learning_rate", None)
+            if min_lr is None:
+                min_lr = getattr(config, "min_learning_rate", None)
+
+            decay_steps = params.pop("decay_steps", None)
+            first_decay_steps = params.pop("first_decay_steps", None)
+            restart_period = params.pop("restart_period", None)
+            restart_mult = params.pop("restart_mult", None)
+            t_mul = params.pop("t_mul", None)
+            m_mul = params.pop("m_mul", None)
+            alpha = params.pop("alpha", None)
+
+            if params:
+                self.logger.debug("Unused cosine scheduler params: %s", list(params.keys()))
+
+            if alpha is None and min_lr is not None and config.learning_rate > 0:
+                alpha = max(0.0, min(min_lr / config.learning_rate, 1.0))
+
+            if restart_period is not None and first_decay_steps is None:
+                first_decay_steps = restart_period
+
+            use_restarts = getattr(config, "cosine_restarts", False) or first_decay_steps is not None
+
+            if use_restarts:
+                first_decay_steps = max(1, int(first_decay_steps or config.epochs * 1000))
+                return tf.keras.optimizers.schedules.CosineDecayRestarts(
+                    initial_learning_rate=config.learning_rate,
+                    first_decay_steps=first_decay_steps,
+                    t_mul=t_mul if t_mul is not None else (restart_mult if restart_mult is not None else 1.0),
+                    m_mul=m_mul if m_mul is not None else 1.0,
+                    alpha=alpha if alpha is not None else 0.0,
+                )
+
+            decay_steps = max(1, int(decay_steps or config.epochs * 1000))
             return tf.keras.optimizers.schedules.CosineDecay(
                 initial_learning_rate=config.learning_rate,
-                decay_steps=config.epochs * 1000,  # Approximate
-                **config.scheduler_params
+                decay_steps=decay_steps,
+                alpha=alpha if alpha is not None else 0.0,
             )
         elif config.scheduler == "exponential":
             return tf.keras.optimizers.schedules.ExponentialDecay(
@@ -1360,8 +1395,26 @@ class XTTSTrainer:
             if checkpoint_path is None:
                 raise FileNotFoundError(f"No checkpoints found in {checkpoint_path}")
         
-        metadata = load_checkpoint(self.model, self.optimizer, checkpoint_path)
-        
+        try:
+            metadata = load_checkpoint(self.model, self.optimizer, checkpoint_path)
+        except ValueError as exc:
+            self.logger.warning(
+                "Checkpoint '%s' is incompatible with the current model definition (%s). "
+                "Training will start from scratch; use --reset-training to silence this warning.",
+                checkpoint_path,
+                exc,
+            )
+            self.logger.debug("Checkpoint load traceback", exc_info=True)
+            return
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            self.logger.warning(
+                "Could not load checkpoint '%s' (%s). Training will start from scratch.",
+                checkpoint_path,
+                exc,
+            )
+            self.logger.debug("Checkpoint load traceback", exc_info=True)
+            return
+
         self.current_step = metadata.get("step", 0)
         self.current_epoch = self.current_step // 1000  # Approximate
         self.best_val_loss = metadata.get("loss", float('inf'))

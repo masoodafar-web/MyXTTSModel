@@ -76,7 +76,7 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'max_memory_fraction': 0.90,
             'enable_gradient_checkpointing': False,
             'text_encoder_dim': 512,
-            'decoder_dim': 1024,
+            'decoder_dim': 1536,  # Keep divisible by decoder heads (24)
             'num_workers': 16,
             'prefetch_buffer_size': 32,
             'shuffle_buffer_multiplier': 48,
@@ -90,7 +90,7 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'max_memory_fraction': 0.85,
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 384,
-            'decoder_dim': 768,
+            'decoder_dim': 768,   # 24 heads -> 32-dim per head
             'num_workers': 12,
             'prefetch_buffer_size': 24,
             'shuffle_buffer_multiplier': 40,
@@ -104,7 +104,7 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'max_memory_fraction': 0.75,
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 256,
-            'decoder_dim': 512,
+            'decoder_dim': 576,   # Still divisible by 24 heads while staying compact
             'num_workers': 8,
             'prefetch_buffer_size': 18,
             'shuffle_buffer_multiplier': 32,
@@ -118,7 +118,7 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'max_memory_fraction': 0.65,
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 128,
-            'decoder_dim': 256,
+            'decoder_dim': 384,   # Minimum size that respects 24-way attention split
             'num_workers': 4,
             'prefetch_buffer_size': 12,
             'shuffle_buffer_multiplier': 24,

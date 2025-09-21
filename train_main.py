@@ -516,9 +516,10 @@ def main():
             "This heavily limits GPU utilization. Increase --batch-size or lower --grad-accum."
         )
 
-    text_dim = recommended['text_encoder_dim'] if recommended else 256
-    decoder_dim = recommended['decoder_dim'] if recommended else 512
-    max_attention_len = recommended['max_attention_sequence_length'] if recommended else 256
+    # When hardware probing fails, fall back to the enhanced defaults defined in build_config
+    text_dim = recommended['text_encoder_dim'] if recommended else 512
+    decoder_dim = recommended['decoder_dim'] if recommended else 1536
+    max_attention_len = recommended['max_attention_sequence_length'] if recommended else 512
     enable_grad_ckpt = recommended['enable_gradient_checkpointing'] if recommended else True
     max_memory_fraction = recommended['max_memory_fraction'] if recommended else 0.9
     prefetch_buffer_size = recommended['prefetch_buffer_size'] if recommended else 12
