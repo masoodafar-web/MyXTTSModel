@@ -179,7 +179,7 @@ class TrainingConfig:
     mel_loss_weight: float = 35.0  # Reduced from 45.0 for better stability
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 0.1  # Enabled with small weight for stability
-    attention_loss_weight: float = 1.0  # Enabled for monotonic attention
+    attention_loss_weight: float = 0.1  # Enabled with small weight for gradual alignment learning
     
     # Voice Cloning Loss Components - NEW for enhanced voice cloning
     voice_similarity_loss_weight: float = 3.0    # Weight for voice similarity loss
