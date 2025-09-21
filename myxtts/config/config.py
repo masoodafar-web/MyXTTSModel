@@ -115,6 +115,9 @@ class DataConfig:
     # Data loading extra options
     pin_memory: bool = True
     persistent_workers: bool = True
+    use_length_bucketing: bool = False
+    bucket_boundaries: Optional[List[int]] = None
+    bucket_batch_sizes: Optional[List[int]] = None
 
     # Dataset preprocessing control (default to precompute for GPU optimization)
     preprocessing_mode: str = "precompute"  # Changed from "auto" - forces cache files for GPU optimization

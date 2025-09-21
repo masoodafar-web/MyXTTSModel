@@ -97,13 +97,13 @@ def build_config(
         max_memory_fraction=max_memory_fraction,
         use_ema=True,
         ema_decay=0.999,
-        ema_start_step=1000,
+        ema_start_step=5000,
 
         warmup_steps=2000,
         scheduler="noam",
         scheduler_params={},
 
-        mel_loss_weight=45.0,
+        mel_loss_weight=35.0,
         kl_loss_weight=1.0,
         duration_loss_weight=1.0,
 
@@ -142,6 +142,8 @@ def build_config(
         num_workers=num_workers,
         prefetch_buffer_size=prefetch_buffer_size,
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
+        use_length_bucketing=True,
+        bucket_boundaries=[128, 192, 256, 384, 512],
         enable_memory_mapping=True,
         cache_verification=True,
         prefetch_to_gpu=True,
@@ -183,7 +185,7 @@ def main():
         default="../dataset/dataset_eval",
         help="Path to val subset root (default: ../dataset/dataset_eval)"
     )
-    parser.add_argument("--checkpoint-dir", default="./checkpoints", help="Checkpoint directory")
+    parser.add_argument("--checkpoint-dir", default="./checkpoints1", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=200, help="Number of epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument(
@@ -193,7 +195,7 @@ def main():
         help="Gradient accumulation steps (auto-tuned if omitted)"
     )
     parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers")
-    parser.add_argument("--lr", type=float, default=5e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=3e-5, help="Learning rate")
     parser.add_argument(
         "--resume",
         action="store_true",

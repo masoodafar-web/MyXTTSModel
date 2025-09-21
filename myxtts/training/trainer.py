@@ -176,7 +176,7 @@ class XTTSTrainer:
 
             if self.use_ema:
                 self._ema_weights = [
-                    tf.Variable(var.read_value(), trainable=False, name=f"ema_{var.name.replace(':', '_')}")
+                    tf.Variable(tf.identity(var), trainable=False, name=f"ema_{var.name.replace(':', '_')}")
                     for var in self.model.trainable_variables
                 ]
 

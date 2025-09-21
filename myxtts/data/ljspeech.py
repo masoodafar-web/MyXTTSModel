@@ -958,23 +958,54 @@ class LJSpeechDataset:
             )
         )
 
-        # Pad and batch with improved padding strategy
-        dataset = dataset.padded_batch(
-            batch_size,
-            padded_shapes=(
-                [None],       # text_sequence
-                [None, self.audio_processor.n_mels], # mel_spectrogram
-                [],           # text_length
-                []            # mel_length
-            ),
-            padding_values=(
-                tf.constant(0, dtype=tf.int32),
-                tf.constant(0.0, dtype=tf.float32),
-                tf.constant(0, dtype=tf.int32),
-                tf.constant(0, dtype=tf.int32)
-            ),
-            drop_remainder=False  # Keep all data
-        )
+        # Pad and batch (with optional length bucketing)
+        if getattr(self.config, 'use_length_bucketing', False):
+            def _element_length_fn(text_seq, mel_spec, text_len, mel_len):
+                return mel_len
+
+            boundaries = getattr(self.config, 'bucket_boundaries', None) or [128, 192, 256, 384, 512]
+            batch_sizes = getattr(self.config, 'bucket_batch_sizes', None)
+            if not batch_sizes:
+                batch_sizes = [self.config.batch_size] * (len(boundaries) + 1)
+
+            dataset = dataset.apply(
+                tf.data.experimental.bucket_by_sequence_length(
+                    element_length_func=_element_length_fn,
+                    bucket_boundaries=boundaries,
+                    bucket_batch_sizes=batch_sizes,
+                    padded_shapes=(
+                        [None],
+                        [None, self.audio_processor.n_mels],
+                        [],
+                        []
+                    ),
+                    padding_values=(
+                        tf.constant(0, dtype=tf.int32),
+                        tf.constant(0.0, dtype=tf.float32),
+                        tf.constant(0, dtype=tf.int32),
+                        tf.constant(0, dtype=tf.int32)
+                    ),
+                    pad_to_bucket_boundary=False,
+                    drop_remainder=False
+                )
+            )
+        else:
+            dataset = dataset.padded_batch(
+                batch_size,
+                padded_shapes=(
+                    [None],       # text_sequence
+                    [None, self.audio_processor.n_mels], # mel_spectrogram
+                    [],           # text_length
+                    []            # mel_length
+                ),
+                padding_values=(
+                    tf.constant(0, dtype=tf.int32),
+                    tf.constant(0.0, dtype=tf.float32),
+                    tf.constant(0, dtype=tf.int32),
+                    tf.constant(0, dtype=tf.int32)
+                ),
+                drop_remainder=False  # Keep all data
+            )
 
         # Repeat dataset for training
         if repeat:
