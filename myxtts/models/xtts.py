@@ -69,12 +69,20 @@ class TextEncoder(tf.keras.layers.Layer):
         
         self.layer_norm = tf.keras.layers.LayerNormalization(name="layer_norm")
         self.dropout = tf.keras.layers.Dropout(0.1)
+        
+        # Duration predictor for alignment guidance
+        self.duration_predictor = tf.keras.layers.Dense(
+            1, 
+            activation='relu',
+            name="duration_predictor"
+        )
     
     def call(
         self,
         inputs: tf.Tensor,
         attention_mask: Optional[tf.Tensor] = None,
-        training: bool = False
+        training: bool = False,
+        return_durations: bool = False
     ) -> tf.Tensor:
         """
         Forward pass.
@@ -83,9 +91,11 @@ class TextEncoder(tf.keras.layers.Layer):
             inputs: Token IDs [batch, seq_len]
             attention_mask: Attention mask [batch, seq_len]
             training: Training mode flag
+            return_durations: Whether to return duration predictions
             
         Returns:
-            Encoded text representations [batch, seq_len, d_model]
+            Encoded text representations [batch, seq_len, d_model] or 
+            tuple (encoded_text, duration_predictions)
         """
         # Token embedding
         x = self.token_embedding(inputs)
@@ -113,7 +123,13 @@ class TextEncoder(tf.keras.layers.Layer):
         # Final layer norm
         x = self.layer_norm(x)
         
-        return x
+        if return_durations:
+            # Duration prediction
+            duration_pred = self.duration_predictor(x)
+            duration_pred = tf.squeeze(duration_pred, axis=-1)  # [batch, seq_len]
+            return x, duration_pred
+        else:
+            return x
 
 
 class AudioEncoder(tf.keras.layers.Layer):
@@ -295,7 +311,8 @@ class MelDecoder(tf.keras.layers.Layer):
         speaker_embedding: Optional[tf.Tensor] = None,
         encoder_mask: Optional[tf.Tensor] = None,
         decoder_mask: Optional[tf.Tensor] = None,
-        training: bool = False
+        training: bool = False,
+        return_attention_weights: bool = False
     ) -> Tuple[tf.Tensor, tf.Tensor]:
         """
         Forward pass.
@@ -307,9 +324,10 @@ class MelDecoder(tf.keras.layers.Layer):
             encoder_mask: Encoder attention mask
             decoder_mask: Decoder attention mask
             training: Training mode flag
+            return_attention_weights: Whether to return attention weights
             
         Returns:
-            Tuple of (mel_output, stop_tokens)
+            Tuple of (mel_output, stop_tokens) or (mel_output, stop_tokens, attention_weights)
         """
         # Input projection
         x = self.input_projection(decoder_inputs)
@@ -341,20 +359,35 @@ class MelDecoder(tf.keras.layers.Layer):
             decoder_mask = (1.0 - decoder_mask) * -1e9
         
         # Transformer decoder blocks
-        for transformer_block in self.transformer_blocks:
-            x = transformer_block(
-                x,
-                encoder_output=encoder_output,
-                self_attention_mask=decoder_mask,
-                cross_attention_mask=encoder_mask,
-                training=training
-            )
+        attention_weights = None
+        for i, transformer_block in enumerate(self.transformer_blocks):
+            if return_attention_weights and i == len(self.transformer_blocks) - 1:
+                # Get attention weights from the last layer
+                x, attention_weights = transformer_block(
+                    x,
+                    encoder_output=encoder_output,
+                    self_attention_mask=decoder_mask,
+                    cross_attention_mask=encoder_mask,
+                    training=training,
+                    return_attention_weights=True
+                )
+            else:
+                x = transformer_block(
+                    x,
+                    encoder_output=encoder_output,
+                    self_attention_mask=decoder_mask,
+                    cross_attention_mask=encoder_mask,
+                    training=training
+                )
         
         # Output projections
         mel_output = self.mel_projection(x)
         stop_tokens = self.stop_projection(x)
         
-        return mel_output, stop_tokens
+        if return_attention_weights and attention_weights is not None:
+            return mel_output, stop_tokens, attention_weights
+        else:
+            return mel_output, stop_tokens
 
 
 class XTTS(tf.keras.Model):
@@ -427,12 +460,21 @@ class XTTS(tf.keras.Model):
                 dtype=tf.float32
             )
         
-        # Encode text
-        text_encoded = self.text_encoder(
-            text_inputs,
-            attention_mask=text_mask,
-            training=training
-        )
+        # Encode text (with optional duration prediction)
+        if training:
+            text_encoded, duration_pred = self.text_encoder(
+                text_inputs,
+                attention_mask=text_mask,
+                training=training,
+                return_durations=True
+            )
+        else:
+            text_encoded = self.text_encoder(
+                text_inputs,
+                attention_mask=text_mask,
+                training=training
+            )
+            duration_pred = None
         
         # Encode audio for speaker conditioning
         speaker_embedding = None
@@ -470,15 +512,32 @@ class XTTS(tf.keras.Model):
             padding_mask = tf.expand_dims(mel_mask, 1)
             causal_mask = causal_mask * padding_mask
         
-        # Decode mel spectrograms
-        mel_output, stop_tokens = self.mel_decoder(
-            decoder_inputs,
-            text_encoded,
-            speaker_embedding=speaker_embedding,
-            encoder_mask=text_mask,
-            decoder_mask=causal_mask,
-            training=training
-        )
+        # Decode mel spectrograms (with optional attention weights)
+        if training:
+            mel_decoder_output = self.mel_decoder(
+                decoder_inputs,
+                text_encoded,
+                speaker_embedding=speaker_embedding,
+                encoder_mask=text_mask,
+                decoder_mask=causal_mask,
+                training=training,
+                return_attention_weights=True
+            )
+            if len(mel_decoder_output) == 3:
+                mel_output, stop_tokens, attention_weights = mel_decoder_output
+            else:
+                mel_output, stop_tokens = mel_decoder_output
+                attention_weights = None
+        else:
+            mel_output, stop_tokens = self.mel_decoder(
+                decoder_inputs,
+                text_encoded,
+                speaker_embedding=speaker_embedding,
+                encoder_mask=text_mask,
+                decoder_mask=causal_mask,
+                training=training
+            )
+            attention_weights = None
         
         outputs = {
             "mel_output": mel_output,
@@ -488,6 +547,13 @@ class XTTS(tf.keras.Model):
         
         if speaker_embedding is not None:
             outputs["speaker_embedding"] = speaker_embedding
+            
+        # Add duration predictions and attention weights during training
+        if training:
+            if duration_pred is not None:
+                outputs["duration_pred"] = duration_pred
+            if attention_weights is not None:
+                outputs["attention_weights"] = attention_weights
         
         return outputs
     

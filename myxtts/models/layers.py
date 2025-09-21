@@ -155,7 +155,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         inputs: tf.Tensor,
         key_value: Optional[tf.Tensor] = None,
         mask: Optional[tf.Tensor] = None,
-        training: bool = False
+        training: bool = False,
+        return_attention_weights: bool = False
     ) -> tf.Tensor:
         """
         Forward pass.
@@ -165,9 +166,10 @@ class MultiHeadAttention(tf.keras.layers.Layer):
             key_value: Key-value tensor for cross-attention
             mask: Attention mask
             training: Training mode flag
+            return_attention_weights: Whether to return attention weights
             
         Returns:
-            Output tensor [batch, seq_len, d_model]
+            Output tensor [batch, seq_len, d_model] or tuple (output, attention_weights)
         """
         batch_size = tf.shape(inputs)[0]
 
@@ -196,7 +198,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         v = tf.transpose(v, [0, 2, 1, 3])  # [batch, heads, seq_len, d_k]
         
         # Apply attention
-        attention_output, _ = self.scaled_dot_product_attention(q, k, v, mask)
+        attention_output, attention_weights = self.scaled_dot_product_attention(q, k, v, mask)
         
         # Concatenate heads
         attention_output = tf.transpose(attention_output, [0, 2, 1, 3])
@@ -208,7 +210,10 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # Final linear projection
         output = self.wo(attention_output)
         
-        return output
+        if return_attention_weights:
+            return output, attention_weights
+        else:
+            return output
 
 
 class PositionalEncoding(tf.keras.layers.Layer):
@@ -398,7 +403,8 @@ class TransformerBlock(tf.keras.layers.Layer):
         encoder_output: Optional[tf.Tensor] = None,
         self_attention_mask: Optional[tf.Tensor] = None,
         cross_attention_mask: Optional[tf.Tensor] = None,
-        training: bool = False
+        training: bool = False,
+        return_attention_weights: bool = False
     ) -> tf.Tensor:
         """
         Forward pass with optional gradient checkpointing.
@@ -409,10 +415,13 @@ class TransformerBlock(tf.keras.layers.Layer):
             self_attention_mask: Self-attention mask
             cross_attention_mask: Cross-attention mask
             training: Training mode flag
+            return_attention_weights: Whether to return cross-attention weights
             
         Returns:
-            Output tensor [batch, seq_len, d_model]
+            Output tensor [batch, seq_len, d_model] or tuple (output, attention_weights)
         """
+        attention_weights = None
+        
         # Self-attention with optional gradient checkpointing
         if self.use_gradient_checkpointing and training:
             # Correct usage: wrap the block function, then call with kwargs
@@ -424,12 +433,22 @@ class TransformerBlock(tf.keras.layers.Layer):
         
         # Cross-attention (decoder only)
         if self.is_decoder and encoder_output is not None:
-            if self.use_gradient_checkpointing and training:
-                x = tf.recompute_grad(self._cross_attention_block)(
-                    x, encoder_output, cross_attention_mask, training=training
+            if return_attention_weights:
+                # For cross-attention, we need to capture attention weights
+                attn_output, attention_weights = self.cross_attention(
+                    x, key_value=encoder_output, 
+                    mask=cross_attention_mask, training=training,
+                    return_attention_weights=True
                 )
+                attn_output = self.dropout(attn_output, training=training)
+                x = self.norm2(x + attn_output)
             else:
-                x = self._cross_attention_block(x, encoder_output, cross_attention_mask, training)
+                if self.use_gradient_checkpointing and training:
+                    x = tf.recompute_grad(self._cross_attention_block)(
+                        x, encoder_output, cross_attention_mask, training=training
+                    )
+                else:
+                    x = self._cross_attention_block(x, encoder_output, cross_attention_mask, training)
         
         # Feed-forward with optional gradient checkpointing
         if self.use_gradient_checkpointing and training:
@@ -439,7 +458,10 @@ class TransformerBlock(tf.keras.layers.Layer):
         else:
             x = self._feed_forward_block(x, training)
         
-        return x
+        if return_attention_weights and attention_weights is not None:
+            return x, attention_weights
+        else:
+            return x
 
 
 class ConvolutionalLayer(tf.keras.layers.Layer):
