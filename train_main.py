@@ -287,6 +287,9 @@ def build_config(
         # Decoder / vocoder strategy controls
         decoder_strategy=decoder_strategy,
         vocoder_type=vocoder_type,
+        
+        # Duration prediction control (NEW: fix gradient warning)
+        use_duration_predictor=True,  # Set to False to disable duration prediction and avoid gradient warnings
 
         # Language/tokenizer
         languages=[

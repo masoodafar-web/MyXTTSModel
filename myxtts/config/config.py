@@ -48,6 +48,9 @@ class ModelConfig:
     # Modern decoding strategies
     decoder_strategy: str = "autoregressive"  # "autoregressive" or "non_autoregressive"
     
+    # Duration prediction (set to False to disable and avoid gradient warnings)
+    use_duration_predictor: bool = True  # Enable duration prediction for alignment
+    
     # Neural vocoder settings
     vocoder_type: str = "griffin_lim"  # "griffin_lim", "hifigan", "bigvgan"
     vocoder_upsample_rates: List[int] = None  # Will be set in __post_init__
