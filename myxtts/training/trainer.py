@@ -162,12 +162,17 @@ class XTTSTrainer:
             except Exception as e:
                 self.logger.debug(f"Could not wrap optimizer for mixed precision: {e}")
             
-            # Initialize loss function
+            # Initialize enhanced loss function with stability features
             self.criterion = XTTSLoss(
                 mel_loss_weight=config.training.mel_loss_weight,
                 stop_loss_weight=1.0,
                 attention_loss_weight=config.training.kl_loss_weight,
-                duration_loss_weight=config.training.duration_loss_weight
+                duration_loss_weight=config.training.duration_loss_weight,
+                # Stability improvements
+                use_adaptive_weights=getattr(config.training, 'use_adaptive_loss_weights', True),
+                loss_smoothing_factor=getattr(config.training, 'loss_smoothing_factor', 0.1),
+                max_loss_spike_threshold=getattr(config.training, 'max_loss_spike_threshold', 2.0),
+                gradient_norm_threshold=getattr(config.training, 'gradient_norm_threshold', 5.0)
             )
         
         # Initialize learning rate scheduler
@@ -178,10 +183,13 @@ class XTTSTrainer:
         self.current_epoch = 0
         self.best_val_loss = float('inf')
         
-        # Early stopping
+        # Enhanced early stopping with improved parameters
+        early_stopping_patience = getattr(config.training, 'early_stopping_patience', 25)
+        early_stopping_min_delta = getattr(config.training, 'early_stopping_min_delta', 0.0005)
+        
         self.early_stopping = EarlyStopping(
-            patience=20,
-            min_delta=0.001,
+            patience=early_stopping_patience,
+            min_delta=early_stopping_min_delta,
             restore_best_weights=True
         )
         
@@ -527,8 +535,22 @@ class XTTSTrainer:
                 # Apply gradients (LossScaleOptimizer will unscale internally if used)
                 self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
                 
-                # Get individual losses
+                # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
+                stability_metrics = self.criterion.get_stability_metrics()
+                
+                # Monitor gradient norm for stability
+                if gradients:
+                    grad_norm = tf.linalg.global_norm(gradients)
+                    individual_losses["gradient_norm"] = grad_norm
+                    
+                    # Log warning if gradient norm is very high
+                    gradient_threshold = getattr(self.config.training, 'gradient_norm_threshold', 5.0)
+                    if grad_norm > gradient_threshold:
+                        self.logger.warning(f"High gradient norm detected: {grad_norm:.4f}")
+                
+                # Add stability metrics to output
+                individual_losses.update(stability_metrics)
                 
                 # Clear intermediate tensors to free memory
                 del outputs, y_true, y_pred, gradients
