@@ -280,6 +280,12 @@ class MelDecoder(tf.keras.layers.Layer):
             name="stop_projection"
         )
         
+        # Speaker conditioning projection (moved from call to enable weight training)
+        self.speaker_projection = tf.keras.layers.Dense(
+            self.d_model,
+            name="speaker_projection"
+        )
+        
         self.dropout = tf.keras.layers.Dropout(0.1)
     
     def call(
@@ -317,7 +323,7 @@ class MelDecoder(tf.keras.layers.Layer):
                 [1, tf.shape(x)[1], 1]
             )
             x = tf.concat([x, speaker_expanded], axis=-1)
-            x = tf.keras.layers.Dense(self.d_model)(x)
+            x = self.speaker_projection(x)
         
         # Positional encoding
         x = self.positional_encoding(x)

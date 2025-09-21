@@ -246,7 +246,7 @@ def build_config(
         text_encoder_dim=text_dim,
         text_encoder_layers=8,  # Increased from 4 for better text representation
         text_encoder_heads=8,   # Increased from 4 for better attention
-        text_vocab_size=256_256,
+        text_vocab_size=128,  # Fixed: was 256_256, now matches actual character vocab (~94) with some buffer
 
         # Enhanced audio encoder for superior voice conditioning
         audio_encoder_dim=768,  # Increased from text_dim for better audio representation

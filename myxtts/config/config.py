@@ -65,7 +65,7 @@ class ModelConfig:
     
     # Memory optimization settings
     enable_gradient_checkpointing: bool = False
-    max_attention_sequence_length: int = 512  # Limit attention sequence length
+    max_attention_sequence_length: int = 512  # Text length limit - increase for longer sentences
     use_memory_efficient_attention: bool = True
     
     def __post_init__(self):
@@ -119,7 +119,9 @@ class DataConfig:
     prefetch_to_gpu: bool = True
 
     # Sequence length caps to avoid OOM (optimized for GPU)
-    max_mel_frames: int = 1024  # Increased from 512 for better GPU utilization
+    # Increase these for longer sentences: max_mel_frames for audio duration, 
+    # ModelConfig.max_attention_sequence_length for text length
+    max_mel_frames: int = 1024  # Increased from 512 for better GPU utilization (~13 seconds at 22kHz)
 
     # GPU-specific optimizations
     enable_xla: bool = True
