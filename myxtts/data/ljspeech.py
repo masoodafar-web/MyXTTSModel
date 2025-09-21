@@ -27,11 +27,13 @@ from ..config.config import DataConfig
 
 class LJSpeechDataset:
     """
-    LJSpeech dataset loader and processor.
+    Multi-speaker dataset loader and processor.
     
-    The LJSpeech dataset is a public domain speech dataset consisting of
-    13,100 short audio clips of a single speaker reading passages from
-    7 non-fiction books. The dataset is commonly used for TTS training.
+    Originally designed for LJSpeech (single speaker), now extended to support
+    multi-speaker datasets with speaker identification. The dataset can handle:
+    - Single speaker datasets (original LJSpeech format)
+    - Multi-speaker datasets with speaker ID extraction from filename or metadata
+    - Audio normalization including loudness matching and VAD processing
     """
     
     URL = "https://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2"
@@ -69,6 +71,13 @@ class LJSpeechDataset:
         # Thread lock for cache access
         self._cache_lock = threading.RLock()
         
+        # Multi-speaker support
+        self.speaker_mapping: Dict[str, int] = {}  # speaker_id -> speaker_index
+        self.reverse_speaker_mapping: Dict[int, str] = {}  # speaker_index -> speaker_id
+        self.num_speakers = 0
+        self.is_multispeaker = getattr(config, 'enable_multispeaker', False)
+        self.speaker_id_pattern = getattr(config, 'speaker_id_pattern', None)  # regex pattern for speaker extraction
+        
         # Initialize processors
         self.audio_processor = AudioProcessor(
             sample_rate=config.sample_rate,
@@ -77,7 +86,10 @@ class LJSpeechDataset:
             win_length=1024,
             n_mels=80,
             normalize=config.normalize_audio,
-            trim_silence=config.trim_silence
+            trim_silence=config.trim_silence,
+            enable_loudness_normalization=getattr(config, 'enable_loudness_normalization', True),
+            target_loudness_lufs=getattr(config, 'target_loudness_lufs', -23.0),
+            enable_vad=getattr(config, 'enable_vad', True)
         )
         
         self.text_processor = TextProcessor(
@@ -538,6 +550,97 @@ class LJSpeechDataset:
         
         print("Dataset downloaded and extracted successfully")
     
+    def _extract_speaker_id(self, audio_id: str) -> str:
+        """
+        Extract speaker ID from audio file ID.
+        
+        Args:
+            audio_id: Audio file identifier
+            
+        Returns:
+            Speaker ID string
+        """
+        if not self.is_multispeaker:
+            return "single_speaker"
+        
+        if self.speaker_id_pattern:
+            import re
+            match = re.search(self.speaker_id_pattern, audio_id)
+            if match:
+                return match.group(1)
+        
+        # Default patterns for common multi-speaker dataset formats
+        # Pattern 1: speaker_id_utterance_id (e.g., "p225_001", "VCTK_p225_001")
+        if '_' in audio_id:
+            parts = audio_id.split('_')
+            # Look for speaker patterns (e.g., p225, spk001, speaker01)
+            for part in parts:
+                if part.startswith(('p', 'spk', 'speaker')) or part.isdigit():
+                    return part
+        
+        # Pattern 2: directory-based extraction (if available in path)
+        # This would require additional context, so fallback to full ID
+        return audio_id.split('_')[0] if '_' in audio_id else "unknown_speaker"
+    
+    def _build_speaker_mapping(self, df: pd.DataFrame):
+        """
+        Build speaker ID to index mapping.
+        
+        Args:
+            df: Metadata dataframe with speaker_id column
+        """
+        unique_speakers = sorted(df['speaker_id'].unique())
+        self.speaker_mapping = {speaker: idx for idx, speaker in enumerate(unique_speakers)}
+        self.reverse_speaker_mapping = {idx: speaker for speaker, idx in self.speaker_mapping.items()}
+        self.num_speakers = len(unique_speakers)
+        
+        print(f"Found {self.num_speakers} unique speakers: {list(unique_speakers)}")
+    
+    def get_speaker_index(self, speaker_id: str) -> int:
+        """Get speaker index from speaker ID."""
+        return self.speaker_mapping.get(speaker_id, 0)
+    
+    def get_speaker_id(self, speaker_index: int) -> str:
+        """Get speaker ID from speaker index."""
+        return self.reverse_speaker_mapping.get(speaker_index, "unknown_speaker")
+    
+    def _compute_duration_target(self, text_sequence: np.ndarray, mel_spec: np.ndarray) -> np.ndarray:
+        """
+        Compute simple duration targets for text-to-mel alignment.
+        
+        Args:
+            text_sequence: Text token sequence
+            mel_spec: Mel spectrogram [time, n_mels]
+            
+        Returns:
+            Duration targets [text_len] - number of mel frames per text token
+        """
+        text_len = len(text_sequence)
+        mel_len = mel_spec.shape[0]
+        
+        if text_len == 0:
+            return np.array([], dtype=np.float32)
+        
+        # Simple uniform distribution as baseline
+        # In practice, this could be learned from forced alignment
+        base_duration = mel_len / text_len
+        duration_target = np.full(text_len, base_duration, dtype=np.float32)
+        
+        # Add some variation for more realistic targets
+        # Make stop tokens shorter, content tokens longer
+        for i, token in enumerate(text_sequence):
+            # Simple heuristic: punctuation gets shorter duration
+            if token in [0, 1, 2]:  # Assuming these are special tokens (PAD, UNK, EOS)
+                duration_target[i] *= 0.5
+            # Content tokens get slightly longer
+            else:
+                duration_target[i] *= 1.1
+        
+        # Normalize to ensure sum equals mel_len
+        duration_target = duration_target * (mel_len / duration_target.sum())
+        
+        return duration_target
+    
     def _load_metadata(self) -> pd.DataFrame:
         """Load metadata from CSV file robustly.
 
@@ -603,10 +706,14 @@ class LJSpeechDataset:
                     skipped += 1
                     continue
 
+                # Extract speaker ID if multispeaker mode is enabled
+                speaker_id = self._extract_speaker_id(id_)
+
                 rows.append({
                     'id': id_,
                     'transcription': trans,
-                    'normalized_transcription': norm
+                    'normalized_transcription': norm,
+                    'speaker_id': speaker_id
                 })
 
         if header_skipped:
@@ -614,10 +721,14 @@ class LJSpeechDataset:
         if skipped:
             print(f"Warning: skipped {skipped} malformed/empty metadata line(s)")
 
-        df = pd.DataFrame(rows, columns=['id', 'transcription', 'normalized_transcription'])
+        df = pd.DataFrame(rows, columns=['id', 'transcription', 'normalized_transcription', 'speaker_id'])
 
         # Add audio file paths using the correct wavs directory
         df['audio_path'] = df['id'].apply(lambda x: str(self.wavs_dir / f"{x}.wav"))
+
+        # Build speaker mapping if multispeaker mode
+        if self.is_multispeaker:
+            self._build_speaker_mapping(df)
 
         # Verify audio files exist
         missing_files = []
@@ -755,7 +866,12 @@ class LJSpeechDataset:
             "audio_length": (len(audio) if audio is not None else int(mel_spec.shape[0] * self.audio_processor.hop_length)),
             "text_length": len(text_sequence),
             # Time dimension after transpose is axis 0
-            "mel_length": int(mel_spec.shape[0])
+            "mel_length": int(mel_spec.shape[0]),
+            # Multi-speaker support
+            "speaker_id": row['speaker_id'],
+            "speaker_index": self.get_speaker_index(row['speaker_id']) if self.is_multispeaker else 0,
+            # Duration target (simple heuristic for now)
+            "duration_target": self._compute_duration_target(text_sequence, mel_spec)
         }
     
     def get_sample_rate(self) -> int:

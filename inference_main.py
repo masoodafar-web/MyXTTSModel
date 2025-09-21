@@ -128,6 +128,15 @@ def parse_args() -> argparse.Namespace:
         help="Multiple reference audio files for voice blending.",
     )
     parser.add_argument(
+        "--speaker-id",
+        help="Speaker ID for multi-speaker models (e.g., 'p225', 'speaker_001').",
+    )
+    parser.add_argument(
+        "--list-speakers",
+        action="store_true", 
+        help="List available speakers in multi-speaker model and exit.",
+    )
+    parser.add_argument(
         "--clone-voice",
         action="store_true",
         help="Enable advanced voice cloning mode with enhanced voice similarity.",

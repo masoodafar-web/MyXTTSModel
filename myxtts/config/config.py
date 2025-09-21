@@ -123,6 +123,16 @@ class DataConfig:
     language: str = "en"
     add_blank: bool = True
 
+    # Multi-speaker support (NEW)
+    enable_multispeaker: bool = False
+    speaker_id_pattern: Optional[str] = None  # Regex pattern for extracting speaker ID from filename
+    max_speakers: int = 1000  # Maximum number of speakers to support
+
+    # Enhanced audio processing (NEW)
+    enable_loudness_normalization: bool = True
+    target_loudness_lufs: float = -23.0
+    enable_vad: bool = True  # Voice Activity Detection using Silero VAD
+
     # Training splits and optional subsampling
     train_split: float = 0.9
     val_split: float = 0.1

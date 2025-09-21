@@ -367,7 +367,7 @@ def build_config(
         visible_gpus=None,
     )
 
-    # Data configuration (comprehensive parameters)
+    # Data configuration (comprehensive parameters with multi-speaker support)
     d = DataConfig(
         # Dataset split/subset controls
         train_subset_fraction=1.0,
@@ -384,6 +384,16 @@ def build_config(
         text_cleaners=["english_cleaners"],
         language="en",
         add_blank=True,
+
+        # Multi-speaker support (NEW FEATURE)
+        enable_multispeaker=False,  # Set to True for multi-speaker datasets
+        speaker_id_pattern=None,    # Regex pattern for speaker extraction, e.g., r'(p\d+)' for VCTK
+        max_speakers=1000,          # Maximum number of speakers
+        
+        # Enhanced audio normalization (NEW FEATURES)
+        enable_loudness_normalization=True,  # Loudness matching for real-world robustness
+        target_loudness_lufs=-23.0,         # Standard broadcast loudness
+        enable_vad=True,                     # Silero VAD for silence removal
 
         # Batching/workers and pipeline performance
         batch_size=batch_size,

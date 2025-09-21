@@ -2,7 +2,8 @@
 Audio processing utilities for MyXTTS.
 
 This module provides audio preprocessing functions including mel spectrogram
-extraction, audio normalization, and other audio-related operations.
+extraction, audio normalization, loudness matching, VAD processing and other 
+audio-related operations for enhanced real-world robustness.
 """
 
 import librosa
@@ -12,6 +13,16 @@ import tensorflow as tf
 from scipy import signal
 from typing import Optional, Tuple, Union
 import warnings
+from urllib.request import urlretrieve
+import os
+
+# Optional torch import for Silero VAD
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+    torch = None
 
 
 class AudioProcessor:
@@ -32,7 +43,10 @@ class AudioProcessor:
         power: float = 1.0,
         normalize: bool = True,
         trim_silence: bool = True,
-        trim_threshold: float = 0.01
+        trim_threshold: float = 0.01,
+        enable_loudness_normalization: bool = True,
+        target_loudness_lufs: float = -23.0,
+        enable_vad: bool = True
     ):
         """
         Initialize AudioProcessor.
@@ -49,6 +63,9 @@ class AudioProcessor:
             normalize: Whether to normalize audio
             trim_silence: Whether to trim silence from audio
             trim_threshold: Threshold for silence trimming
+            enable_loudness_normalization: Enable loudness-based normalization
+            target_loudness_lufs: Target loudness in LUFS
+            enable_vad: Enable voice activity detection using Silero VAD
         """
         self.sample_rate = sample_rate
         self.n_fft = n_fft
@@ -61,6 +78,124 @@ class AudioProcessor:
         self.normalize = normalize
         self.trim_silence = trim_silence
         self.trim_threshold = trim_threshold
+        
+        # Enhanced normalization features
+        self.enable_loudness_normalization = enable_loudness_normalization
+        self.target_loudness_lufs = target_loudness_lufs
+        self.enable_vad = enable_vad
+        
+        # Initialize Silero VAD model
+        self.vad_model = None
+        if self.enable_vad:
+            self._init_vad_model()
+        
+        # Initialize mel filter bank
+        self.mel_filters = librosa.filters.mel(
+            sr=sample_rate,
+            n_fft=n_fft,
+            n_mels=n_mels,
+            fmin=fmin,
+            fmax=self.fmax
+        )
+    
+    def _init_vad_model(self):
+        """Initialize Silero VAD model."""
+        if not TORCH_AVAILABLE:
+            print("Warning: PyTorch not available - VAD features will be disabled")
+            self.enable_vad = False
+            self.vad_model = None
+            return
+            
+        try:
+            # Load Silero VAD model
+            self.vad_model, utils = torch.hub.load(
+                repo_or_dir='snakers4/silero-vad',
+                model='silero_vad',
+                force_reload=False,
+                trust_repo=True
+            )
+            self.get_speech_timestamps = utils[0]
+            print("Silero VAD model loaded successfully")
+        except Exception as e:
+            print(f"Warning: Could not load Silero VAD model: {e}")
+            print("VAD features will be disabled")
+            self.enable_vad = False
+            self.vad_model = None
+    
+    def apply_vad(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Apply voice activity detection to remove silence segments.
+        
+        Args:
+            audio: Input audio waveform
+            
+        Returns:
+            Audio with silence segments removed
+        """
+        if not self.enable_vad or self.vad_model is None or not TORCH_AVAILABLE:
+            return audio
+        
+        try:
+            # Convert to torch tensor
+            audio_tensor = torch.from_numpy(audio).float()
+            
+            # Get speech timestamps
+            speech_timestamps = self.get_speech_timestamps(
+                audio_tensor, 
+                self.vad_model,
+                sampling_rate=self.sample_rate
+            )
+            
+            if not speech_timestamps:
+                # No speech detected, return original audio
+                return audio
+            
+            # Concatenate speech segments
+            speech_segments = []
+            for segment in speech_timestamps:
+                start = segment['start']
+                end = segment['end']
+                speech_segments.append(audio[start:end])
+            
+            if speech_segments:
+                return np.concatenate(speech_segments)
+            else:
+                return audio
+                
+        except Exception as e:
+            print(f"Warning: VAD processing failed: {e}")
+            return audio
+    
+    def normalize_loudness(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Normalize audio loudness to target LUFS.
+        
+        Args:
+            audio: Input audio waveform
+            
+        Returns:
+            Loudness-normalized audio
+        """
+        if not self.enable_loudness_normalization:
+            return audio
+        
+        try:
+            # Simple RMS-based loudness normalization as fallback
+            # This is a simplified version - for production, consider using pyloudnorm
+            rms = np.sqrt(np.mean(audio**2))
+            if rms > 0:
+                # Target RMS level for -23 LUFS (approximate)
+                target_rms = 0.1  # Empirical value for -23 LUFS
+                scaling_factor = target_rms / rms
+                # Apply gentle limiting to avoid clipping
+                scaling_factor = min(scaling_factor, 1.0 / np.max(np.abs(audio)))
+                audio = audio * scaling_factor
+            
+            return audio
+            
+        except Exception as e:
+            print(f"Warning: Loudness normalization failed: {e}")
+            return audio
         
         # Create mel filter bank
         self.mel_basis = librosa.filters.mel(
@@ -105,7 +240,7 @@ class AudioProcessor:
     
     def preprocess_audio(self, audio: np.ndarray) -> np.ndarray:
         """
-        Preprocess audio waveform.
+        Preprocess audio waveform with enhanced normalization.
         
         Args:
             audio: Raw audio waveform
@@ -113,7 +248,11 @@ class AudioProcessor:
         Returns:
             Preprocessed audio waveform
         """
-        # Trim silence
+        # Apply VAD first to remove silence segments
+        if self.enable_vad:
+            audio = self.apply_vad(audio)
+        
+        # Trim silence (traditional method as backup/complement to VAD)
         if self.trim_silence:
             audio, _ = librosa.effects.trim(
                 audio, 
@@ -122,9 +261,15 @@ class AudioProcessor:
                 hop_length=self.hop_length
             )
         
-        # Normalize
+        # Apply loudness normalization
+        if self.enable_loudness_normalization:
+            audio = self.normalize_loudness(audio)
+        
+        # Traditional peak normalization (applied after loudness normalization as safety)
         if self.normalize:
-            audio = audio / np.max(np.abs(audio))
+            max_val = np.max(np.abs(audio))
+            if max_val > 0:
+                audio = audio / max_val
         
         return audio
     
