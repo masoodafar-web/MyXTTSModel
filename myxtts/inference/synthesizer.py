@@ -154,19 +154,25 @@ class XTTSInference:
         if reference_audio is not None and self.config.model.use_voice_conditioning:
             audio_conditioning = self._preprocess_reference_audio(reference_audio)
         
-        # Generate mel spectrogram
+        generate_neural_audio = getattr(self.config.model, 'vocoder_type', 'griffin_lim') != "griffin_lim"
+
+        # Generate mel spectrogram (and optional neural audio)
         outputs = self.model.generate(
             text_inputs=text_tensor,
             audio_conditioning=audio_conditioning,
             max_length=max_length,
-            temperature=temperature
+            temperature=temperature,
+            generate_audio=generate_neural_audio
         )
         
         # Extract generated mel spectrogram
         mel_spectrogram = outputs["mel_output"].numpy()[0]  # Remove batch dimension
-        
-        # Convert mel to waveform
-        audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
+
+        # Convert mel to waveform using neural vocoder when available
+        if generate_neural_audio and "audio_output" in outputs:
+            audio_waveform = outputs["audio_output"].numpy()[0, :, 0]
+        else:
+            audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
         
         # Post-process audio
         audio_waveform = self._postprocess_audio(audio_waveform)

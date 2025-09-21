@@ -133,6 +133,16 @@ def parse_args() -> argparse.Namespace:
         help="Enable advanced voice cloning mode with enhanced voice similarity.",
     )
     parser.add_argument(
+        "--decoder-strategy",
+        choices=["autoregressive", "non_autoregressive"],
+        help="Override decoder strategy for inference.",
+    )
+    parser.add_argument(
+        "--vocoder-type",
+        choices=["griffin_lim", "hifigan", "bigvgan"],
+        help="Select vocoder backend for mel-to-audio conversion.",
+    )
+    parser.add_argument(
         "--language",
         help="Language code (default: value from config).",
     )
@@ -261,6 +271,18 @@ def main():
 
     text = load_text(args)
     config = load_config(args.config_path, args.checkpoint_dir)
+    if args.decoder_strategy:
+        config.model.decoder_strategy = args.decoder_strategy
+    if args.vocoder_type:
+        config.model.vocoder_type = args.vocoder_type
+    if hasattr(config.model, "voice_cloning_temperature"):
+        config.model.voice_cloning_temperature = args.voice_cloning_temperature
+    if hasattr(config.model, "voice_conditioning_strength"):
+        config.model.voice_conditioning_strength = args.voice_conditioning_strength
+    if hasattr(config.model, "voice_similarity_threshold"):
+        config.model.voice_similarity_threshold = args.voice_similarity_threshold
+    if hasattr(config.model, "enable_speaker_interpolation"):
+        config.model.enable_speaker_interpolation = args.enable_voice_interpolation
     checkpoint_prefix = resolve_checkpoint(args, logger)
     
     # Validate reference audio files if provided

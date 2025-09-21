@@ -239,6 +239,8 @@ def build_config(
     max_memory_fraction: float = 0.9,
     prefetch_buffer_size: int = 12,
     shuffle_buffer_multiplier: int = 30,
+    decoder_strategy: str = "autoregressive",
+    vocoder_type: str = "griffin_lim",
 ) -> XTTSConfig:
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
@@ -281,6 +283,10 @@ def build_config(
         voice_feature_dim=256,
         enable_voice_denoising=True,
         voice_cloning_loss_weight=2.0,
+
+        # Decoder / vocoder strategy controls
+        decoder_strategy=decoder_strategy,
+        vocoder_type=vocoder_type,
 
         # Language/tokenizer
         languages=[
@@ -437,6 +443,18 @@ def main():
     parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers")
     parser.add_argument("--lr", type=float, default=8e-5, help="Learning rate (optimized for better convergence)")
     parser.add_argument(
+        "--decoder-strategy",
+        choices=["autoregressive", "non_autoregressive"],
+        default="autoregressive",
+        help="Decoder strategy to use (default: autoregressive)",
+    )
+    parser.add_argument(
+        "--vocoder-type",
+        choices=["griffin_lim", "hifigan", "bigvgan"],
+        default="griffin_lim",
+        help="Neural vocoder backend for mel-to-audio conversion (default: griffin_lim)",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="(Deprecated) Resuming is automatic; kept for backwards compatibility"
@@ -539,6 +557,8 @@ def main():
         max_memory_fraction=max_memory_fraction,
         prefetch_buffer_size=prefetch_buffer_size,
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
+        decoder_strategy=args.decoder_strategy,
+        vocoder_type=args.vocoder_type,
     )
 
     # Apply optimization level
@@ -560,6 +580,10 @@ def main():
     logger.info(f"Scheduler: {config.training.scheduler}")
     logger.info(f"Weight decay: {config.training.weight_decay}")
     logger.info(f"Gradient clip norm: {config.training.gradient_clip_norm}")
+    if hasattr(config.model, 'decoder_strategy'):
+        logger.info(f"Decoder strategy: {config.model.decoder_strategy}")
+    if hasattr(config.model, 'vocoder_type'):
+        logger.info(f"Vocoder type: {config.model.vocoder_type}")
     if hasattr(config.training, 'use_adaptive_loss_weights'):
         logger.info(f"Adaptive loss weights: {config.training.use_adaptive_loss_weights}")
     if hasattr(config.training, 'use_label_smoothing'):

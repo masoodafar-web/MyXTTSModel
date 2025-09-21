@@ -548,6 +548,26 @@ class XTTSTrainer:
                         "mel_output": outputs["mel_output"],
                         "stop_tokens": outputs["stop_tokens"]
                     }
+
+                    if "duration_pred" in outputs and outputs["duration_pred"] is not None:
+                        y_pred["duration_pred"] = outputs["duration_pred"]
+
+                        text_len_tensor = tf.shape(text_sequences)[1]
+                        text_mask = tf.sequence_mask(
+                            text_lengths,
+                            maxlen=text_len_tensor,
+                            dtype=tf.float32
+                        )
+                        avg_duration = tf.cast(mel_lengths, tf.float32) / tf.maximum(
+                            tf.cast(text_lengths, tf.float32),
+                            1.0,
+                        )
+                        avg_duration = tf.expand_dims(avg_duration, axis=1)
+                        duration_target = avg_duration * text_mask
+                        y_true["duration_target"] = duration_target
+
+                    if "attention_weights" in outputs and outputs["attention_weights"] is not None:
+                        y_pred["attention_weights"] = outputs["attention_weights"]
                     
                     # Compute loss
                     loss = self.criterion(y_true, y_pred)

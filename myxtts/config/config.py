@@ -159,6 +159,10 @@ class DataConfig:
     # Dataset preprocessing control (default to precompute for GPU optimization)
     preprocessing_mode: str = "precompute"  # Changed from "auto" - forces cache files for GPU optimization
     
+    # Reference audio controls for voice cloning
+    reference_audio_length: float = 3.0  # Seconds of reference audio to use for conditioning
+    max_audio_length: float = 11.0       # Maximum seconds of audio to keep after trimming
+
     # Advanced GPU optimization options
     use_tf_native_loading: bool = True  # Use TensorFlow-native file loading instead of Python functions
     enhanced_gpu_prefetch: bool = True  # Enable advanced GPU prefetching strategies
