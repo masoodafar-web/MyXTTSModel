@@ -219,6 +219,49 @@ class AudioProcessor:
         
         return audio
     
+    def mel_to_wav_neural(
+        self,
+        mel: Union[np.ndarray, tf.Tensor],
+        vocoder_model: Optional[tf.keras.Model] = None
+    ) -> np.ndarray:
+        """
+        Convert mel spectrogram to waveform using neural vocoder.
+        
+        Args:
+            mel: Mel spectrogram [n_mels, time_steps] or [time_steps, n_mels]
+            vocoder_model: Trained neural vocoder model (HiFi-GAN, etc.)
+            
+        Returns:
+            Audio waveform
+        """
+        if vocoder_model is None:
+            # Fallback to Griffin-Lim if no neural vocoder provided
+            warnings.warn("No neural vocoder provided, falling back to Griffin-Lim")
+            return self.mel_to_wav(mel)
+        
+        # Ensure mel is TensorFlow tensor
+        if isinstance(mel, np.ndarray):
+            mel = tf.constant(mel, dtype=tf.float32)
+        
+        # Ensure proper shape [batch, time, n_mels]
+        if len(mel.shape) == 2:
+            if mel.shape[0] == self.n_mels:  # [n_mels, time]
+                mel = tf.transpose(mel, [1, 0])  # [time, n_mels]
+            mel = tf.expand_dims(mel, 0)  # [1, time, n_mels]
+        
+        # Generate audio using neural vocoder
+        with tf.device('/CPU:0'):  # Use CPU for inference if GPU not available
+            audio_tensor = vocoder_model(mel, training=False)
+        
+        # Convert to numpy and remove batch dimension
+        audio = audio_tensor.numpy()
+        if len(audio.shape) == 3:
+            audio = audio[0, :, 0]  # [batch, time, 1] -> [time]
+        elif len(audio.shape) == 2:
+            audio = audio[0, :]  # [batch, time] -> [time]
+        
+        return audio
+    
     def compute_f0(
         self, 
         audio: np.ndarray,

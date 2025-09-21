@@ -17,6 +17,8 @@ from .layers import (
     FeedForward,
     ConvolutionalLayer
 )
+from .vocoder import VocoderInterface, HiFiGANGenerator
+from .non_autoregressive import DecoderStrategy, NonAutoregressiveDecoder
 from ..config.config import ModelConfig
 
 
@@ -416,7 +418,26 @@ class XTTS(tf.keras.Model):
         if config.use_voice_conditioning:
             self.audio_encoder = AudioEncoder(config, name="audio_encoder") 
         
-        self.mel_decoder = MelDecoder(config, name="mel_decoder")
+        # Decoder strategy (autoregressive or non-autoregressive)
+        decoder_strategy = getattr(config, 'decoder_strategy', 'autoregressive')
+        if decoder_strategy == 'non_autoregressive':
+            self.decoder_strategy = DecoderStrategy(
+                config, 
+                strategy='non_autoregressive',
+                name="decoder_strategy"
+            )
+        else:
+            # Default to autoregressive for backward compatibility
+            self.mel_decoder = MelDecoder(config, name="mel_decoder")
+            self.decoder_strategy = None
+        
+        # Neural vocoder interface
+        vocoder_type = getattr(config, 'vocoder_type', 'griffin_lim')
+        self.vocoder = VocoderInterface(
+            config,
+            vocoder_type=vocoder_type,
+            name="vocoder"
+        )
     
     def call(
         self,
@@ -512,32 +533,53 @@ class XTTS(tf.keras.Model):
             padding_mask = tf.expand_dims(mel_mask, 1)
             causal_mask = causal_mask * padding_mask
         
-        # Decode mel spectrograms (with optional attention weights)
-        if training:
-            mel_decoder_output = self.mel_decoder(
-                decoder_inputs,
+        # Decode mel spectrograms using appropriate strategy
+        if self.decoder_strategy is not None:
+            # Use new decoder strategy interface
+            mel_output, stop_or_duration, attention_weights = self.decoder_strategy(
+                decoder_inputs if hasattr(self, 'mel_decoder') else None,
                 text_encoded,
+                durations=None,  # TODO: Add duration targets for training
                 speaker_embedding=speaker_embedding,
                 encoder_mask=text_mask,
-                decoder_mask=causal_mask,
-                training=training,
-                return_attention_weights=True
-            )
-            if len(mel_decoder_output) == 3:
-                mel_output, stop_tokens, attention_weights = mel_decoder_output
-            else:
-                mel_output, stop_tokens = mel_decoder_output
-                attention_weights = None
-        else:
-            mel_output, stop_tokens = self.mel_decoder(
-                decoder_inputs,
-                text_encoded,
-                speaker_embedding=speaker_embedding,
-                encoder_mask=text_mask,
-                decoder_mask=causal_mask,
+                decoder_mask=causal_mask if hasattr(self, 'mel_decoder') else None,
+                max_length=mel_len if not training else None,
                 training=training
             )
-            attention_weights = None
+            
+            # For non-autoregressive, stop_or_duration contains duration predictions
+            if self.config.decoder_strategy == 'non_autoregressive':
+                stop_tokens = None
+                duration_pred = stop_or_duration
+            else:
+                stop_tokens = stop_or_duration
+        else:
+            # Use legacy autoregressive decoder
+            if training:
+                mel_decoder_output = self.mel_decoder(
+                    decoder_inputs,
+                    text_encoded,
+                    speaker_embedding=speaker_embedding,
+                    encoder_mask=text_mask,
+                    decoder_mask=causal_mask,
+                    training=training,
+                    return_attention_weights=True
+                )
+                if len(mel_decoder_output) == 3:
+                    mel_output, stop_tokens, attention_weights = mel_decoder_output
+                else:
+                    mel_output, stop_tokens = mel_decoder_output
+                    attention_weights = None
+            else:
+                mel_output, stop_tokens = self.mel_decoder(
+                    decoder_inputs,
+                    text_encoded,
+                    speaker_embedding=speaker_embedding,
+                    encoder_mask=text_mask,
+                    decoder_mask=causal_mask,
+                    training=training
+                )
+                attention_weights = None
         
         outputs = {
             "mel_output": mel_output,
@@ -562,16 +604,18 @@ class XTTS(tf.keras.Model):
         text_inputs: tf.Tensor,
         audio_conditioning: Optional[tf.Tensor] = None,
         max_length: int = 1000,
-        temperature: float = 1.0
+        temperature: float = 1.0,
+        generate_audio: bool = False
     ) -> Dict[str, tf.Tensor]:
         """
-        Generate mel spectrograms autoregressively.
+        Generate mel spectrograms and optionally audio.
         
         Args:
             text_inputs: Text token IDs [batch, text_len]
             audio_conditioning: Reference audio for voice cloning
             max_length: Maximum generation length
             temperature: Sampling temperature
+            generate_audio: Whether to generate audio using neural vocoder
             
         Returns:
             Dictionary with generated outputs
@@ -589,50 +633,82 @@ class XTTS(tf.keras.Model):
                 training=False
             )
         
-        # Initialize decoder state
-        mel_outputs = []
-        stop_probs = []
-        
-        # Start with zero frame
-        current_mel = tf.zeros([batch_size, 1, self.config.n_mels])
-        
-        for step in range(max_length):
-            # Decode current step
-            mel_output, stop_tokens = self.mel_decoder(
-                current_mel,
+        # Generate mel spectrograms using appropriate strategy
+        if self.decoder_strategy is not None and getattr(self.config, 'decoder_strategy', '') == 'non_autoregressive':
+            # Non-autoregressive generation
+            mel_output, duration_pred = self.decoder_strategy.decoder(
                 text_encoded,
                 speaker_embedding=speaker_embedding,
+                max_length=max_length,
                 training=False
             )
+            generated_mel = mel_output
+            generated_stops = None
             
-            # Get last frame prediction
-            mel_frame = mel_output[:, -1:, :]  # [batch, 1, n_mels]
-            stop_prob = stop_tokens[:, -1:, :]  # [batch, 1, 1]
+        else:
+            # Autoregressive generation
+            mel_outputs = []
+            stop_probs = []
             
-            # Apply temperature sampling if needed
-            if temperature != 1.0:
-                mel_frame = mel_frame / temperature
+            # Start with zero frame
+            current_mel = tf.zeros([batch_size, 1, self.config.n_mels])
             
-            mel_outputs.append(mel_frame)
-            stop_probs.append(stop_prob)
+            decoder = self.mel_decoder if hasattr(self, 'mel_decoder') else self.decoder_strategy.decoder
             
-            # Update decoder input for next step
-            current_mel = tf.concat([current_mel, mel_frame], axis=1)
+            for step in range(max_length):
+                # Decode current step
+                if hasattr(self, 'mel_decoder'):
+                    mel_output, stop_tokens = self.mel_decoder(
+                        current_mel,
+                        text_encoded,
+                        speaker_embedding=speaker_embedding,
+                        training=False
+                    )
+                else:
+                    mel_output, stop_tokens, _ = self.decoder_strategy(
+                        current_mel,
+                        text_encoded,
+                        speaker_embedding=speaker_embedding,
+                        training=False
+                    )
+                
+                # Get last frame prediction
+                mel_frame = mel_output[:, -1:, :]  # [batch, 1, n_mels]
+                stop_prob = stop_tokens[:, -1:, :]  # [batch, 1, 1]
+                
+                # Apply temperature sampling if needed
+                if temperature != 1.0:
+                    mel_frame = mel_frame / temperature
+                
+                mel_outputs.append(mel_frame)
+                stop_probs.append(stop_prob)
+                
+                # Update decoder input for next step
+                current_mel = tf.concat([current_mel, mel_frame], axis=1)
+                
+                # Check for stop condition
+                if tf.reduce_all(stop_prob > 0.5):
+                    break
             
-            # Check for stop condition
-            if tf.reduce_all(stop_prob > 0.5):
-                break
+            # Concatenate all frames
+            generated_mel = tf.concat(mel_outputs, axis=1)
+            generated_stops = tf.concat(stop_probs, axis=1)
         
-        # Concatenate all frames
-        generated_mel = tf.concat(mel_outputs, axis=1)
-        generated_stops = tf.concat(stop_probs, axis=1)
-        
-        return {
+        results = {
             "mel_output": generated_mel,
-            "stop_tokens": generated_stops,
             "text_encoded": text_encoded,
             "speaker_embedding": speaker_embedding
         }
+        
+        if generated_stops is not None:
+            results["stop_tokens"] = generated_stops
+        
+        # Generate audio using neural vocoder if requested
+        if generate_audio and self.vocoder.vocoder_type != "griffin_lim":
+            generated_audio = self.vocoder(generated_mel, training=False)
+            results["audio_output"] = generated_audio
+        
+        return results
     
     def get_config(self) -> Dict:
         """Get model configuration."""
