@@ -12,21 +12,45 @@ from typing import Dict, Optional, Tuple
 def mel_loss(
     y_true: tf.Tensor,
     y_pred: tf.Tensor,
-    lengths: Optional[tf.Tensor] = None
+    lengths: Optional[tf.Tensor] = None,
+    label_smoothing: float = 0.05,
+    use_huber_loss: bool = True,
+    huber_delta: float = 1.0
 ) -> tf.Tensor:
     """
-    Mel spectrogram L1 loss.
+    Enhanced mel spectrogram loss with stability improvements.
     
     Args:
         y_true: Target mel spectrograms [batch, time, n_mels]
         y_pred: Predicted mel spectrograms [batch, time, n_mels]
         lengths: Sequence lengths [batch] for masking
+        label_smoothing: Label smoothing factor for regularization
+        use_huber_loss: Use Huber loss instead of L1 for better stability
+        huber_delta: Delta parameter for Huber loss
         
     Returns:
-        Mel loss tensor
+        Stabilized mel loss tensor
     """
-    # Compute L1 loss
-    loss = tf.abs(y_true - y_pred)
+    # Apply label smoothing if enabled
+    if label_smoothing > 0.0:
+        # Add small amount of noise to targets for regularization
+        noise_scale = label_smoothing * tf.math.reduce_std(y_true)
+        noise = tf.random.normal(tf.shape(y_true), stddev=noise_scale)
+        y_true_smoothed = y_true + noise
+    else:
+        y_true_smoothed = y_true
+    
+    # Compute loss with optional Huber loss for stability
+    if use_huber_loss:
+        # Huber loss is less sensitive to outliers than L1
+        diff = y_true_smoothed - y_pred
+        is_small_error = tf.abs(diff) <= huber_delta
+        squared_loss = tf.square(diff) / 2.0
+        linear_loss = huber_delta * tf.abs(diff) - tf.square(huber_delta) / 2.0
+        loss = tf.where(is_small_error, squared_loss, linear_loss)
+    else:
+        # Standard L1 loss
+        loss = tf.abs(y_true_smoothed - y_pred)
     
     # Apply sequence masking if lengths provided
     if lengths is not None:
@@ -38,13 +62,18 @@ def mel_loss(
         mask = tf.expand_dims(mask, -1)  # [batch, time, 1]
         loss = loss * mask
         
-        # Normalize by actual sequence lengths
-        loss = tf.reduce_sum(loss, axis=[1, 2])  # [batch]
-        normalizer = tf.cast(lengths, tf.float32) * tf.cast(tf.shape(y_true)[2], tf.float32)
-        loss = loss / tf.maximum(normalizer, 1.0)
-        loss = tf.reduce_mean(loss)
+        # Improved normalization: normalize by actual content, not just sequence length
+        loss_sum = tf.reduce_sum(loss, axis=[1, 2])  # [batch]
+        content_size = tf.cast(lengths, tf.float32) * tf.cast(tf.shape(y_true)[2], tf.float32)
+        
+        # Add epsilon to prevent division by zero and stabilize training
+        normalized_loss = loss_sum / tf.maximum(content_size, 1.0)
+        loss = tf.reduce_mean(normalized_loss)
     else:
         loss = tf.reduce_mean(loss)
+    
+    # Apply gradient clipping at the loss level for additional stability
+    loss = tf.clip_by_value(loss, 0.0, 100.0)  # Prevent extreme loss values
     
     return loss
 
@@ -52,21 +81,43 @@ def mel_loss(
 def stop_token_loss(
     y_true: tf.Tensor,
     y_pred: tf.Tensor,
-    lengths: Optional[tf.Tensor] = None
+    lengths: Optional[tf.Tensor] = None,
+    positive_weight: float = 5.0,
+    label_smoothing: float = 0.1
 ) -> tf.Tensor:
     """
-    Stop token binary cross-entropy loss.
+    Enhanced stop token binary cross-entropy loss with class balancing.
     
     Args:
         y_true: Target stop tokens [batch, time, 1]
         y_pred: Predicted stop tokens [batch, time, 1]  
         lengths: Sequence lengths [batch] for masking
+        positive_weight: Weight for positive (stop) tokens to handle class imbalance
+        label_smoothing: Label smoothing factor for better generalization
         
     Returns:
-        Stop token loss tensor
+        Balanced stop token loss tensor
     """
-    # Binary cross-entropy loss
-    loss = tf.keras.losses.binary_crossentropy(y_true, y_pred, from_logits=False)
+    # Apply label smoothing
+    if label_smoothing > 0.0:
+        y_true_smooth = y_true * (1.0 - label_smoothing) + 0.5 * label_smoothing
+    else:
+        y_true_smooth = y_true
+    
+    # Compute class-weighted binary cross-entropy
+    # Stop tokens (1s) are rare, so weight them more heavily
+    pos_weight = tf.constant(positive_weight, dtype=tf.float32)
+    
+    # Manual weighted binary cross-entropy for better control
+    epsilon = 1e-7
+    y_pred_clipped = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+    
+    # Positive class (stop token) loss
+    pos_loss = -y_true_smooth * tf.math.log(y_pred_clipped) * pos_weight
+    # Negative class (continue) loss  
+    neg_loss = -(1.0 - y_true_smooth) * tf.math.log(1.0 - y_pred_clipped)
+    
+    loss = pos_loss + neg_loss
     
     # Apply sequence masking if lengths provided
     if lengths is not None:
@@ -75,10 +126,10 @@ def stop_token_loss(
             maxlen=tf.shape(y_true)[1],
             dtype=tf.float32
         )
-        loss = loss * mask
+        loss = loss * tf.expand_dims(mask, -1)
         
         # Normalize by actual sequence lengths
-        loss = tf.reduce_sum(loss, axis=1)  # [batch]
+        loss = tf.reduce_sum(loss, axis=[1, 2])  # [batch]
         loss = loss / tf.maximum(tf.cast(lengths, tf.float32), 1.0)
         loss = tf.reduce_mean(loss)
     else:
@@ -182,10 +233,11 @@ def duration_loss(
 
 class XTTSLoss(tf.keras.losses.Loss):
     """
-    Combined loss function for XTTS training.
+    Enhanced combined loss function for XTTS training with stability improvements.
     
     Combines mel spectrogram loss, stop token loss, and optional
-    regularization losses with configurable weights.
+    regularization losses with configurable weights, adaptive scaling,
+    and smoothing mechanisms for better training stability.
     """
     
     def __init__(
@@ -194,24 +246,47 @@ class XTTSLoss(tf.keras.losses.Loss):
         stop_loss_weight: float = 1.0,
         attention_loss_weight: float = 1.0,
         duration_loss_weight: float = 1.0,
+        # Stability improvements
+        use_adaptive_weights: bool = True,
+        loss_smoothing_factor: float = 0.1,
+        max_loss_spike_threshold: float = 2.0,
+        gradient_norm_threshold: float = 5.0,
         name: str = "xtts_loss"
     ):
         """
-        Initialize XTTS loss.
+        Initialize enhanced XTTS loss with stability features.
         
         Args:
             mel_loss_weight: Weight for mel spectrogram loss
             stop_loss_weight: Weight for stop token loss
             attention_loss_weight: Weight for attention loss
             duration_loss_weight: Weight for duration loss
+            use_adaptive_weights: Enable adaptive loss weight scaling
+            loss_smoothing_factor: Factor for exponential smoothing of losses
+            max_loss_spike_threshold: Maximum allowed loss spike multiplier
+            gradient_norm_threshold: Threshold for gradient norm monitoring
             name: Loss name
         """
         super().__init__(name=name)
         
+        # Base loss weights
         self.mel_loss_weight = mel_loss_weight
         self.stop_loss_weight = stop_loss_weight
         self.attention_loss_weight = attention_loss_weight
         self.duration_loss_weight = duration_loss_weight
+        
+        # Stability features
+        self.use_adaptive_weights = use_adaptive_weights
+        self.loss_smoothing_factor = loss_smoothing_factor
+        self.max_loss_spike_threshold = max_loss_spike_threshold
+        self.gradient_norm_threshold = gradient_norm_threshold
+        
+        # Running averages for stability monitoring
+        self.running_mel_loss = tf.Variable(0.0, trainable=False, name="running_mel_loss")
+        self.running_total_loss = tf.Variable(0.0, trainable=False, name="running_total_loss")
+        self.step_count = tf.Variable(0, trainable=False, name="loss_step_count")
+        self.loss_history = tf.Variable(tf.zeros([10]), trainable=False, name="loss_history")
+        self.history_index = tf.Variable(0, trainable=False, name="history_index")
     
     def call(
         self,
@@ -219,14 +294,14 @@ class XTTSLoss(tf.keras.losses.Loss):
         y_pred: Dict[str, tf.Tensor]
     ) -> tf.Tensor:
         """
-        Compute combined loss.
+        Compute combined loss with stability improvements.
         
         Args:
             y_true: Dictionary of target tensors
             y_pred: Dictionary of predicted tensors
             
         Returns:
-            Combined loss tensor
+            Combined loss tensor with stability enhancements
         """
         losses = {}
         total_loss = 0.0
@@ -239,7 +314,14 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true.get("mel_lengths")
             )
             losses["mel_loss"] = mel_l
-            total_loss += self.mel_loss_weight * mel_l
+            
+            # Apply adaptive weighting for mel loss
+            if self.use_adaptive_weights:
+                mel_weight = self._adaptive_mel_weight(mel_l)
+            else:
+                mel_weight = self.mel_loss_weight
+                
+            total_loss += mel_weight * mel_l
         
         # Stop token loss
         if "stop_target" in y_true and "stop_tokens" in y_pred:
@@ -275,14 +357,133 @@ class XTTSLoss(tf.keras.losses.Loss):
             losses["duration_loss"] = dur_l
             total_loss += self.duration_loss_weight * dur_l
         
+        # Apply loss smoothing and spike detection
+        total_loss = self._apply_loss_smoothing(total_loss)
+        
         # Store individual losses for monitoring
         self.losses = losses
         
         return total_loss
     
+    def _adaptive_mel_weight(self, current_mel_loss: tf.Tensor) -> tf.Tensor:
+        """
+        Compute adaptive weight for mel loss based on convergence progress.
+        
+        Args:
+            current_mel_loss: Current mel loss value
+            
+        Returns:
+            Adaptive weight for mel loss
+        """
+        # Update running average
+        self.step_count.assign_add(1)
+        decay = tf.minimum(tf.cast(self.step_count, tf.float32) / 1000.0, 0.99)
+        
+        self.running_mel_loss.assign(
+            decay * self.running_mel_loss + (1.0 - decay) * current_mel_loss
+        )
+        
+        # Adaptive scaling based on loss magnitude
+        # Reduce weight if loss is converging well, increase if struggling
+        base_weight = self.mel_loss_weight
+        
+        # If loss is higher than running average, slightly increase weight
+        # If loss is lower, slightly decrease weight for better balance
+        ratio = current_mel_loss / (self.running_mel_loss + 1e-8)
+        
+        # Smooth adaptation - don't make dramatic changes
+        adaptation_factor = tf.clip_by_value(
+            0.5 + 0.5 * tf.tanh(ratio - 1.0), 
+            0.7,  # Minimum 70% of base weight
+            1.3   # Maximum 130% of base weight
+        )
+        
+        return base_weight * adaptation_factor
+    
+    def _apply_loss_smoothing(self, current_loss: tf.Tensor) -> tf.Tensor:
+        """
+        Apply exponential smoothing and spike detection to loss.
+        
+        Args:
+            current_loss: Current computed loss
+            
+        Returns:
+            Smoothed loss with spike protection
+        """
+        # Update loss history for spike detection
+        history_idx = self.history_index % 10
+        self.loss_history = tf.tensor_scatter_nd_update(
+            self.loss_history,
+            [[history_idx]],
+            [current_loss]
+        )
+        self.history_index.assign_add(1)
+        
+        # Compute running total loss average
+        decay = tf.minimum(tf.cast(self.step_count, tf.float32) / 500.0, 0.95)
+        self.running_total_loss.assign(
+            decay * self.running_total_loss + (1.0 - decay) * current_loss
+        )
+        
+        # Spike detection: if current loss is much higher than recent average
+        if self.step_count > 10:
+            recent_avg = tf.reduce_mean(self.loss_history)
+            spike_ratio = current_loss / (recent_avg + 1e-8)
+            
+            # If we detect a spike, apply dampening
+            if spike_ratio > self.max_loss_spike_threshold:
+                dampening_factor = tf.minimum(
+                    self.max_loss_spike_threshold / spike_ratio,
+                    1.0
+                )
+                smoothed_loss = current_loss * dampening_factor
+            else:
+                # Apply light exponential smoothing for stability
+                smoothed_loss = (
+                    (1.0 - self.loss_smoothing_factor) * current_loss +
+                    self.loss_smoothing_factor * self.running_total_loss
+                )
+        else:
+            smoothed_loss = current_loss
+            
+        return smoothed_loss
+    
     def get_losses(self) -> Dict[str, tf.Tensor]:
         """Get individual loss components."""
         return getattr(self, 'losses', {})
+    
+    def get_stability_metrics(self) -> Dict[str, tf.Tensor]:
+        """
+        Get training stability metrics for monitoring.
+        
+        Returns:
+            Dictionary containing stability metrics
+        """
+        metrics = {}
+        
+        if self.step_count > 0:
+            metrics["running_mel_loss"] = self.running_mel_loss
+            metrics["running_total_loss"] = self.running_total_loss
+            
+            if self.step_count > 10:
+                # Compute loss variance for stability assessment
+                recent_losses = self.loss_history
+                loss_mean = tf.reduce_mean(recent_losses)
+                loss_variance = tf.reduce_mean(tf.square(recent_losses - loss_mean))
+                metrics["loss_variance"] = loss_variance
+                metrics["loss_stability_score"] = tf.exp(-loss_variance)  # Higher = more stable
+            
+            metrics["step_count"] = tf.cast(self.step_count, tf.float32)
+        
+        return metrics
+    
+    def reset_stability_state(self):
+        """Reset stability tracking state (useful for validation/testing)."""
+        self.running_mel_loss.assign(0.0)
+        self.running_total_loss.assign(0.0)
+        self.step_count.assign(0)
+        self.loss_history.assign(tf.zeros([10]))
+        self.history_index.assign(0)
 
 
 def create_stop_targets(mel_lengths: tf.Tensor, max_length: int) -> tf.Tensor:

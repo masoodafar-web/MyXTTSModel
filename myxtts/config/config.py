@@ -159,10 +159,33 @@ class TrainingConfig:
     scheduler: str = "noam"
     scheduler_params: Dict[str, Any] = None
     
-    # Loss weights
-    mel_loss_weight: float = 45.0
+    # Loss weights (adjusted for better balance)
+    mel_loss_weight: float = 35.0  # Reduced from 45.0 for better stability
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 1.0
+    
+    # Training stability improvements
+    use_adaptive_loss_weights: bool = True      # Enable adaptive loss weight scaling
+    loss_smoothing_factor: float = 0.1          # Exponential smoothing factor
+    max_loss_spike_threshold: float = 2.0       # Maximum allowed loss spike multiplier
+    gradient_norm_threshold: float = 5.0        # Threshold for gradient norm monitoring
+    
+    # Enhanced loss function options
+    use_label_smoothing: bool = True            # Enable label smoothing for regularization
+    mel_label_smoothing: float = 0.05          # Label smoothing for mel loss
+    stop_label_smoothing: float = 0.1          # Label smoothing for stop token loss
+    use_huber_loss: bool = True                # Use Huber loss for mel loss stability
+    huber_delta: float = 1.0                   # Delta parameter for Huber loss
+    stop_token_positive_weight: float = 5.0    # Weight for positive stop tokens
+    
+    # Learning rate improvements
+    use_warmup_cosine_schedule: bool = True     # Use cosine annealing with warmup
+    cosine_restarts: bool = False              # Enable cosine restarts
+    min_learning_rate: float = 1e-6           # Minimum learning rate
+    
+    # Early stopping improvements
+    early_stopping_patience: int = 25          # Increased patience for stability
+    early_stopping_min_delta: float = 0.0005  # Smaller delta for fine-grained stopping
     
     # Checkpointing
     save_step: int = 25000

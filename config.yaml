@@ -21,9 +21,31 @@ training:
   optimizer: adamw
   scheduler: noam
   
-  # Loss weights
-  mel_loss_weight: 45.0
+  # Improved loss weights for better stability
+  mel_loss_weight: 35.0        # Reduced from 45.0 for better balance
   kl_loss_weight: 1.0
+  
+  # Training stability improvements  
+  use_adaptive_loss_weights: true      # Enable adaptive loss weight scaling
+  loss_smoothing_factor: 0.1           # Exponential smoothing factor
+  max_loss_spike_threshold: 2.0        # Maximum allowed loss spike multiplier
+  gradient_norm_threshold: 5.0         # Threshold for gradient norm monitoring
+  
+  # Enhanced loss function options
+  use_label_smoothing: true            # Enable label smoothing for regularization
+  mel_label_smoothing: 0.05           # Label smoothing for mel loss
+  stop_label_smoothing: 0.1           # Label smoothing for stop token loss
+  use_huber_loss: true                # Use Huber loss for mel loss stability
+  huber_delta: 1.0                    # Delta parameter for Huber loss
+  stop_token_positive_weight: 5.0     # Weight for positive stop tokens
+  
+  # Learning rate improvements
+  use_warmup_cosine_schedule: true     # Use cosine annealing with warmup
+  min_learning_rate: 1e-6             # Minimum learning rate
+  
+  # Early stopping improvements
+  early_stopping_patience: 25          # Increased patience for stability
+  early_stopping_min_delta: 0.0005    # Smaller delta for fine-grained stopping
   
   # Checkpointing
   save_step: 25000
