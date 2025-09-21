@@ -451,8 +451,29 @@ def load_checkpoint(
     # Load model weights
     model_path = f"{checkpoint_path}_model.weights.h5"
     if os.path.exists(model_path):
-        model.load_weights(model_path)
-        print(f"Loaded model weights from {model_path}")
+        try:
+            load_status = model.load_weights(model_path)
+            # Newer TensorFlow returns a status object for checkpoint consumption
+            if hasattr(load_status, "assert_consumed"):
+                load_status.assert_consumed()
+            print(f"Loaded model weights from {model_path}")
+        except ValueError as err:
+            msg = str(err)
+            # Some checkpoints omit weights for optional submodules (e.g. audio encoder).
+            # Fallback to a permissive load so the rest of the model is restored.
+            if "objects could not be loaded" in msg or "expects" in msg:
+                print(
+                    "Warning: Partial weight load detected. Missing weights will "
+                    "remain randomly initialized."
+                )
+                load_status = model.load_weights(
+                    model_path, skip_mismatch=True
+                )
+                if hasattr(load_status, "expect_partial"):
+                    load_status.expect_partial()
+                print(f"Loaded available weights from {model_path}")
+            else:
+                raise
     else:
         raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
     

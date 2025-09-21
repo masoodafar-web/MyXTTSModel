@@ -102,17 +102,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         q_seq_len = tf.shape(q)[2]
         k_seq_len = tf.shape(k)[2]
         
-        # Memory optimization: limit maximum sequence length for attention
-        max_seq_len = 512  # Reduce from potential 1024+ to prevent OOM
-        
-        if q_seq_len > max_seq_len or k_seq_len > max_seq_len:
-            # Truncate sequences to prevent memory explosion
-            q = q[:, :, :max_seq_len, :]
-            k = k[:, :, :max_seq_len, :]
-            v = v[:, :, :max_seq_len, :]
-            if mask is not None:
-                mask = mask[:, :, :max_seq_len, :max_seq_len]
-        
         # Use tf.nn.scaled_dot_product_attention if available (TF 2.11+)
         try:
             # Modern TensorFlow has built-in memory-efficient attention
@@ -360,9 +349,9 @@ class TransformerBlock(tf.keras.layers.Layer):
         self.feed_forward = FeedForward(
             d_model, d_ff, dropout, name="feed_forward"
         )
-        self.norm3 = tf.keras.layers.LayerNormalization(
-            name="norm3" if is_decoder else "norm2"
-        )
+        # Historical checkpoints saved the feed-forward norm as "norm3" for both
+        # encoder and decoder blocks. Preserve that name so legacy weights load.
+        self.norm3 = tf.keras.layers.LayerNormalization(name="norm3")
         
         # Use device-aware dropout creation to avoid placement conflicts
         self.dropout = create_dropout_layer(dropout, name="dropout")

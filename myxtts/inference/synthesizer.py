@@ -67,11 +67,14 @@ class XTTSInference:
             self.model = model
         else:
             self.model = XTTS(config.model)
-            
-            if checkpoint_path:
-                self._load_checkpoint(checkpoint_path)
-            else:
-                self.logger.warning("No checkpoint provided. Using untrained model.")
+
+        # Ensure the model is built before loading weights
+        self._build_model_for_inference()
+
+        if checkpoint_path:
+            self._load_checkpoint(checkpoint_path)
+        elif model is None:
+            self.logger.warning("No checkpoint provided. Using untrained model.")
         
         # Set model to evaluation mode
         self.model.trainable = False
@@ -93,6 +96,41 @@ class XTTSInference:
         except Exception as e:
             self.logger.error(f"Failed to load checkpoint: {e}")
             raise
+
+    def _build_model_for_inference(self):
+        """Build the XTTS model with a dummy forward pass so weights can load."""
+        if getattr(self.model, "built", False):
+            return
+
+        # Use configuration-aware sequence lengths but keep them small to avoid OOM
+        text_len = min(32, getattr(self.config.model, "max_text_length", 32) or 32)
+        mel_len = min(32, getattr(self.config.data, "max_mel_frames", 32) or 32)
+        n_mels = getattr(self.config.model, "n_mels", 80)
+
+        dummy_text = tf.zeros([1, text_len], dtype=tf.int32)
+        dummy_mel = tf.zeros([1, mel_len, n_mels], dtype=tf.float32)
+        dummy_text_len = tf.constant([text_len], dtype=tf.int32)
+        dummy_mel_len = tf.constant([mel_len], dtype=tf.int32)
+
+        dummy_audio = None
+        if getattr(self.config.model, "use_voice_conditioning", False):
+            # Give the audio encoder a chance to build as well
+            dummy_audio = tf.zeros([1, max(mel_len, 10), n_mels], dtype=tf.float32)
+
+        # Prefer GPU when available so variables are placed correctly
+        device = "/GPU:0" if tf.config.list_logical_devices("GPU") else "/CPU:0"
+
+        with tf.device(device):
+            _ = self.model(
+                text_inputs=dummy_text,
+                mel_inputs=dummy_mel,
+                audio_conditioning=dummy_audio,
+                text_lengths=dummy_text_len,
+                mel_lengths=dummy_mel_len,
+                training=False
+            )
+
+        self.logger.debug("Built XTTS model for inference with dummy forward pass")
     
     def synthesize(
         self,
