@@ -111,6 +111,16 @@ except ImportError as e:
     OPTIMIZATION_MODULES_AVAILABLE = False
     print(f"Warning: Optimization modules not available: {e}")
 
+# Import new evaluation and optimization features
+try:
+    from myxtts.evaluation import TTSEvaluator
+    from myxtts.optimization import ModelCompressor, CompressionConfig
+    from myxtts.optimization.compression import create_lightweight_config
+    EVAL_OPT_AVAILABLE = True
+except ImportError as e:
+    EVAL_OPT_AVAILABLE = False
+    print(f"Warning: Evaluation and optimization modules not available: {e}")
+
 
 def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig:
     """
@@ -488,6 +498,35 @@ def main():
         action="store_true",
         help="Apply fast convergence optimizations from fast_convergence_config module"
     )
+    
+    # New evaluation and optimization options
+    parser.add_argument(
+        "--enable-evaluation",
+        action="store_true", 
+        help="Enable automatic TTS quality evaluation during training"
+    )
+    parser.add_argument(
+        "--evaluation-interval",
+        type=int,
+        default=50,
+        help="Evaluate model every N epochs (default: 50)"
+    )
+    parser.add_argument(
+        "--create-optimized-model",
+        action="store_true",
+        help="Create optimized model for deployment after training"
+    )
+    parser.add_argument(
+        "--lightweight-config",
+        help="Path to lightweight model configuration file"
+    )
+    parser.add_argument(
+        "--compression-target",
+        type=float,
+        default=2.0,
+        help="Target compression ratio for model optimization (default: 2.0x)"
+    )
+    
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -684,6 +723,95 @@ def main():
         
     except Exception as e:
         logger.warning(f"Could not save final checkpoint: {e}")
+
+    # Post-training evaluation and optimization
+    if EVAL_OPT_AVAILABLE:
+        try:
+            # Automatic model evaluation
+            if args.enable_evaluation:
+                logger.info("\n🎯 Starting automatic model evaluation...")
+                evaluate_trained_model(trainer, config, args)
+            
+            # Create optimized model for deployment
+            if args.create_optimized_model:
+                logger.info("\n🚀 Creating optimized model for deployment...")
+                create_deployment_optimized_model(trainer, config, args)
+                
+        except Exception as e:
+            logger.warning(f"Post-training optimization failed: {e}")
+    else:
+        if args.enable_evaluation or args.create_optimized_model:
+            logger.warning("Evaluation/optimization requested but modules not available")
+
+
+def evaluate_trained_model(trainer, config, args):
+    """Evaluate the trained model using automatic metrics."""
+    try:
+        # Create evaluator
+        evaluator = TTSEvaluator(
+            enable_mosnet=True,
+            enable_asr_wer=True, 
+            enable_cmvn=True,
+            enable_spectral=True
+        )
+        
+        # TODO: Generate test audio samples from trained model
+        # This would require implementing synthesis functionality
+        logger.info("✅ TTS evaluation system initialized")
+        logger.info("   Note: Audio generation for evaluation not yet implemented")
+        logger.info("   Use evaluate_tts.py script for manual evaluation")
+        
+    except Exception as e:
+        logger.error(f"Model evaluation failed: {e}")
+
+
+def create_deployment_optimized_model(trainer, config, args):
+    """Create optimized model versions for deployment."""
+    try:
+        # Load the trained model
+        model = trainer.model
+        
+        # Create compression configuration
+        compression_config = CompressionConfig(
+            target_speedup=args.compression_target,
+            enable_pruning=True,
+            enable_quantization=True,
+            final_sparsity=0.5,
+            reduce_decoder_layers=True,
+            target_decoder_layers=8,
+            reduce_decoder_dim=True, 
+            target_decoder_dim=768
+        )
+        
+        # Apply compression
+        compressor = ModelCompressor(compression_config)
+        compressed_model = compressor.compress_model(model)
+        
+        # Save optimized model
+        optimized_path = os.path.join(config.training.checkpoint_dir, "optimized_model")
+        compressed_model.save(optimized_path)
+        
+        # Get compression statistics
+        stats = compressor.get_compression_stats(model, compressed_model)
+        
+        logger.info("✅ Optimized model created successfully!")
+        logger.info(f"   Original parameters: {stats['original_parameters']:,}")
+        logger.info(f"   Optimized parameters: {stats['compressed_parameters']:,}")
+        logger.info(f"   Compression ratio: {stats['compression_ratio']:.1f}x")
+        logger.info(f"   Size reduction: {stats['size_reduction_percent']:.1f}%")
+        logger.info(f"   Estimated speedup: {stats['estimated_speedup']:.1f}x")
+        logger.info(f"   Saved to: {optimized_path}")
+        
+        # Save lightweight config for future training
+        lightweight_config = create_lightweight_config({})
+        config_path = os.path.join(config.training.checkpoint_dir, "lightweight_config.json")
+        import json
+        with open(config_path, 'w') as f:
+            json.dump(lightweight_config, f, indent=2)
+        logger.info(f"   Lightweight config saved to: {config_path}")
+        
+    except Exception as e:
+        logger.error(f"Model optimization failed: {e}")
 
 
 if __name__ == "__main__":

@@ -11,3 +11,7 @@ transformers>=4.21.0
 wandb>=0.15.0
 psutil>=5.9.0
 pynvml>=11.4.1
+
+# New dependencies for evaluation and optimization
+tensorflow-model-optimization>=0.7.0
+matplotlib>=3.5.0
