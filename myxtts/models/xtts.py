@@ -72,12 +72,16 @@ class TextEncoder(tf.keras.layers.Layer):
         self.layer_norm = tf.keras.layers.LayerNormalization(name="layer_norm")
         self.dropout = tf.keras.layers.Dropout(0.1)
         
-        # Duration predictor for alignment guidance
-        self.duration_predictor = tf.keras.layers.Dense(
-            1, 
-            activation='relu',
-            name="duration_predictor"
-        )
+        # Duration predictor for alignment guidance (conditional)
+        self.use_duration_predictor = getattr(config, 'use_duration_predictor', True)
+        if self.use_duration_predictor:
+            self.duration_predictor = tf.keras.layers.Dense(
+                1, 
+                activation='relu',
+                name="duration_predictor"
+            )
+        else:
+            self.duration_predictor = None
     
     def call(
         self,
@@ -125,7 +129,7 @@ class TextEncoder(tf.keras.layers.Layer):
         # Final layer norm
         x = self.layer_norm(x)
         
-        if return_durations:
+        if return_durations and self.use_duration_predictor and self.duration_predictor is not None:
             # Duration prediction
             duration_pred = self.duration_predictor(x)
             duration_pred = tf.squeeze(duration_pred, axis=-1)  # [batch, seq_len]
@@ -481,7 +485,7 @@ class XTTS(tf.keras.Model):
                 dtype=tf.float32
             )
         
-        # Encode text (with optional duration prediction)
+        # Encode text (always with duration prediction during training for consistent gradients)
         if training:
             text_encoded, duration_pred = self.text_encoder(
                 text_inputs,
@@ -493,7 +497,8 @@ class XTTS(tf.keras.Model):
             text_encoded = self.text_encoder(
                 text_inputs,
                 attention_mask=text_mask,
-                training=training
+                training=training,
+                return_durations=False
             )
             duration_pred = None
         
@@ -590,12 +595,11 @@ class XTTS(tf.keras.Model):
         if speaker_embedding is not None:
             outputs["speaker_embedding"] = speaker_embedding
             
-        # Add duration predictions and attention weights during training
-        if training:
-            if duration_pred is not None:
-                outputs["duration_pred"] = duration_pred
-            if attention_weights is not None:
-                outputs["attention_weights"] = attention_weights
+        # Add duration predictions during training (always include to prevent gradient warnings)
+        if training and duration_pred is not None:
+            outputs["duration_pred"] = duration_pred
+        if training and attention_weights is not None:
+            outputs["attention_weights"] = attention_weights
         
         return outputs
     

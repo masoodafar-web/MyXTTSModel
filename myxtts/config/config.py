@@ -48,6 +48,9 @@ class ModelConfig:
     # Modern decoding strategies
     decoder_strategy: str = "autoregressive"  # "autoregressive" or "non_autoregressive"
     
+    # Duration prediction (set to False to disable and avoid gradient warnings)
+    use_duration_predictor: bool = True  # Enable duration prediction for alignment
+    
     # Neural vocoder settings
     vocoder_type: str = "griffin_lim"  # "griffin_lim", "hifigan", "bigvgan"
     vocoder_upsample_rates: List[int] = None  # Will be set in __post_init__
@@ -122,6 +125,16 @@ class DataConfig:
     text_cleaners: List[str] = None
     language: str = "en"
     add_blank: bool = True
+
+    # Multi-speaker support (NEW)
+    enable_multispeaker: bool = False
+    speaker_id_pattern: Optional[str] = None  # Regex pattern for extracting speaker ID from filename
+    max_speakers: int = 1000  # Maximum number of speakers to support
+
+    # Enhanced audio processing (NEW)
+    enable_loudness_normalization: bool = True
+    target_loudness_lufs: float = -23.0
+    enable_vad: bool = True  # Voice Activity Detection using Silero VAD
 
     # Training splits and optional subsampling
     train_split: float = 0.9
