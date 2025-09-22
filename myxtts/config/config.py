@@ -46,10 +46,15 @@ class ModelConfig:
     voice_encoder_dropout: float = 0.1  # New: regularization for voice encoder
     
     # Modern decoding strategies
-    decoder_strategy: str = "autoregressive"  # "autoregressive" or "non_autoregressive"
+    decoder_strategy: str = "autoregressive"  # "autoregressive", "non_autoregressive", "diffusion"
     
     # Duration prediction (set to False to disable and avoid gradient warnings)
     use_duration_predictor: bool = True  # Enable duration prediction for alignment
+    
+    # Diffusion decoder settings (when decoder_strategy = "diffusion")
+    diffusion_timesteps: int = 50  # Number of diffusion timesteps
+    diffusion_beta_schedule: str = "cosine"  # "linear" or "cosine"
+    enable_diffusion_inference: bool = True  # Enable diffusion during inference
     
     # Neural vocoder settings
     vocoder_type: str = "griffin_lim"  # "griffin_lim", "hifigan", "bigvgan"
@@ -76,6 +81,14 @@ class ModelConfig:
     voice_feature_dim: int = 256  # Dimension for voice feature extraction
     enable_voice_denoising: bool = True  # Denoise reference audio for better cloning
     voice_cloning_loss_weight: float = 2.0  # Weight for voice similarity loss
+    
+    # Pre-trained Speaker Encoder Settings - NEW for enhanced voice conditioning
+    use_pretrained_speaker_encoder: bool = False  # Use pre-trained speaker encoder (disabled by default)
+    pretrained_speaker_encoder_path: Optional[str] = None  # Path to pre-trained weights
+    freeze_speaker_encoder: bool = True  # Freeze pre-trained speaker encoder weights
+    speaker_encoder_type: str = "ecapa_tdnn"  # Type of speaker encoder ("ecapa_tdnn", "resemblyzer")
+    contrastive_loss_temperature: float = 0.1  # Temperature for contrastive speaker loss
+    contrastive_loss_margin: float = 0.2  # Margin for contrastive speaker loss
     
     # Memory optimization settings
     enable_gradient_checkpointing: bool = False
