@@ -46,10 +46,15 @@ class ModelConfig:
     voice_encoder_dropout: float = 0.1  # New: regularization for voice encoder
     
     # Modern decoding strategies
-    decoder_strategy: str = "autoregressive"  # "autoregressive" or "non_autoregressive"
+    decoder_strategy: str = "autoregressive"  # "autoregressive", "non_autoregressive", "diffusion"
     
     # Duration prediction (set to False to disable and avoid gradient warnings)
     use_duration_predictor: bool = True  # Enable duration prediction for alignment
+    
+    # Diffusion decoder settings (when decoder_strategy = "diffusion")
+    diffusion_timesteps: int = 50  # Number of diffusion timesteps
+    diffusion_beta_schedule: str = "cosine"  # "linear" or "cosine"
+    enable_diffusion_inference: bool = True  # Enable diffusion during inference
     
     # Neural vocoder settings
     vocoder_type: str = "griffin_lim"  # "griffin_lim", "hifigan", "bigvgan"

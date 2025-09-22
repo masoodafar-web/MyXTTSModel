@@ -20,6 +20,7 @@ from .layers import (
 from .vocoder import VocoderInterface, HiFiGANGenerator
 from .non_autoregressive import DecoderStrategy, NonAutoregressiveDecoder
 from .speaker_encoder import PretrainedSpeakerEncoder, ContrastiveSpeakerLoss
+from .diffusion_decoder import DiffusionDecoder
 from ..config.config import ModelConfig
 
 
@@ -223,6 +224,14 @@ class AudioEncoder(tf.keras.layers.Layer):
             )
             for i in range(self.config.audio_encoder_layers)
         ]
+        
+        # Global average pooling for speaker embedding
+        self.global_pool = tf.keras.layers.GlobalAveragePooling1D()
+        self.speaker_projection = tf.keras.layers.Dense(
+            self.config.speaker_embedding_dim,
+            activation='tanh',
+            name="speaker_projection"
+        )
     
     def call(
         self,
@@ -476,7 +485,7 @@ class XTTS(tf.keras.Model):
         if config.use_voice_conditioning:
             self.audio_encoder = AudioEncoder(config, name="audio_encoder") 
         
-        # Decoder strategy (autoregressive or non-autoregressive)
+        # Decoder strategy (autoregressive, non-autoregressive, or diffusion)
         decoder_strategy = getattr(config, 'decoder_strategy', 'autoregressive')
         if decoder_strategy == 'non_autoregressive':
             self.decoder_strategy = DecoderStrategy(
@@ -484,6 +493,10 @@ class XTTS(tf.keras.Model):
                 strategy='non_autoregressive',
                 name="decoder_strategy"
             )
+        elif decoder_strategy == 'diffusion':
+            # Diffusion-based decoder for enhanced quality
+            self.diffusion_decoder = DiffusionDecoder(config, name="diffusion_decoder")
+            self.decoder_strategy = None
         else:
             # Default to autoregressive for backward compatibility
             self.mel_decoder = MelDecoder(config, name="mel_decoder")
@@ -612,6 +625,41 @@ class XTTS(tf.keras.Model):
                 duration_pred = stop_or_duration
             else:
                 stop_tokens = stop_or_duration
+        elif hasattr(self, 'diffusion_decoder'):
+            # Use diffusion decoder for high-quality generation
+            if training:
+                # During training, add noise to mel_inputs and predict the noise
+                timesteps = tf.random.uniform([batch_size], 0, self.diffusion_decoder.num_timesteps, dtype=tf.int32)
+                noisy_mels, noise = self.diffusion_decoder.forward_diffusion(mel_inputs, timesteps)
+                
+                # Predict the noise
+                predicted_noise = self.diffusion_decoder(
+                    noisy_mels,
+                    timesteps,
+                    text_encoded,
+                    speaker_embedding,
+                    training=training
+                )
+                
+                # For training, we return both mel and noise for different loss computations
+                mel_output = mel_inputs  # Original clean mel for other losses
+                # Store noise prediction info for diffusion loss
+                diffusion_noise_pred = predicted_noise
+                diffusion_noise_target = noise
+                stop_tokens = None  # Diffusion doesn't use stop tokens
+                pitch_output = energy_output = None  # Not supported in basic diffusion
+                attention_weights = None
+            else:
+                # During inference, generate from noise
+                mel_output = self.diffusion_decoder.reverse_diffusion(
+                    text_encoded,
+                    speaker_embedding,
+                    shape=(batch_size, tf.shape(mel_inputs)[1], self.config.n_mels)
+                )
+                stop_tokens = None
+                pitch_output = energy_output = None
+                attention_weights = None
+                diffusion_noise_pred = diffusion_noise_target = None
         else:
             # Use legacy autoregressive decoder
             if training:
@@ -667,6 +715,11 @@ class XTTS(tf.keras.Model):
             outputs["pitch_output"] = pitch_output
         if training and energy_output is not None:
             outputs["energy_output"] = energy_output
+        
+        # Add diffusion loss outputs
+        if training and 'diffusion_noise_pred' in locals():
+            outputs["diffusion_noise_pred"] = diffusion_noise_pred
+            outputs["diffusion_noise_target"] = diffusion_noise_target
         
         if speaker_embedding is not None:
             outputs["speaker_embedding"] = speaker_embedding
