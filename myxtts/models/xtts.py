@@ -19,6 +19,7 @@ from .layers import (
 )
 from .vocoder import VocoderInterface, HiFiGANGenerator
 from .non_autoregressive import DecoderStrategy, NonAutoregressiveDecoder
+from .speaker_encoder import PretrainedSpeakerEncoder, ContrastiveSpeakerLoss
 from ..config.config import ModelConfig
 
 
@@ -157,7 +158,31 @@ class AudioEncoder(tf.keras.layers.Layer):
         
         self.config = config
         self.d_model = config.audio_encoder_dim
+        self.use_pretrained = getattr(config, 'use_pretrained_speaker_encoder', False)
         
+        if self.use_pretrained:
+            # Use pre-trained speaker encoder for enhanced voice conditioning
+            self.speaker_encoder = PretrainedSpeakerEncoder(
+                config,
+                pretrained_path=getattr(config, 'pretrained_speaker_encoder_path', None),
+                freeze_weights=getattr(config, 'freeze_speaker_encoder', True),
+                embedding_dim=config.speaker_embedding_dim,
+                name="pretrained_speaker_encoder"
+            )
+            # Project to audio encoder dimension if needed
+            if config.speaker_embedding_dim != self.d_model:
+                self.projection = tf.keras.layers.Dense(
+                    self.d_model,
+                    name="speaker_projection"
+                )
+            else:
+                self.projection = None
+        else:
+            # Original convolutional + transformer architecture
+            self._build_original_encoder()
+    
+    def _build_original_encoder(self):
+        """Build original convolutional + transformer encoder architecture."""
         # Convolutional layers for audio feature extraction
         self.conv_layers = [
             ConvolutionalLayer(
@@ -190,22 +215,14 @@ class AudioEncoder(tf.keras.layers.Layer):
         self.transformer_blocks = [
             TransformerBlock(
                 self.d_model,
-                config.audio_encoder_heads,
+                self.config.audio_encoder_heads,
                 self.d_model * 4,
                 dropout=0.1,
-                use_gradient_checkpointing=config.enable_gradient_checkpointing,
+                use_gradient_checkpointing=self.config.enable_gradient_checkpointing,
                 name=f"transformer_block_{i}"
             )
-            for i in range(config.audio_encoder_layers)
+            for i in range(self.config.audio_encoder_layers)
         ]
-        
-        # Global average pooling for speaker embedding
-        self.global_pool = tf.keras.layers.GlobalAveragePooling1D()
-        self.speaker_projection = tf.keras.layers.Dense(
-            config.speaker_embedding_dim,
-            activation='tanh',
-            name="speaker_projection"
-        )
     
     def call(
         self,
@@ -222,24 +239,47 @@ class AudioEncoder(tf.keras.layers.Layer):
         Returns:
             Tuple of (contextualized_features, speaker_embedding)
         """
-        x = inputs
-        
-        # Convolutional layers
-        for conv_layer in self.conv_layers:
-            x = conv_layer(x, training=training)
-        
-        # Project to model dimension
-        x = self.projection(x)
-        
-        # Transformer blocks
-        for transformer_block in self.transformer_blocks:
-            x = transformer_block(x, training=training)
-        
-        # Speaker embedding via global pooling
-        speaker_embedding = self.global_pool(x)
-        speaker_embedding = self.speaker_projection(speaker_embedding)
-        
-        return x, speaker_embedding
+        if self.use_pretrained:
+            # Use pre-trained speaker encoder
+            speaker_embedding = self.speaker_encoder(inputs, training=training)
+            
+            # Project if needed
+            if self.projection is not None:
+                contextualized_features = self.projection(speaker_embedding)
+                # Expand to sequence length for consistency
+                contextualized_features = tf.expand_dims(contextualized_features, axis=1)
+                contextualized_features = tf.tile(
+                    contextualized_features,
+                    [1, tf.shape(inputs)[1], 1]
+                )
+            else:
+                contextualized_features = tf.expand_dims(speaker_embedding, axis=1)
+                contextualized_features = tf.tile(
+                    contextualized_features,
+                    [1, tf.shape(inputs)[1], 1]
+                )
+            
+            return contextualized_features, speaker_embedding
+        else:
+            # Original encoder path
+            x = inputs
+            
+            # Convolutional layers
+            for conv_layer in self.conv_layers:
+                x = conv_layer(x, training=training)
+            
+            # Project to model dimension
+            x = self.projection(x)
+            
+            # Transformer blocks
+            for transformer_block in self.transformer_blocks:
+                x = transformer_block(x, training=training)
+            
+            # Speaker embedding via global pooling
+            speaker_embedding = self.global_pool(x)
+            speaker_embedding = self.speaker_projection(speaker_embedding)
+            
+            return x, speaker_embedding
 
 
 class MelDecoder(tf.keras.layers.Layer):
@@ -300,6 +340,16 @@ class MelDecoder(tf.keras.layers.Layer):
             1,
             activation='sigmoid',
             name="stop_projection"
+        )
+        
+        # Prosody feature projections (like FastSpeech/FastPitch)
+        self.pitch_projection = tf.keras.layers.Dense(
+            1,
+            name="pitch_projection"
+        )
+        self.energy_projection = tf.keras.layers.Dense(
+            1,
+            name="energy_projection"
         )
         
         # Speaker conditioning projection (moved from call to enable weight training)
@@ -390,10 +440,14 @@ class MelDecoder(tf.keras.layers.Layer):
         mel_output = self.mel_projection(x)
         stop_tokens = self.stop_projection(x)
         
+        # Prosody features (pitch and energy)
+        pitch_output = self.pitch_projection(x)
+        energy_output = self.energy_projection(x)
+        
         if return_attention_weights and attention_weights is not None:
-            return mel_output, stop_tokens, attention_weights
+            return mel_output, stop_tokens, pitch_output, energy_output, attention_weights
         else:
-            return mel_output, stop_tokens
+            return mel_output, stop_tokens, pitch_output, energy_output
 
 
 class XTTS(tf.keras.Model):
@@ -570,13 +624,20 @@ class XTTS(tf.keras.Model):
                     training=training,
                     return_attention_weights=True
                 )
-                if len(mel_decoder_output) == 3:
+                if len(mel_decoder_output) == 5:
+                    mel_output, stop_tokens, pitch_output, energy_output, attention_weights = mel_decoder_output
+                elif len(mel_decoder_output) == 4:
+                    mel_output, stop_tokens, pitch_output, energy_output = mel_decoder_output
+                    attention_weights = None
+                elif len(mel_decoder_output) == 3:
+                    # Backward compatibility - assume no prosody features
                     mel_output, stop_tokens, attention_weights = mel_decoder_output
+                    pitch_output = energy_output = None
                 else:
                     mel_output, stop_tokens = mel_decoder_output
-                    attention_weights = None
+                    pitch_output = energy_output = attention_weights = None
             else:
-                mel_output, stop_tokens = self.mel_decoder(
+                mel_decoder_output = self.mel_decoder(
                     decoder_inputs,
                     text_encoded,
                     speaker_embedding=speaker_embedding,
@@ -584,6 +645,15 @@ class XTTS(tf.keras.Model):
                     decoder_mask=causal_mask,
                     training=training
                 )
+                if len(mel_decoder_output) == 4:
+                    mel_output, stop_tokens, pitch_output, energy_output = mel_decoder_output
+                elif len(mel_decoder_output) == 2:
+                    # Backward compatibility - assume no prosody features
+                    mel_output, stop_tokens = mel_decoder_output
+                    pitch_output = energy_output = None
+                else:
+                    mel_output, stop_tokens = mel_decoder_output
+                    pitch_output = energy_output = None
                 attention_weights = None
         
         outputs = {
@@ -591,6 +661,12 @@ class XTTS(tf.keras.Model):
             "stop_tokens": stop_tokens,
             "text_encoded": text_encoded,
         }
+        
+        # Add prosody features to outputs
+        if training and pitch_output is not None:
+            outputs["pitch_output"] = pitch_output
+        if training and energy_output is not None:
+            outputs["energy_output"] = energy_output
         
         if speaker_embedding is not None:
             outputs["speaker_embedding"] = speaker_embedding

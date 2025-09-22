@@ -77,6 +77,14 @@ class ModelConfig:
     enable_voice_denoising: bool = True  # Denoise reference audio for better cloning
     voice_cloning_loss_weight: float = 2.0  # Weight for voice similarity loss
     
+    # Pre-trained Speaker Encoder Settings - NEW for enhanced voice conditioning
+    use_pretrained_speaker_encoder: bool = False  # Use pre-trained speaker encoder (disabled by default)
+    pretrained_speaker_encoder_path: Optional[str] = None  # Path to pre-trained weights
+    freeze_speaker_encoder: bool = True  # Freeze pre-trained speaker encoder weights
+    speaker_encoder_type: str = "ecapa_tdnn"  # Type of speaker encoder ("ecapa_tdnn", "resemblyzer")
+    contrastive_loss_temperature: float = 0.1  # Temperature for contrastive speaker loss
+    contrastive_loss_margin: float = 0.2  # Margin for contrastive speaker loss
+    
     # Memory optimization settings
     enable_gradient_checkpointing: bool = False
     max_attention_sequence_length: int = 512  # Text length limit - increase for longer sentences

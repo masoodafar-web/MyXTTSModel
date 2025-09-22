@@ -231,6 +231,82 @@ def duration_loss(
     return tf.reduce_mean(loss)
 
 
+def pitch_loss(
+    predicted_pitch: tf.Tensor,
+    target_pitch: tf.Tensor,
+    sequence_lengths: Optional[tf.Tensor] = None
+) -> tf.Tensor:
+    """
+    Compute pitch prediction loss (L1 loss with optional masking).
+    
+    Args:
+        predicted_pitch: Predicted pitch values [batch, seq_len, 1]
+        target_pitch: Target pitch values [batch, seq_len, 1]
+        sequence_lengths: Sequence lengths for masking [batch]
+        
+    Returns:
+        Pitch loss scalar
+    """
+    # L1 loss for pitch (more robust than L2)
+    loss = tf.abs(predicted_pitch - target_pitch)
+    loss = tf.squeeze(loss, axis=-1)  # [batch, seq_len]
+    
+    if sequence_lengths is not None:
+        # Apply sequence mask
+        mask = tf.sequence_mask(
+            sequence_lengths,
+            maxlen=tf.shape(loss)[1],
+            dtype=tf.float32
+        )
+        loss = loss * mask
+        
+        # Normalize by sequence lengths
+        loss = tf.reduce_sum(loss, axis=1)
+        loss = loss / tf.maximum(tf.cast(sequence_lengths, tf.float32), 1.0)
+    else:
+        loss = tf.reduce_mean(loss, axis=1)
+    
+    return tf.reduce_mean(loss)
+
+
+def energy_loss(
+    predicted_energy: tf.Tensor,
+    target_energy: tf.Tensor,
+    sequence_lengths: Optional[tf.Tensor] = None
+) -> tf.Tensor:
+    """
+    Compute energy prediction loss (L1 loss with optional masking).
+    
+    Args:
+        predicted_energy: Predicted energy values [batch, seq_len, 1]
+        target_energy: Target energy values [batch, seq_len, 1]
+        sequence_lengths: Sequence lengths for masking [batch]
+        
+    Returns:
+        Energy loss scalar
+    """
+    # L1 loss for energy (more robust than L2)
+    loss = tf.abs(predicted_energy - target_energy)
+    loss = tf.squeeze(loss, axis=-1)  # [batch, seq_len]
+    
+    if sequence_lengths is not None:
+        # Apply sequence mask
+        mask = tf.sequence_mask(
+            sequence_lengths,
+            maxlen=tf.shape(loss)[1],
+            dtype=tf.float32
+        )
+        loss = loss * mask
+        
+        # Normalize by sequence lengths
+        loss = tf.reduce_sum(loss, axis=1)
+        loss = loss / tf.maximum(tf.cast(sequence_lengths, tf.float32), 1.0)
+    else:
+        loss = tf.reduce_mean(loss, axis=1)
+    
+    return tf.reduce_mean(loss)
+
+
 class XTTSLoss(tf.keras.losses.Loss):
     """
     Enhanced combined loss function for XTTS training with stability improvements.
@@ -246,6 +322,9 @@ class XTTSLoss(tf.keras.losses.Loss):
         stop_loss_weight: float = 1.0,
         attention_loss_weight: float = 0.1,  # Enabled with small weight for gradual alignment learning
         duration_loss_weight: float = 0.1,   # Enabled: model now returns duration predictions
+        # Prosody loss weights (FastSpeech/FastPitch style)
+        pitch_loss_weight: float = 0.1,      # Weight for pitch prediction loss
+        energy_loss_weight: float = 0.1,     # Weight for energy prediction loss
         # Stability improvements
         use_adaptive_weights: bool = True,
         loss_smoothing_factor: float = 0.1,
@@ -261,6 +340,8 @@ class XTTSLoss(tf.keras.losses.Loss):
             stop_loss_weight: Weight for stop token loss
             attention_loss_weight: Weight for attention loss
             duration_loss_weight: Weight for duration loss
+            pitch_loss_weight: Weight for pitch prediction loss
+            energy_loss_weight: Weight for energy prediction loss
             use_adaptive_weights: Enable adaptive loss weight scaling
             loss_smoothing_factor: Factor for exponential smoothing of losses
             max_loss_spike_threshold: Maximum allowed loss spike multiplier
@@ -274,6 +355,10 @@ class XTTSLoss(tf.keras.losses.Loss):
         self.stop_loss_weight = stop_loss_weight
         self.attention_loss_weight = attention_loss_weight
         self.duration_loss_weight = duration_loss_weight
+        
+        # Prosody loss weights
+        self.pitch_loss_weight = pitch_loss_weight
+        self.energy_loss_weight = energy_loss_weight
         
         # Stability features
         self.use_adaptive_weights = use_adaptive_weights
@@ -356,6 +441,30 @@ class XTTSLoss(tf.keras.losses.Loss):
             )
             losses["duration_loss"] = dur_l
             total_loss += self.duration_loss_weight * dur_l
+        
+        # Pitch loss (if pitch predictions available)
+        if ("pitch_output" in y_pred and 
+            "pitch_target" in y_true and
+            "mel_lengths" in y_true):
+            pitch_l = pitch_loss(
+                y_pred["pitch_output"],
+                y_true["pitch_target"],
+                y_true["mel_lengths"]
+            )
+            losses["pitch_loss"] = pitch_l
+            total_loss += self.pitch_loss_weight * pitch_l
+        
+        # Energy loss (if energy predictions available)
+        if ("energy_output" in y_pred and 
+            "energy_target" in y_true and
+            "mel_lengths" in y_true):
+            energy_l = energy_loss(
+                y_pred["energy_output"],
+                y_true["energy_target"],
+                y_true["mel_lengths"]
+            )
+            losses["energy_loss"] = energy_l
+            total_loss += self.energy_loss_weight * energy_l
         
         # Apply loss smoothing and spike detection
         total_loss = self._apply_loss_smoothing(total_loss)
