@@ -66,6 +66,14 @@ from myxtts.config.config import XTTSConfig
 from myxtts.inference.synthesizer import XTTSInference
 from myxtts.utils.commons import setup_logging, find_latest_checkpoint
 
+# Import evaluation capabilities
+try:
+    from myxtts.evaluation import TTSEvaluator
+    from myxtts.optimization import OptimizedInference, InferenceConfig
+    EVAL_OPT_AVAILABLE = True
+except ImportError:
+    EVAL_OPT_AVAILABLE = False
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -177,6 +185,34 @@ def parse_args() -> argparse.Namespace:
         "--save-mel",
         help="Optional path to save the generated mel spectrogram as .npy.",
     )
+    
+    # Evaluation and optimization options
+    parser.add_argument(
+        "--evaluate-output",
+        action="store_true",
+        help="Automatically evaluate the generated audio quality"
+    )
+    parser.add_argument(
+        "--evaluation-output",
+        help="Save evaluation results to this JSON file"
+    )
+    parser.add_argument(
+        "--optimized-inference",
+        action="store_true", 
+        help="Use optimized inference pipeline for faster generation"
+    )
+    parser.add_argument(
+        "--quality-mode",
+        choices=["fast", "balanced", "quality"],
+        default="balanced",
+        help="Quality vs speed trade-off (default: balanced)"
+    )
+    parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help="Run performance benchmark on the model"
+    )
+    
     return parser.parse_args()
 
 
@@ -387,6 +423,120 @@ def main():
     logger.info(f"✅ Audio saved to: {args.output}")
     if args.save_mel:
         logger.info(f"✅ Mel spectrogram saved to: {args.save_mel}")
+
+    # Post-synthesis evaluation and optimization
+    if EVAL_OPT_AVAILABLE:
+        try:
+            # Automatic evaluation
+            if args.evaluate_output:
+                logger.info("\n🎯 Starting automatic audio evaluation...")
+                evaluate_synthesis_output(args.output, text, args)
+            
+            # Performance benchmarking
+            if args.benchmark:
+                logger.info("\n⚡ Running performance benchmark...")
+                benchmark_inference_performance(inference_engine, text, args)
+                
+        except Exception as e:
+            logger.warning(f"Post-synthesis evaluation failed: {e}")
+    else:
+        if args.evaluate_output or args.benchmark:
+            logger.warning("Evaluation/benchmark requested but modules not available")
+
+
+def evaluate_synthesis_output(audio_path: str, reference_text: str, args):
+    """Evaluate the synthesized audio using automatic metrics."""
+    try:
+        # Create evaluator
+        evaluator = TTSEvaluator(
+            enable_mosnet=True,
+            enable_asr_wer=True,
+            enable_cmvn=True,
+            enable_spectral=True
+        )
+        
+        # Run evaluation
+        report = evaluator.evaluate_single(audio_path, reference_text)
+        
+        # Display results
+        logger.info("📊 Evaluation Results:")
+        logger.info(f"   Overall Score: {report.overall_score:.3f}")
+        logger.info(f"   Evaluation Time: {report.evaluation_time:.2f}s")
+        
+        for metric_name, result in report.results.items():
+            if result.error:
+                logger.warning(f"   {metric_name.upper()}: ERROR - {result.error}")
+            else:
+                logger.info(f"   {metric_name.upper()}: {result.score:.3f}")
+        
+        # Save detailed results if requested
+        if args.evaluation_output:
+            evaluator.save_reports([report], args.evaluation_output)
+            logger.info(f"   Detailed results saved to: {args.evaluation_output}")
+            
+    except Exception as e:
+        logger.error(f"Audio evaluation failed: {e}")
+
+
+def benchmark_inference_performance(inference_engine, text: str, args):
+    """Benchmark the inference performance."""
+    try:
+        # Create test texts for benchmarking
+        test_texts = [
+            text,  # Use the actual text
+            "Short test.",
+            "This is a medium length test sentence for benchmarking.",
+            "This is a longer test sentence that contains more words and should take more time to synthesize for comprehensive performance evaluation."
+        ]
+        
+        logger.info("🔄 Running performance benchmark...")
+        logger.info(f"   Test texts: {len(test_texts)}")
+        logger.info(f"   Quality mode: {args.quality_mode}")
+        
+        # Simple timing benchmark (since we don't have the OptimizedInference integrated)
+        import time
+        
+        total_synthesis_time = 0
+        total_audio_duration = 0
+        
+        for i, test_text in enumerate(test_texts):
+            start_time = time.time()
+            
+            # Simple synthesis call
+            result = inference_engine.synthesize(
+                text=test_text,
+                temperature=args.temperature,
+                max_length=args.max_length
+            )
+            
+            synthesis_time = time.time() - start_time
+            audio_duration = len(result["audio"]) / result["sample_rate"]
+            rtf = synthesis_time / audio_duration
+            
+            total_synthesis_time += synthesis_time
+            total_audio_duration += audio_duration
+            
+            logger.info(f"   Test {i+1}: {synthesis_time:.3f}s synthesis, {audio_duration:.3f}s audio (RTF: {rtf:.3f})")
+        
+        # Overall statistics
+        overall_rtf = total_synthesis_time / total_audio_duration
+        avg_synthesis_time = total_synthesis_time / len(test_texts)
+        
+        logger.info("📈 Benchmark Results:")
+        logger.info(f"   Average synthesis time: {avg_synthesis_time:.3f}s")
+        logger.info(f"   Total audio generated: {total_audio_duration:.3f}s")
+        logger.info(f"   Overall RTF: {overall_rtf:.3f}")
+        logger.info(f"   Real-time capable: {'✅ Yes' if overall_rtf < 1.0 else '❌ No'}")
+        
+        if overall_rtf < 0.5:
+            logger.info("   Performance: 🚀 Excellent (< 0.5 RTF)")
+        elif overall_rtf < 1.0:
+            logger.info("   Performance: ⚡ Good (< 1.0 RTF)")
+        else:
+            logger.info("   Performance: 🐌 Needs optimization (> 1.0 RTF)")
+            
+    except Exception as e:
+        logger.error(f"Performance benchmark failed: {e}")
 
 
 if __name__ == "__main__":
