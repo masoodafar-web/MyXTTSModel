@@ -294,6 +294,14 @@ def build_config(
         enable_voice_denoising=True,
         voice_cloning_loss_weight=2.0,
 
+        # Enhanced voice conditioning with pre-trained speaker encoders
+        use_pretrained_speaker_encoder=False,  # Enable for enhanced voice conditioning
+        pretrained_speaker_encoder_path=None,  # Path to pre-trained weights if available
+        freeze_speaker_encoder=True,
+        speaker_encoder_type="ecapa_tdnn",  # Options: "ecapa_tdnn", "resemblyzer", "coqui"
+        contrastive_loss_temperature=0.1,
+        contrastive_loss_margin=0.2,
+
         # Decoder / vocoder strategy controls
         decoder_strategy=decoder_strategy,
         vocoder_type=vocoder_type,

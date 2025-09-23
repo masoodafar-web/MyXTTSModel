@@ -186,6 +186,42 @@ def parse_args() -> argparse.Namespace:
         help="Optional path to save the generated mel spectrogram as .npy.",
     )
     
+    # Enhanced voice conditioning options
+    parser.add_argument(
+        "--use-pretrained-speaker-encoder",
+        action="store_true",
+        help="Enable pre-trained speaker encoder for enhanced voice conditioning.",
+    )
+    parser.add_argument(
+        "--speaker-encoder-type",
+        choices=["ecapa_tdnn", "resemblyzer", "coqui"],
+        default="ecapa_tdnn",
+        help="Type of pre-trained speaker encoder to use (default: ecapa_tdnn).",
+    )
+    parser.add_argument(
+        "--voice-conditioning-strength",
+        type=float,
+        default=1.0,
+        help="Strength of voice conditioning (0.0-2.0, default: 1.0).",
+    )
+    parser.add_argument(
+        "--voice-cloning-temperature",
+        type=float,
+        default=0.7,
+        help="Temperature for voice cloning (default: 0.7).",
+    )
+    parser.add_argument(
+        "--voice-similarity-threshold",
+        type=float,
+        default=0.75,
+        help="Voice similarity threshold for quality control (default: 0.75).",
+    )
+    parser.add_argument(
+        "--enable-voice-interpolation",
+        action="store_true",
+        help="Enable voice interpolation for blending multiple voices.",
+    )
+    
     # Evaluation and optimization options
     parser.add_argument(
         "--evaluate-output",
@@ -316,10 +352,20 @@ def main():
 
     text = load_text(args)
     config = load_config(args.config_path, args.checkpoint_dir)
+    
+    # Update configuration with command line arguments
     if args.decoder_strategy:
         config.model.decoder_strategy = args.decoder_strategy
     if args.vocoder_type:
         config.model.vocoder_type = args.vocoder_type
+        
+    # Enhanced voice conditioning settings
+    if args.use_pretrained_speaker_encoder:
+        config.model.use_pretrained_speaker_encoder = True
+        config.model.speaker_encoder_type = args.speaker_encoder_type
+        logger.info(f"🎯 Enhanced voice conditioning enabled with {args.speaker_encoder_type} encoder")
+    
+    # Voice cloning parameters
     if hasattr(config.model, "voice_cloning_temperature"):
         config.model.voice_cloning_temperature = args.voice_cloning_temperature
     if hasattr(config.model, "voice_conditioning_strength"):
