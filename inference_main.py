@@ -227,29 +227,6 @@ def parse_args() -> argparse.Namespace:
         default="ecapa_tdnn",
         help="Type of pre-trained speaker encoder to use (default: ecapa_tdnn).",
     )
-    parser.add_argument(
-        "--voice-conditioning-strength",
-        type=float,
-        default=1.0,
-        help="Strength of voice conditioning (0.0-2.0, default: 1.0).",
-    )
-    parser.add_argument(
-        "--voice-cloning-temperature",
-        type=float,
-        default=0.7,
-        help="Temperature for voice cloning (default: 0.7).",
-    )
-    parser.add_argument(
-        "--voice-similarity-threshold",
-        type=float,
-        default=0.75,
-        help="Voice similarity threshold for quality control (default: 0.75).",
-    )
-    parser.add_argument(
-        "--enable-voice-interpolation",
-        action="store_true",
-        help="Enable voice interpolation for blending multiple voices.",
-    )
     
     # Multi-language support (NEW)
     parser.add_argument(
@@ -296,6 +273,10 @@ def parse_args() -> argparse.Namespace:
         help="Use optimized inference pipeline for faster generation"
     )
     parser.add_argument(
+        "--lightweight-model",
+        help="Path to lightweight/compressed model (compressed, distilled, or quantized)"
+    )
+    parser.add_argument(
         "--quality-mode",
         choices=["fast", "balanced", "quality"],
         default="balanced",
@@ -337,7 +318,37 @@ def load_config(config_path: Optional[str], checkpoint_dir: str) -> XTTSConfig:
 
 
 def resolve_checkpoint(args: argparse.Namespace, logger) -> str:
-    """Resolve which checkpoint to load."""
+    """Resolve which checkpoint to load, supporting lightweight models."""
+    
+    # Priority 1: Lightweight/compressed model if specified
+    if args.lightweight_model:
+        lightweight_path = args.lightweight_model
+        
+        # Support various lightweight model formats
+        supported_extensions = ['.h5', '.tflite', '.pb', '_compressed', '_student', '_quantized']
+        model_found = False
+        
+        # Check if it's a direct path to a model file
+        if os.path.exists(lightweight_path):
+            logger.info(f"🎯 Loading lightweight model: {lightweight_path}")
+            return lightweight_path
+        
+        # Check for model with various extensions/suffixes
+        for ext in supported_extensions:
+            test_path = lightweight_path + ext if not lightweight_path.endswith(ext) else lightweight_path
+            if os.path.exists(test_path):
+                logger.info(f"🎯 Loading lightweight model: {test_path}")
+                return test_path
+            
+            # Also check for checkpoint-style naming
+            test_path = f"{lightweight_path}_model.weights.h5"
+            if os.path.exists(test_path):
+                logger.info(f"🎯 Loading lightweight checkpoint: {lightweight_path}")
+                return lightweight_path
+        
+        raise FileNotFoundError(f"Lightweight model not found: {lightweight_path}")
+    
+    # Priority 2: Explicit checkpoint
     if args.checkpoint:
         checkpoint_prefix = args.checkpoint
         if not os.path.exists(f"{checkpoint_prefix}_model.weights.h5"):
@@ -346,10 +357,11 @@ def resolve_checkpoint(args: argparse.Namespace, logger) -> str:
             )
         return checkpoint_prefix
 
+    # Priority 3: Latest checkpoint in directory
     checkpoint_prefix = find_latest_checkpoint(args.checkpoint_dir)
     if not checkpoint_prefix:
         raise FileNotFoundError(
-            f"No checkpoints found in {args.checkpoint_dir}. Provide --checkpoint explicitly."
+            f"No checkpoints found in {args.checkpoint_dir}. Provide --checkpoint or --lightweight-model explicitly."
         )
 
     logger.info(f"Using latest checkpoint: {checkpoint_prefix}")
@@ -666,11 +678,50 @@ def main():
     if args.clone_voice or args.reference_audio or args.multiple_reference_audios:
         log_voice_cloning_setup(args, logger)
 
-    # Instantiate inference engine
-    inference_engine = XTTSInference(
-        config=config,
-        checkpoint_path=checkpoint_prefix,
-    )
+    # Instantiate inference engine with optimization support
+    if args.optimized_inference and EVAL_OPT_AVAILABLE:
+        logger.info("🚀 Using optimized inference pipeline for faster generation")
+        
+        # Create optimized inference config based on quality mode
+        optimization_level = {
+            "fast": "aggressive",
+            "balanced": "moderate", 
+            "quality": "conservative"
+        }.get(args.quality_mode, "moderate")
+        
+        try:
+            inference_config = InferenceConfig(
+                optimization_level=optimization_level,
+                enable_mixed_precision=True,
+                enable_graph_optimization=True,
+                enable_tensorrt=False,  # Disable TRT for compatibility
+                batch_size=1,
+                max_sequence_length=512
+            )
+            
+            inference_engine = OptimizedInference(
+                config=config,
+                checkpoint_path=checkpoint_prefix,
+                optimization_config=inference_config
+            )
+            logger.info(f"✅ Optimized inference initialized (level: {optimization_level})")
+            
+        except Exception as e:
+            logger.warning(f"Failed to initialize optimized inference: {e}")
+            logger.info("Falling back to standard inference engine")
+            inference_engine = XTTSInference(
+                config=config,
+                checkpoint_path=checkpoint_prefix,
+            )
+    else:
+        if args.optimized_inference and not EVAL_OPT_AVAILABLE:
+            logger.warning("Optimized inference requested but optimization modules not available")
+            logger.info("Install optimization dependencies or use standard inference")
+            
+        inference_engine = XTTSInference(
+            config=config,
+            checkpoint_path=checkpoint_prefix,
+        )
 
     # Handle advanced voice cloning features
     if args.clone_voice or args.multiple_reference_audios:
