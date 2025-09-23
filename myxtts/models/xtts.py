@@ -168,6 +168,7 @@ class AudioEncoder(tf.keras.layers.Layer):
                 pretrained_path=getattr(config, 'pretrained_speaker_encoder_path', None),
                 freeze_weights=getattr(config, 'freeze_speaker_encoder', True),
                 embedding_dim=config.speaker_embedding_dim,
+                encoder_type=getattr(config, 'speaker_encoder_type', 'ecapa_tdnn'),
                 name="pretrained_speaker_encoder"
             )
             # Project to audio encoder dimension if needed
