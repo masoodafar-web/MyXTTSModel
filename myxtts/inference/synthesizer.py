@@ -172,7 +172,16 @@ class XTTSInference:
         if generate_neural_audio and "audio_output" in outputs:
             audio_waveform = outputs["audio_output"].numpy()[0, :, 0]
         else:
-            audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
+            # Use neural vocoder directly instead of Griffin-Lim fallback
+            vocoder_type = getattr(self.config.model, 'vocoder_type', 'griffin_lim')
+            if vocoder_type != "griffin_lim" and hasattr(self.model, 'vocoder'):
+                # Convert mel spectrogram to proper format and use neural vocoder
+                mel_tensor = tf.constant(mel_spectrogram.T[np.newaxis, ...], dtype=tf.float32)  # [1, time, n_mels]
+                audio_tensor = self.model.vocoder(mel_tensor, training=False)
+                audio_waveform = audio_tensor.numpy()[0, :, 0]  # Extract audio from [batch, time, 1]
+            else:
+                # Fallback to Griffin-Lim only when neural vocoder is not available
+                audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
         
         # Post-process audio
         audio_waveform = self._postprocess_audio(audio_waveform)
