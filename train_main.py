@@ -258,7 +258,7 @@ def build_config(
         text_encoder_dim=text_dim,
         text_encoder_layers=8,  # Increased from 4 for better text representation
         text_encoder_heads=8,   # Increased from 4 for better attention
-        text_vocab_size=128,  # Fixed: was 256_256, now matches actual character vocab (~94) with some buffer
+        text_vocab_size=32000,  # Optimized NLLB vocab size (reduced from 256,256)
 
         # Enhanced audio encoder for superior voice conditioning
         audio_encoder_dim=768,  # Increased from text_dim for better audio representation
@@ -311,7 +311,7 @@ def build_config(
         # Duration prediction control (NEW: fix gradient warning)
         use_duration_predictor=True,  # Set to False to disable duration prediction and avoid gradient warnings
 
-        # Language/tokenizer
+        # Language/tokenizer with NLLB optimization
         languages=[
             "en", "es", "fr", "de", "it", "pt", "pl", "tr",
             "ru", "nl", "cs", "ar", "zh-cn", "ja", "hu", "ko",
@@ -319,6 +319,12 @@ def build_config(
         max_text_length=500,
         tokenizer_type="nllb",
         tokenizer_model="facebook/nllb-200-distilled-600M",
+        
+        # NLLB Embedding Optimization (NEW) - Reduce memory usage
+        use_optimized_nllb_vocab=True,
+        optimized_vocab_size=32000,  # Much smaller than 256,256 full NLLB vocab
+        enable_weight_tying=True,  # Share embeddings between similar languages
+        vocab_optimization_method="frequency",  # Use most frequent tokens
 
         # Memory optimizations for larger model
         enable_gradient_checkpointing=enable_grad_checkpointing,
@@ -417,6 +423,23 @@ def build_config(
         enable_loudness_normalization=True,  # Loudness matching for real-world robustness
         target_loudness_lufs=-23.0,         # Standard broadcast loudness
         enable_vad=True,                     # Silero VAD for silence removal
+        
+        # Audio augmentations for robustness (NEW)
+        enable_pitch_shift=False,           # Enable pitch shifting augmentation
+        pitch_shift_range=[-2.0, 2.0],     # Pitch shift range in semitones 
+        enable_noise_mixing=False,          # Enable noise mixing augmentation
+        noise_mixing_probability=0.3,       # Probability of applying noise mixing
+        noise_mixing_snr_range=[10.0, 30.0], # SNR range for noise mixing in dB
+        
+        # Phone-level normalization (NEW)
+        enable_phone_normalization=False,   # Enable phone-level text normalization
+        use_phonemes=True,                  # Use phonemic representation
+        phoneme_language=None,              # Language for phonemization (auto-detect if None)
+        
+        # Multi-language support (NEW)
+        enable_multilingual=True,           # Enable multi-language support
+        supported_languages=["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"],
+        language_detection_method="metadata", # "metadata", "filename", or "auto"
 
         # Batching/workers and pipeline performance
         batch_size=batch_size,

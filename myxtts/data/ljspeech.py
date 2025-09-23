@@ -641,6 +641,210 @@ class LJSpeechDataset:
         
         return duration_target
     
+    def _apply_pitch_shift(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Apply pitch shifting augmentation to audio.
+        
+        Args:
+            audio: Input audio signal
+            
+        Returns:
+            Pitch-shifted audio
+        """
+        if not self.config.enable_pitch_shift:
+            return audio
+            
+        try:
+            import librosa
+            # Random pitch shift within configured range
+            shift_semitones = np.random.uniform(
+                self.config.pitch_shift_range[0], 
+                self.config.pitch_shift_range[1]
+            )
+            # Apply pitch shift
+            audio_shifted = librosa.effects.pitch_shift(
+                audio, 
+                sr=self.config.sample_rate, 
+                n_steps=shift_semitones
+            )
+            return audio_shifted
+        except Exception as e:
+            print(f"Warning: Pitch shift failed: {e}")
+            return audio
+    
+    def _apply_noise_mixing(self, audio: np.ndarray) -> np.ndarray:
+        """
+        Apply noise mixing augmentation to audio.
+        
+        Args:
+            audio: Input audio signal
+            
+        Returns:
+            Audio with added noise
+        """
+        if not self.config.enable_noise_mixing:
+            return audio
+        
+        # Apply noise mixing with configured probability
+        if np.random.random() > self.config.noise_mixing_probability:
+            return audio
+            
+        try:
+            # Generate white noise
+            noise = np.random.randn(len(audio))
+            
+            # Random SNR within configured range  
+            target_snr_db = np.random.uniform(
+                self.config.noise_mixing_snr_range[0],
+                self.config.noise_mixing_snr_range[1]
+            )
+            
+            # Calculate noise scaling factor
+            signal_power = np.mean(audio ** 2)
+            noise_power = np.mean(noise ** 2)
+            snr_ratio = 10 ** (target_snr_db / 10)
+            noise_scale = np.sqrt(signal_power / (noise_power * snr_ratio))
+            
+            # Mix signal with scaled noise
+            mixed_audio = audio + noise_scale * noise
+            
+            # Normalize to prevent clipping
+            max_val = np.max(np.abs(mixed_audio))
+            if max_val > 1.0:
+                mixed_audio = mixed_audio / max_val
+                
+            return mixed_audio
+        except Exception as e:
+            print(f"Warning: Noise mixing failed: {e}")
+            return audio
+    
+    def _detect_language(self, text: str, audio_id: str) -> str:
+        """
+        Detect language from text or metadata.
+        
+        Args:
+            text: Input text
+            audio_id: Audio file identifier
+            
+        Returns:
+            Detected language code
+        """
+        if not self.config.enable_multilingual:
+            return self.config.language
+            
+        if self.config.language_detection_method == "metadata":
+            # Try to extract language from metadata or filename
+            # Common patterns: "en_001", "speaker_en_text", etc.
+            for lang in self.config.supported_languages or ['en', 'es', 'fr', 'de', 'it']:
+                if lang in audio_id.lower():
+                    return lang
+                    
+        elif self.config.language_detection_method == "filename":
+            # Extract language from filename pattern
+            import re
+            lang_match = re.search(r'[_-]([a-z]{2})[_-]', audio_id.lower())
+            if lang_match:
+                detected_lang = lang_match.group(1)
+                if self.config.supported_languages is None or detected_lang in self.config.supported_languages:
+                    return detected_lang
+                    
+        elif self.config.language_detection_method == "auto":
+            # Simple heuristic-based language detection
+            # This is a basic implementation - could be enhanced with proper language detection
+            try:
+                # Check for common language-specific characters
+                if any(ord(c) > 127 for c in text):  # Non-ASCII characters
+                    # Arabic script
+                    if any('\u0600' <= c <= '\u06FF' for c in text):
+                        return 'ar'
+                    # Chinese characters
+                    elif any('\u4e00' <= c <= '\u9fff' for c in text):
+                        return 'zh'
+                    # Japanese characters  
+                    elif any('\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' for c in text):
+                        return 'ja'
+                    # Korean characters
+                    elif any('\uac00' <= c <= '\ud7af' for c in text):
+                        return 'ko'
+                    # Cyrillic (Russian, etc.)
+                    elif any('\u0400' <= c <= '\u04ff' for c in text):
+                        return 'ru'
+                
+                # Basic European language detection by common words
+                text_lower = text.lower()
+                if any(word in text_lower for word in ['the', 'and', 'is', 'to', 'of']):
+                    return 'en'
+                elif any(word in text_lower for word in ['el', 'la', 'de', 'que', 'y']):
+                    return 'es'
+                elif any(word in text_lower for word in ['le', 'de', 'et', 'à', 'un']):
+                    return 'fr'
+                elif any(word in text_lower for word in ['der', 'die', 'und', 'ist', 'zu']):
+                    return 'de'
+                elif any(word in text_lower for word in ['il', 'di', 'e', 'che', 'la']):
+                    return 'it'
+                    
+            except Exception:
+                pass
+                
+        # Fallback to default language
+        return self.config.language
+    
+    def _apply_phone_level_normalization(self, text: str, language: str) -> str:
+        """
+        Apply phone-level normalization to text.
+        
+        Args:
+            text: Input text
+            language: Language code
+            
+        Returns:
+            Phone-level normalized text
+        """
+        if not self.config.enable_phone_normalization:
+            return text
+            
+        try:
+            # Use the existing text processor with phoneme support
+            if hasattr(self.text_processor, 'text_to_phonemes'):
+                # Temporarily set language for phonemization
+                original_lang = self.text_processor.language
+                self.text_processor.language = language
+                
+                normalized_text = self.text_processor.text_to_phonemes(text)
+                
+                # Restore original language
+                self.text_processor.language = original_lang
+                
+                return normalized_text
+            else:
+                # Fallback to regular text cleaning
+                return self.text_processor.clean_text(text)
+                
+        except Exception as e:
+            print(f"Warning: Phone normalization failed for language {language}: {e}")
+            return text
+    
+    def _get_language_index(self, language: str) -> int:
+        """
+        Get language index for multi-language training.
+        
+        Args:
+            language: Language code
+            
+        Returns:
+            Language index
+        """
+        if not self.config.enable_multilingual:
+            return 0
+            
+        # Initialize language mapping if not done
+        if not hasattr(self, 'language_mapping'):
+            supported_langs = self.config.supported_languages or ['en', 'es', 'fr', 'de', 'it', 'pt', 'pl', 'tr', 'ru', 'nl', 'cs', 'ar', 'zh', 'ja', 'hu', 'ko']
+            self.language_mapping = {lang: idx for idx, lang in enumerate(supported_langs)}
+            self.num_languages = len(supported_langs)
+        
+        return self.language_mapping.get(language, 0)  # Default to 0 (usually English)
+    
     def _load_metadata(self) -> pd.DataFrame:
         """Load metadata from CSV file robustly.
 
@@ -820,6 +1024,13 @@ class LJSpeechDataset:
             text = row['transcription']
             text_normalized = row['normalized_transcription']
             
+            # Multi-language support: detect language and apply phone-level normalization
+            audio_id = str(row['id'])
+            detected_language = self._detect_language(text, audio_id)
+            
+            # Apply phone-level normalization if enabled
+            text_normalized = self._apply_phone_level_normalization(text_normalized, detected_language)
+            
             # Process text with optimized cache loading
             cache_key = str(row['id'])
             tokens_cache_path = self.tokens_cache_dir / f"{cache_key}.npy"
@@ -847,6 +1058,12 @@ class LJSpeechDataset:
                     audio = self.audio_processor.load_audio(audio_path)
                     if self.config.normalize_audio:
                         audio = self.audio_processor.preprocess_audio(audio)
+                    
+                    # Apply audio augmentations during training
+                    if self.subset == "train":
+                        audio = self._apply_pitch_shift(audio)
+                        audio = self._apply_noise_mixing(audio)
+                    
                     mel_spec = self.audio_processor.wav_to_mel(audio).T  # [time, n_mels]
                     
                     # Cache the computed mel spectrogram
@@ -870,6 +1087,9 @@ class LJSpeechDataset:
             # Multi-speaker support
             "speaker_id": row['speaker_id'],
             "speaker_index": self.get_speaker_index(row['speaker_id']) if self.is_multispeaker else 0,
+            # Multi-language support (NEW)
+            "language": detected_language,
+            "language_index": self._get_language_index(detected_language),
             # Duration target (simple heuristic for now)
             "duration_target": self._compute_duration_target(text_sequence, mel_spec)
         }
