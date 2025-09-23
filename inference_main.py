@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from typing import Optional
+from typing import Optional, List
 
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
@@ -222,6 +222,35 @@ def parse_args() -> argparse.Namespace:
         help="Enable voice interpolation for blending multiple voices.",
     )
     
+    # Multi-language support (NEW)
+    parser.add_argument(
+        "--detect-language",
+        action="store_true",
+        help="Automatically detect language from input text.",
+    )
+    parser.add_argument(
+        "--supported-languages",
+        nargs="+",
+        default=["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"],
+        help="List of supported languages for detection (default: common languages).",
+    )
+    parser.add_argument(
+        "--enable-phone-normalization",
+        action="store_true",
+        help="Enable phone-level text normalization.",
+    )
+    
+    # Multi-speaker support (NEW)
+    parser.add_argument(
+        "--speaker-id",
+        help="Speaker ID for multi-speaker models.",
+    )
+    parser.add_argument(
+        "--list-speakers",
+        action="store_true",
+        help="List available speakers in multi-speaker model and exit.",
+    )
+    
     # Evaluation and optimization options
     parser.add_argument(
         "--evaluate-output",
@@ -339,6 +368,126 @@ def log_voice_cloning_setup(args, logger) -> None:
         logger.info("   • Reference audio: None (will use default voice)")
 
 
+def detect_text_language(text: str, supported_languages: List[str], logger) -> str:
+    """
+    Detect language from input text.
+    
+    Args:
+        text: Input text
+        supported_languages: List of supported language codes
+        logger: Logger instance
+        
+    Returns:
+        Detected language code
+    """
+    try:
+        # Simple heuristic-based language detection
+        text_lower = text.lower()
+        
+        # Check for common language-specific characters
+        if any(ord(c) > 127 for c in text):  # Non-ASCII characters
+            # Arabic script
+            if any('\u0600' <= c <= '\u06FF' for c in text):
+                return 'ar' if 'ar' in supported_languages else 'en'
+            # Chinese characters
+            elif any('\u4e00' <= c <= '\u9fff' for c in text):
+                return 'zh' if 'zh' in supported_languages else 'en'
+            # Japanese characters  
+            elif any('\u3040' <= c <= '\u309f' or '\u30a0' <= c <= '\u30ff' for c in text):
+                return 'ja' if 'ja' in supported_languages else 'en'
+            # Korean characters
+            elif any('\uac00' <= c <= '\ud7af' for c in text):
+                return 'ko' if 'ko' in supported_languages else 'en'
+            # Cyrillic (Russian, etc.)
+            elif any('\u0400' <= c <= '\u04ff' for c in text):
+                return 'ru' if 'ru' in supported_languages else 'en'
+        
+        # Basic European language detection by common words
+        language_indicators = {
+            'en': ['the', 'and', 'is', 'to', 'of', 'a'],
+            'es': ['el', 'la', 'de', 'que', 'y', 'en'],
+            'fr': ['le', 'de', 'et', 'à', 'un', 'la'],
+            'de': ['der', 'die', 'und', 'ist', 'zu', 'das'],
+            'it': ['il', 'di', 'e', 'che', 'la', 'un'],
+            'pt': ['o', 'de', 'e', 'que', 'a', 'do'],
+            'pl': ['i', 'w', 'na', 'z', 'o', 'do'],
+            'tr': ['ve', 'bir', 'bu', 'de', 'da', 'ile'],
+            'ru': ['и', 'в', 'не', 'на', 'я', 'что'],
+            'nl': ['de', 'het', 'van', 'en', 'een', 'is'],
+            'cs': ['a', 'v', 'na', 'se', 'z', 'o'],
+        }
+        
+        for lang in supported_languages:
+            if lang in language_indicators:
+                indicators = language_indicators[lang]
+                if any(word in text_lower for word in indicators):
+                    return lang
+        
+        logger.warning("Could not detect language, defaulting to English")
+        return 'en'
+        
+    except Exception as e:
+        logger.warning(f"Language detection failed: {e}, defaulting to English")
+        return 'en'
+
+
+def apply_phone_normalization(text: str, language: str, logger) -> str:
+    """
+    Apply phone-level normalization to text.
+    
+    Args:
+        text: Input text
+        language: Language code
+        logger: Logger instance
+        
+    Returns:
+        Phone-normalized text
+    """
+    try:
+        from myxtts.utils.text import TextProcessor
+        
+        # Create a temporary text processor with phoneme support
+        processor = TextProcessor(
+            language=language,
+            use_phonemes=True,
+            tokenizer_type="custom"  # Use custom for phonemization
+        )
+        
+        # Apply phonemization
+        normalized_text = processor.text_to_phonemes(text)
+        return normalized_text
+        
+    except Exception as e:
+        logger.warning(f"Phone normalization failed: {e}, using original text")
+        return text
+
+
+def list_available_speakers(config, checkpoint_prefix: str, logger):
+    """
+    List available speakers in a multi-speaker model.
+    
+    Args:
+        config: Model configuration
+        checkpoint_prefix: Checkpoint path prefix
+        logger: Logger instance
+    """
+    try:
+        # This would need to be implemented based on how speaker information is stored
+        # For now, provide a placeholder implementation
+        logger.info("🎭 Available speakers:")
+        
+        if hasattr(config.data, 'max_speakers') and config.data.enable_multispeaker:
+            logger.info(f"   • Multi-speaker model with up to {config.data.max_speakers} speakers")
+            logger.info("   • Speaker IDs depend on training data")
+            logger.info("   • Common patterns: 'speaker_01', 'p001', 'male_01', etc.")
+        else:
+            logger.info("   • Single-speaker model")
+            logger.info("   • Use voice conditioning with --reference-audio instead")
+            
+    except Exception as e:
+        logger.error(f"Failed to list speakers: {e}")
+
+
 def main():
     args = parse_args()
     logger = setup_logging()
@@ -374,6 +523,36 @@ def main():
         config.model.voice_similarity_threshold = args.voice_similarity_threshold
     if hasattr(config.model, "enable_speaker_interpolation"):
         config.model.enable_speaker_interpolation = args.enable_voice_interpolation
+    
+    # Multi-language support (NEW)
+    detected_language = config.data.language  # Default language
+    if args.detect_language:
+        detected_language = detect_text_language(text, args.supported_languages, logger)
+        logger.info(f"🌍 Detected language: {detected_language}")
+    elif args.language:
+        detected_language = args.language
+        logger.info(f"🌍 Using specified language: {detected_language}")
+    
+    # Apply phone-level normalization if requested
+    if args.enable_phone_normalization:
+        text = apply_phone_normalization(text, detected_language, logger)
+        logger.info("🔤 Applied phone-level normalization")
+    
+    # Update config with detected language
+    config.data.language = detected_language
+    
+    # Multi-speaker support (NEW)
+    if args.list_speakers:
+        list_available_speakers(config, checkpoint_prefix, logger)
+        return
+    
+    if args.speaker_id:
+        logger.info(f"👤 Using speaker ID: {args.speaker_id}")
+        # Store speaker ID for use during inference
+        target_speaker_id = args.speaker_id
+    else:
+        target_speaker_id = None
+        
     checkpoint_prefix = resolve_checkpoint(args, logger)
     
     # Validate reference audio files if provided

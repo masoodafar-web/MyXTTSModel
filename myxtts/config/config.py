@@ -72,6 +72,13 @@ class ModelConfig:
     tokenizer_type: str = "nllb"  # "custom" or "nllb"
     tokenizer_model: str = "facebook/nllb-200-distilled-600M"
     
+    # NLLB Embedding Optimization (NEW) - Reduce memory usage from 256,256 vocab
+    use_optimized_nllb_vocab: bool = True  # Use smaller, optimized NLLB vocabulary
+    optimized_vocab_size: int = 32000  # Reduced vocabulary size (vs 256,256 full NLLB)
+    enable_weight_tying: bool = True  # Enable weight tying between languages
+    shared_embedding_languages: List[str] = None  # Languages to share embeddings (None = auto-group by script)
+    vocab_optimization_method: str = "frequency"  # "frequency", "cross_lingual", or "manual"
+    
     # Advanced Voice Cloning Features - NEW for better voice cloning capability
     enable_speaker_interpolation: bool = True  # Allow blending multiple voices
     voice_cloning_temperature: float = 0.7  # Default temperature for voice cloning
@@ -148,6 +155,23 @@ class DataConfig:
     enable_loudness_normalization: bool = True
     target_loudness_lufs: float = -23.0
     enable_vad: bool = True  # Voice Activity Detection using Silero VAD
+    
+    # Audio augmentations for robustness (NEW)
+    enable_pitch_shift: bool = False  # Enable pitch shifting augmentation
+    pitch_shift_range: List[float] = None  # Pitch shift range in semitones
+    enable_noise_mixing: bool = False  # Enable noise mixing augmentation
+    noise_mixing_probability: float = 0.3  # Probability of applying noise mixing
+    noise_mixing_snr_range: List[float] = None  # SNR range for noise mixing in dB
+    
+    # Phone-level normalization (NEW)
+    enable_phone_normalization: bool = False  # Enable phone-level text normalization
+    use_phonemes: bool = True  # Use phonemic representation
+    phoneme_language: Optional[str] = None  # Language for phonemization (auto-detect if None)
+    
+    # Multi-language support (NEW)
+    enable_multilingual: bool = False  # Enable multi-language support
+    supported_languages: List[str] = None  # List of supported languages (auto-detect if None)
+    language_detection_method: str = "metadata"  # "metadata", "filename", or "auto"
 
     # Training splits and optional subsampling
     train_split: float = 0.9
@@ -198,6 +222,12 @@ class DataConfig:
     def __post_init__(self):
         if self.text_cleaners is None:
             self.text_cleaners = ["english_cleaners"]
+        if self.pitch_shift_range is None:
+            self.pitch_shift_range = [-2.0, 2.0]
+        if self.noise_mixing_snr_range is None:
+            self.noise_mixing_snr_range = [10.0, 30.0]
+        if self.supported_languages is None:
+            self.supported_languages = ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]
         valid_modes = ["auto", "precompute", "runtime"]
         if self.preprocessing_mode not in valid_modes:
             raise ValueError(
