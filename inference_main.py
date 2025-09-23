@@ -227,6 +227,29 @@ def parse_args() -> argparse.Namespace:
         default="ecapa_tdnn",
         help="Type of pre-trained speaker encoder to use (default: ecapa_tdnn).",
     )
+    parser.add_argument(
+        "--voice-conditioning-strength",
+        type=float,
+        default=1.0,
+        help="Strength of voice conditioning (0.0-2.0, default: 1.0).",
+    )
+    parser.add_argument(
+        "--voice-cloning-temperature",
+        type=float,
+        default=0.7,
+        help="Temperature for voice cloning (default: 0.7).",
+    )
+    parser.add_argument(
+        "--voice-similarity-threshold",
+        type=float,
+        default=0.75,
+        help="Voice similarity threshold for quality control (default: 0.75).",
+    )
+    parser.add_argument(
+        "--enable-voice-interpolation",
+        action="store_true",
+        help="Enable voice interpolation for blending multiple voices.",
+    )
     
     # Multi-language support (NEW)
     parser.add_argument(
@@ -321,31 +344,20 @@ def resolve_checkpoint(args: argparse.Namespace, logger) -> str:
     """Resolve which checkpoint to load, supporting lightweight models."""
     
     # Priority 1: Lightweight/compressed model if specified
-    if args.lightweight_model:
+    if hasattr(args, 'lightweight_model') and args.lightweight_model:
         lightweight_path = args.lightweight_model
-        
-        # Support various lightweight model formats
-        supported_extensions = ['.h5', '.tflite', '.pb', '_compressed', '_student', '_quantized']
-        model_found = False
         
         # Check if it's a direct path to a model file
         if os.path.exists(lightweight_path):
             logger.info(f"🎯 Loading lightweight model: {lightweight_path}")
             return lightweight_path
         
-        # Check for model with various extensions/suffixes
-        for ext in supported_extensions:
-            test_path = lightweight_path + ext if not lightweight_path.endswith(ext) else lightweight_path
-            if os.path.exists(test_path):
-                logger.info(f"🎯 Loading lightweight model: {test_path}")
-                return test_path
+        # Check for checkpoint-style naming
+        test_path = f"{lightweight_path}_model.weights.h5"
+        if os.path.exists(test_path):
+            logger.info(f"🎯 Loading lightweight checkpoint: {lightweight_path}")
+            return lightweight_path
             
-            # Also check for checkpoint-style naming
-            test_path = f"{lightweight_path}_model.weights.h5"
-            if os.path.exists(test_path):
-                logger.info(f"🎯 Loading lightweight checkpoint: {lightweight_path}")
-                return lightweight_path
-        
         raise FileNotFoundError(f"Lightweight model not found: {lightweight_path}")
     
     # Priority 2: Explicit checkpoint
@@ -679,7 +691,7 @@ def main():
         log_voice_cloning_setup(args, logger)
 
     # Instantiate inference engine with optimization support
-    if args.optimized_inference and EVAL_OPT_AVAILABLE:
+    if hasattr(args, 'optimized_inference') and args.optimized_inference and EVAL_OPT_AVAILABLE:
         logger.info("🚀 Using optimized inference pipeline for faster generation")
         
         # Create optimized inference config based on quality mode
@@ -714,9 +726,8 @@ def main():
                 checkpoint_path=checkpoint_prefix,
             )
     else:
-        if args.optimized_inference and not EVAL_OPT_AVAILABLE:
+        if hasattr(args, 'optimized_inference') and args.optimized_inference and not EVAL_OPT_AVAILABLE:
             logger.warning("Optimized inference requested but optimization modules not available")
-            logger.info("Install optimization dependencies or use standard inference")
             
         inference_engine = XTTSInference(
             config=config,
