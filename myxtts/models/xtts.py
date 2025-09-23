@@ -21,6 +21,7 @@ from .vocoder import VocoderInterface, HiFiGANGenerator
 from .non_autoregressive import DecoderStrategy, NonAutoregressiveDecoder
 from .speaker_encoder import PretrainedSpeakerEncoder, ContrastiveSpeakerLoss
 from .diffusion_decoder import DiffusionDecoder
+from .gst import GlobalStyleToken, ProsodyPredictor
 from ..config.config import ModelConfig
 
 
@@ -368,6 +369,12 @@ class MelDecoder(tf.keras.layers.Layer):
             name="speaker_projection"
         )
         
+        # Style conditioning projection for GST
+        self.style_projection = tf.keras.layers.Dense(
+            self.d_model,
+            name="style_projection"
+        )
+        
         self.dropout = tf.keras.layers.Dropout(0.1)
     
     def call(
@@ -375,6 +382,7 @@ class MelDecoder(tf.keras.layers.Layer):
         decoder_inputs: tf.Tensor,
         encoder_output: tf.Tensor,
         speaker_embedding: Optional[tf.Tensor] = None,
+        style_embedding: Optional[tf.Tensor] = None,
         encoder_mask: Optional[tf.Tensor] = None,
         decoder_mask: Optional[tf.Tensor] = None,
         training: bool = False,
@@ -387,6 +395,7 @@ class MelDecoder(tf.keras.layers.Layer):
             decoder_inputs: Previous mel frames [batch, mel_len, n_mels]
             encoder_output: Text encoder output [batch, text_len, d_model]
             speaker_embedding: Speaker embedding [batch, speaker_dim]
+            style_embedding: Style embedding for prosody control [batch, style_dim]
             encoder_mask: Encoder attention mask
             decoder_mask: Decoder attention mask
             training: Training mode flag
@@ -408,6 +417,18 @@ class MelDecoder(tf.keras.layers.Layer):
             )
             x = tf.concat([x, speaker_expanded], axis=-1)
             x = self.speaker_projection(x)
+        
+        # Add style conditioning if provided
+        if style_embedding is not None:
+            # Broadcast style embedding to all time steps
+            style_expanded = tf.expand_dims(style_embedding, 1)
+            style_expanded = tf.tile(
+                style_expanded,
+                [1, tf.shape(x)[1], 1]
+            )
+            # Add style conditioning to decoder features
+            style_projected = self.style_projection(style_expanded)
+            x = x + style_projected  # Add rather than concatenate to preserve dimensionality
         
         # Positional encoding
         x = self.positional_encoding(x)
@@ -486,6 +507,14 @@ class XTTS(tf.keras.Model):
         if config.use_voice_conditioning:
             self.audio_encoder = AudioEncoder(config, name="audio_encoder") 
         
+        # Global Style Tokens for prosody controllability
+        if getattr(config, 'use_gst', False):
+            self.gst = GlobalStyleToken(config, name="global_style_token")
+            self.prosody_predictor = ProsodyPredictor(config, name="prosody_predictor")
+        else:
+            self.gst = None
+            self.prosody_predictor = None
+        
         # Decoder strategy (autoregressive, non-autoregressive, or diffusion)
         decoder_strategy = getattr(config, 'decoder_strategy', 'autoregressive')
         if decoder_strategy == 'non_autoregressive':
@@ -516,6 +545,8 @@ class XTTS(tf.keras.Model):
         text_inputs: tf.Tensor,
         mel_inputs: tf.Tensor,
         audio_conditioning: Optional[tf.Tensor] = None,
+        reference_mel: Optional[tf.Tensor] = None,
+        style_weights: Optional[tf.Tensor] = None,
         text_lengths: Optional[tf.Tensor] = None,
         mel_lengths: Optional[tf.Tensor] = None,
         training: bool = False
@@ -527,6 +558,8 @@ class XTTS(tf.keras.Model):
             text_inputs: Text token IDs [batch, text_len]
             mel_inputs: Target mel spectrograms [batch, mel_len, n_mels]
             audio_conditioning: Reference audio for voice cloning [batch, time, n_mels]
+            reference_mel: Reference mel for prosody conditioning [batch, time, n_mels]
+            style_weights: Direct style weights for GST [batch, num_style_tokens]
             text_lengths: Text sequence lengths [batch]
             mel_lengths: Mel sequence lengths [batch]
             training: Training mode flag
@@ -577,6 +610,31 @@ class XTTS(tf.keras.Model):
                 audio_conditioning,
                 training=training
             )
+        
+        # Global Style Token (GST) processing for prosody control
+        style_embedding = None
+        style_attention_weights = None
+        prosody_pitch = None
+        prosody_energy = None
+        prosody_speaking_rate = None
+        
+        if self.gst is not None:
+            # Use reference_mel for prosody extraction, fallback to audio_conditioning
+            prosody_reference = reference_mel if reference_mel is not None else audio_conditioning
+            
+            style_embedding, style_attention_weights = self.gst(
+                reference_mel=prosody_reference,
+                style_weights=style_weights,
+                training=training
+            )
+            
+            # Predict prosody features using style embedding
+            if self.prosody_predictor is not None:
+                prosody_pitch, prosody_energy, prosody_speaking_rate = self.prosody_predictor(
+                    text_encoded,
+                    style_embedding,
+                    training=training
+                )
         
         # Prepare decoder inputs (shifted mel spectrograms)
         # For training: use teacher forcing with previous mel frames
@@ -668,6 +726,7 @@ class XTTS(tf.keras.Model):
                     decoder_inputs,
                     text_encoded,
                     speaker_embedding=speaker_embedding,
+                    style_embedding=style_embedding,
                     encoder_mask=text_mask,
                     decoder_mask=causal_mask,
                     training=training,
@@ -690,6 +749,7 @@ class XTTS(tf.keras.Model):
                     decoder_inputs,
                     text_encoded,
                     speaker_embedding=speaker_embedding,
+                    style_embedding=style_embedding,
                     encoder_mask=text_mask,
                     decoder_mask=causal_mask,
                     training=training
@@ -717,6 +777,18 @@ class XTTS(tf.keras.Model):
         if training and energy_output is not None:
             outputs["energy_output"] = energy_output
         
+        # Add GST-related outputs
+        if style_embedding is not None:
+            outputs["style_embedding"] = style_embedding
+        if style_attention_weights is not None:
+            outputs["style_attention_weights"] = style_attention_weights
+        if prosody_pitch is not None:
+            outputs["prosody_pitch"] = prosody_pitch
+        if prosody_energy is not None:
+            outputs["prosody_energy"] = prosody_energy
+        if prosody_speaking_rate is not None:
+            outputs["prosody_speaking_rate"] = prosody_speaking_rate
+        
         # Add diffusion loss outputs
         if training and 'diffusion_noise_pred' in locals():
             outputs["diffusion_noise_pred"] = diffusion_noise_pred
@@ -737,6 +809,8 @@ class XTTS(tf.keras.Model):
         self,
         text_inputs: tf.Tensor,
         audio_conditioning: Optional[tf.Tensor] = None,
+        reference_mel: Optional[tf.Tensor] = None,
+        style_weights: Optional[tf.Tensor] = None,
         max_length: int = 1000,
         temperature: float = 1.0,
         generate_audio: bool = False
@@ -747,6 +821,8 @@ class XTTS(tf.keras.Model):
         Args:
             text_inputs: Text token IDs [batch, text_len]
             audio_conditioning: Reference audio for voice cloning
+            reference_mel: Reference mel for prosody conditioning [batch, time, n_mels]
+            style_weights: Direct style weights for GST [batch, num_style_tokens]
             max_length: Maximum generation length
             temperature: Sampling temperature
             generate_audio: Whether to generate audio using neural vocoder
@@ -764,6 +840,18 @@ class XTTS(tf.keras.Model):
         if self.config.use_voice_conditioning and audio_conditioning is not None:
             _, speaker_embedding = self.audio_encoder(
                 audio_conditioning, 
+                training=False
+            )
+        
+        # Global Style Token (GST) processing for prosody control
+        style_embedding = None
+        if self.gst is not None:
+            # Use reference_mel for prosody extraction, fallback to audio_conditioning
+            prosody_reference = reference_mel if reference_mel is not None else audio_conditioning
+            
+            style_embedding, _ = self.gst(
+                reference_mel=prosody_reference,
+                style_weights=style_weights,
                 training=False
             )
         

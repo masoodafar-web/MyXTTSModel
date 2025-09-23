@@ -97,6 +97,17 @@ class ModelConfig:
     contrastive_loss_temperature: float = 0.1  # Temperature for contrastive speaker loss
     contrastive_loss_margin: float = 0.2  # Margin for contrastive speaker loss
     
+    # Global Style Tokens (GST) Settings - NEW for prosody controllability
+    use_gst: bool = True  # Enable Global Style Tokens for prosody control
+    gst_num_style_tokens: int = 10  # Number of learnable style tokens
+    gst_style_token_dim: int = 256  # Dimension of each style token
+    gst_style_embedding_dim: int = 256  # Output style embedding dimension
+    gst_num_heads: int = 4  # Number of attention heads for style selection
+    gst_reference_encoder_dim: int = 128  # Reference encoder output dimension
+    gst_enable_emotion_control: bool = True  # Enable emotion-based style control
+    gst_enable_speaking_rate_control: bool = True  # Enable speaking rate control
+    gst_style_loss_weight: float = 1.0  # Weight for style consistency loss
+    
     # Memory optimization settings
     enable_gradient_checkpointing: bool = False
     max_attention_sequence_length: int = 512  # Text length limit - increase for longer sentences
