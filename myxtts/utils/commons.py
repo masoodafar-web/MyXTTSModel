@@ -438,7 +438,7 @@ def load_checkpoint(
     checkpoint_path: str
 ) -> Dict[str, Any]:
     """
-    Load model checkpoint.
+    Load model checkpoint with enhanced mixed precision support.
     
     Args:
         model: Keras model to load weights into
@@ -448,31 +448,72 @@ def load_checkpoint(
     Returns:
         Dictionary with checkpoint metadata
     """
+    logger = logging.getLogger("MyXTTS.load_checkpoint")
+    
     # Load model weights
     model_path = f"{checkpoint_path}_model.weights.h5"
     if os.path.exists(model_path):
         model.load_weights(model_path)
-        print(f"Loaded model weights from {model_path}")
+        logger.info(f"Loaded model weights from {model_path}")
     else:
         raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
     
-    # Load optimizer state
+    # Load optimizer state with enhanced mixed precision support
     optimizer_path = f"{checkpoint_path}_optimizer.pkl"
     if os.path.exists(optimizer_path):
         with open(optimizer_path, "rb") as f:
-            optimizer_weights = pickle.load(f)
+            optimizer_state = pickle.load(f)
+        
+        # Handle both old format (just weights) and new format (dict with mixed precision state)
+        if isinstance(optimizer_state, dict):
+            optimizer_weights = optimizer_state.get('weights', [])
+        else:
+            # Legacy format - just weights
+            optimizer_weights = optimizer_state
+            optimizer_state = {'weights': optimizer_weights}
+        
         # Build optimizer first if needed
         try:
             dummy_grads = [tf.zeros_like(var) for var in model.trainable_variables]
             optimizer.apply_gradients(zip(dummy_grads, model.trainable_variables))
         except Exception:
             pass
+        
         # Load optimizer weights (robust to wrappers)
         if optimizer_weights:
             if _set_optimizer_weights(optimizer, optimizer_weights):
-                print(f"Loaded optimizer state from {optimizer_path}")
+                logger.info(f"Loaded optimizer state from {optimizer_path}")
             else:
-                print("Warning: Failed to restore optimizer weights; continuing with fresh optimizer state")
+                logger.warning("Failed to restore optimizer weights; continuing with fresh optimizer state")
+        
+        # Restore mixed precision state if available
+        if hasattr(optimizer, 'loss_scale') and 'loss_scale' in optimizer_state:
+            try:
+                if hasattr(optimizer.loss_scale, 'assign'):
+                    optimizer.loss_scale.assign(optimizer_state['loss_scale'])
+                else:
+                    optimizer._loss_scale = optimizer_state['loss_scale']
+                logger.info(f"Restored mixed precision loss_scale: {optimizer_state['loss_scale']}")
+                
+                # Restore loss scale counter if available
+                if 'loss_scale_counter' in optimizer_state and hasattr(optimizer, '_counter'):
+                    if hasattr(optimizer._counter, 'assign'):
+                        optimizer._counter.assign(optimizer_state['loss_scale_counter'])
+                    else:
+                        optimizer._counter = optimizer_state['loss_scale_counter']
+                    logger.debug(f"Restored loss scale counter: {optimizer_state['loss_scale_counter']}")
+                    
+            except Exception as e:
+                logger.warning(f"Could not restore mixed precision state: {e}")
+        
+        # Restore learning rate schedule state if available
+        if 'lr_schedule_weights' in optimizer_state and hasattr(optimizer, 'learning_rate'):
+            try:
+                if hasattr(optimizer.learning_rate, 'set_weights'):
+                    optimizer.learning_rate.set_weights(optimizer_state['lr_schedule_weights'])
+                    logger.debug("Restored learning rate schedule state")
+            except Exception as e:
+                logger.debug(f"Could not restore LR schedule state: {e}")
     
     # Load metadata
     metadata_path = f"{checkpoint_path}_metadata.json"
@@ -480,7 +521,7 @@ def load_checkpoint(
     if os.path.exists(metadata_path):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
-        print(f"Loaded metadata from {metadata_path}")
+        logger.info(f"Loaded metadata from {metadata_path}")
     
     return metadata
 

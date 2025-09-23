@@ -322,6 +322,10 @@ class TrainingConfig:
     multi_gpu: bool = False            # Enable MirroredStrategy when True
     visible_gpus: Optional[str] = None # e.g., "0" or "0,1"; None = all visible
     
+    # Automatic evaluation parameters for checkpoint quality monitoring
+    enable_automatic_evaluation: bool = False  # Enable MOSNet, ASR-WER evaluation during training
+    evaluation_interval: int = 10              # Evaluate model every N epochs
+    
     def __post_init__(self):
         if self.scheduler_params is None:
             self.scheduler_params = {}
