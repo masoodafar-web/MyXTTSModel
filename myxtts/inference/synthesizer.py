@@ -115,6 +115,8 @@ class XTTSInference:
         self,
         text: str,
         reference_audio: Optional[Union[str, np.ndarray]] = None,
+        prosody_reference: Optional[Union[str, np.ndarray]] = None,
+        style_weights: Optional[List[float]] = None,
         language: Optional[str] = None,
         max_length: int = 1000,
         temperature: float = 1.0,
@@ -127,6 +129,8 @@ class XTTSInference:
         Args:
             text: Input text to synthesize
             reference_audio: Reference audio for voice cloning (path or array)
+            prosody_reference: Reference audio for prosody conditioning (path or array)
+            style_weights: Direct style token weights for GST
             language: Language code (uses config default if None)
             max_length: Maximum generation length
             temperature: Sampling temperature for generation
@@ -154,12 +158,24 @@ class XTTSInference:
         if reference_audio is not None and self.config.model.use_voice_conditioning:
             audio_conditioning = self._preprocess_reference_audio(reference_audio)
         
+        # Process prosody reference for GST
+        reference_mel = None
+        if prosody_reference is not None and getattr(self.config.model, 'use_gst', False):
+            reference_mel = self._preprocess_reference_audio(prosody_reference)
+        
+        # Convert style weights to tensor if provided
+        style_weights_tensor = None
+        if style_weights is not None and getattr(self.config.model, 'use_gst', False):
+            style_weights_tensor = tf.constant([style_weights], dtype=tf.float32)
+        
         generate_neural_audio = getattr(self.config.model, 'vocoder_type', 'griffin_lim') != "griffin_lim"
 
         # Generate mel spectrogram (and optional neural audio)
         outputs = self.model.generate(
             text_inputs=text_tensor,
             audio_conditioning=audio_conditioning,
+            reference_mel=reference_mel,
+            style_weights=style_weights_tensor,
             max_length=max_length,
             temperature=temperature,
             generate_audio=generate_neural_audio
@@ -245,6 +261,8 @@ class XTTSInference:
         self,
         text: str,
         reference_audio: Union[str, np.ndarray],
+        prosody_reference: Optional[Union[str, np.ndarray]] = None,
+        style_weights: Optional[List[float]] = None,
         language: Optional[str] = None,
         max_length: int = 1000,
         temperature: float = 0.7
@@ -255,6 +273,8 @@ class XTTSInference:
         Args:
             text: Text to synthesize
             reference_audio: Reference audio for voice cloning
+            prosody_reference: Reference audio for prosody conditioning
+            style_weights: Direct style token weights for GST
             language: Language code
             max_length: Maximum generation length
             temperature: Sampling temperature (lower for more consistent voice)
@@ -268,6 +288,8 @@ class XTTSInference:
         return self.synthesize(
             text=text,
             reference_audio=reference_audio,
+            prosody_reference=prosody_reference,
+            style_weights=style_weights,
             language=language,
             max_length=max_length,
             temperature=temperature

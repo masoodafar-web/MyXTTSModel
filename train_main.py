@@ -251,6 +251,13 @@ def build_config(
     shuffle_buffer_multiplier: int = 30,
     decoder_strategy: str = "autoregressive",
     vocoder_type: str = "griffin_lim",
+    # GST parameters for prosody controllability
+    enable_gst: bool = True,
+    gst_num_style_tokens: int = 10,
+    gst_style_token_dim: int = 256,
+    gst_style_embedding_dim: int = 256,
+    gst_num_heads: int = 4,
+    gst_style_loss_weight: float = 1.0,
 ) -> XTTSConfig:
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
@@ -303,6 +310,17 @@ def build_config(
         speaker_encoder_type="ecapa_tdnn",     # Options: "ecapa_tdnn", "resemblyzer", "coqui"
         contrastive_loss_temperature=0.1,      # Temperature for contrastive speaker loss
         contrastive_loss_margin=0.2,           # Margin for contrastive speaker loss
+
+        # Global Style Tokens (GST) for prosody controllability
+        use_gst=enable_gst,
+        gst_num_style_tokens=gst_num_style_tokens,
+        gst_style_token_dim=gst_style_token_dim,
+        gst_style_embedding_dim=gst_style_embedding_dim,
+        gst_num_heads=gst_num_heads,
+        gst_reference_encoder_dim=128,  # Fixed reference encoder dimension
+        gst_enable_emotion_control=True,
+        gst_enable_speaking_rate_control=True,
+        gst_style_loss_weight=gst_style_loss_weight,
 
         # Decoder / vocoder strategy controls
         decoder_strategy=decoder_strategy,
@@ -560,6 +578,44 @@ def main():
         help="Target compression ratio for model optimization (default: 2.0x)"
     )
     
+    # Global Style Tokens (GST) options for prosody controllability
+    parser.add_argument(
+        "--enable-gst",
+        action="store_true",
+        default=True,
+        help="Enable Global Style Tokens for prosody control (default: True)"
+    )
+    parser.add_argument(
+        "--gst-num-style-tokens",
+        type=int,
+        default=10,
+        help="Number of learnable style tokens (default: 10)"
+    )
+    parser.add_argument(
+        "--gst-style-token-dim",
+        type=int,
+        default=256,
+        help="Dimension of each style token (default: 256)"
+    )
+    parser.add_argument(
+        "--gst-style-embedding-dim",
+        type=int,
+        default=256,
+        help="Output style embedding dimension (default: 256)"
+    )
+    parser.add_argument(
+        "--gst-num-heads",
+        type=int,
+        default=4,
+        help="Number of attention heads for style selection (default: 4)"
+    )
+    parser.add_argument(
+        "--gst-style-loss-weight",
+        type=float,
+        default=1.0,
+        help="Weight for style consistency loss (default: 1.0)"
+    )
+    
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -644,6 +700,13 @@ def main():
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
         decoder_strategy=args.decoder_strategy,
         vocoder_type=args.vocoder_type,
+        # GST parameters
+        enable_gst=args.enable_gst,
+        gst_num_style_tokens=args.gst_num_style_tokens,
+        gst_style_token_dim=args.gst_style_token_dim,
+        gst_style_embedding_dim=args.gst_style_embedding_dim,
+        gst_num_heads=args.gst_num_heads,
+        gst_style_loss_weight=args.gst_style_loss_weight,
     )
 
     # Apply optimization level

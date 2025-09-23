@@ -149,6 +149,35 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable advanced voice cloning mode with enhanced voice similarity.",
     )
+    
+    # Global Style Tokens (GST) for prosody control
+    parser.add_argument(
+        "--prosody-reference",
+        help="Reference audio file for prosody conditioning (GST).",
+    )
+    parser.add_argument(
+        "--emotion",
+        choices=["neutral", "happy", "sad", "angry", "surprised", "fearful", "disgusted"],
+        help="Emotion style for synthesis (requires GST).",
+    )
+    parser.add_argument(
+        "--speaking-rate",
+        type=float,
+        default=1.0,
+        help="Speaking rate control (0.5-2.0, default: 1.0, requires GST).",
+    )
+    parser.add_argument(
+        "--style-weights",
+        nargs="+",
+        type=float,
+        help="Direct style token weights (space-separated floats, must match number of style tokens).",
+    )
+    parser.add_argument(
+        "--list-style-tokens",
+        action="store_true",
+        help="List available style tokens and exit.",
+    )
+    
     parser.add_argument(
         "--decoder-strategy",
         choices=["autoregressive", "non_autoregressive"],
@@ -488,6 +517,38 @@ def list_available_speakers(config, checkpoint_prefix: str, logger):
         logger.error(f"Failed to list speakers: {e}")
 
 
+def list_style_tokens(config, logger):
+    """
+    List available style tokens in the GST model.
+    
+    Args:
+        config: Model configuration
+        logger: Logger instance
+    """
+    try:
+        logger.info("🎨 Style Token Information:")
+        
+        if getattr(config.model, 'use_gst', False):
+            num_tokens = getattr(config.model, 'gst_num_style_tokens', 10)
+            token_dim = getattr(config.model, 'gst_style_token_dim', 256)
+            embedding_dim = getattr(config.model, 'gst_style_embedding_dim', 256)
+            
+            logger.info(f"   • Number of style tokens: {num_tokens}")
+            logger.info(f"   • Style token dimension: {token_dim}")
+            logger.info(f"   • Style embedding dimension: {embedding_dim}")
+            logger.info("   • Available emotions: neutral, happy, sad, angry, surprised, fearful, disgusted")
+            logger.info("   • Speaking rate control: 0.5 (slow) to 2.0 (fast)")
+            logger.info("   • Use --prosody-reference for prosody conditioning")
+            logger.info("   • Use --emotion for predefined emotion styles")
+            logger.info("   • Use --style-weights for direct token control")
+        else:
+            logger.info("   • GST (Global Style Tokens) not enabled in this model")
+            logger.info("   • Style control not available")
+            
+    except Exception as e:
+        logger.error(f"Failed to list style tokens: {e}")
+
+
 def main():
     args = parse_args()
     logger = setup_logging()
@@ -523,6 +584,43 @@ def main():
         config.model.voice_similarity_threshold = args.voice_similarity_threshold
     if hasattr(config.model, "enable_speaker_interpolation"):
         config.model.enable_speaker_interpolation = args.enable_voice_interpolation
+    
+    # Global Style Tokens (GST) parameters
+    prosody_reference = None
+    style_weights = None
+    
+    if args.prosody_reference:
+        if validate_reference_audio(args.prosody_reference, logger):
+            prosody_reference = args.prosody_reference
+            logger.info(f"🎵 Using prosody reference: {args.prosody_reference}")
+        else:
+            logger.warning("Invalid prosody reference audio, proceeding without it")
+    
+    if args.emotion:
+        # Convert emotion to style weights (simple mapping)
+        emotion_mapping = {
+            "neutral": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "happy": [0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "sad": [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "angry": [0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "surprised": [0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "fearful": [0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+            "disgusted": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+        }
+        if args.emotion in emotion_mapping:
+            style_weights = emotion_mapping[args.emotion]
+            logger.info(f"😊 Using emotion style: {args.emotion}")
+    
+    if args.style_weights:
+        if getattr(config.model, 'gst_num_style_tokens', 10) == len(args.style_weights):
+            style_weights = args.style_weights
+            logger.info(f"🎨 Using custom style weights: {style_weights}")
+        else:
+            logger.warning(f"Style weights count ({len(args.style_weights)}) doesn't match model tokens ({getattr(config.model, 'gst_num_style_tokens', 10)})")
+    
+    if args.list_style_tokens:
+        list_style_tokens(config, logger)
+        return
     
     # Multi-language support (NEW)
     detected_language = config.data.language  # Default language
@@ -601,6 +699,8 @@ def main():
         result = inference_engine.clone_voice(
             text=text,
             reference_audio=reference_audio,
+            prosody_reference=prosody_reference,
+            style_weights=style_weights,
             language=args.language,
             max_length=args.max_length,
             temperature=args.voice_cloning_temperature,  # Use specialized voice cloning temperature
@@ -614,6 +714,8 @@ def main():
         result = inference_engine.synthesize(
             text=text,
             reference_audio=args.reference_audio,
+            prosody_reference=prosody_reference,
+            style_weights=style_weights,
             language=args.language,
             max_length=args.max_length,
             temperature=args.temperature,
