@@ -21,8 +21,8 @@ training:
   optimizer: adamw
   scheduler: noam
   
-  # Improved loss weights for better stability
-  mel_loss_weight: 35.0        # Reduced from 45.0 for better balance
+  # Fixed loss weights for proper convergence (addresses Persian issue: "لاس سه رقمیه")
+  mel_loss_weight: 2.5         # Fixed from 35.0 - was causing loss values in hundreds
   kl_loss_weight: 1.0
   
   # Training stability improvements  
