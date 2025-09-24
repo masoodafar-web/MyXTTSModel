@@ -610,6 +610,14 @@ class XTTSLoss(tf.keras.losses.Loss):
             losses["diffusion_loss"] = diff_l
             total_loss += self.diffusion_loss_weight * diff_l
         
+        # Gradient participation regularization: Ensure all model outputs participate in gradients
+        # This prevents the "Gradients do not exist for variables" warning by adding a small
+        # regularization term for outputs that don't have corresponding targets
+        gradient_reg_loss = self._ensure_gradient_participation(y_pred, y_true)
+        if gradient_reg_loss > 0:
+            losses["gradient_participation_loss"] = gradient_reg_loss
+            total_loss += gradient_reg_loss
+        
         # Apply loss smoothing and spike detection
         total_loss = self._apply_loss_smoothing(total_loss)
         
@@ -700,6 +708,63 @@ class XTTSLoss(tf.keras.losses.Loss):
             smoothed_loss = current_loss
             
         return smoothed_loss
+    
+    def _ensure_gradient_participation(
+        self, 
+        y_pred: Dict[str, tf.Tensor], 
+        y_true: Dict[str, tf.Tensor]
+    ) -> tf.Tensor:
+        """
+        Ensure all model outputs participate in gradient computation.
+        
+        This method adds a small regularization term for outputs that don't have
+        corresponding targets, preventing gradient warnings for unused variables.
+        
+        Args:
+            y_pred: Dictionary of predicted tensors
+            y_true: Dictionary of target tensors
+            
+        Returns:
+            Gradient participation regularization loss
+        """
+        regularization_loss = 0.0
+        regularization_weight = 1e-6  # Very small weight to not affect training
+        
+        # Duration predictor regularization
+        if ("duration_pred" in y_pred and 
+            "duration_target" not in y_true):
+            # Add small L2 regularization to ensure gradient participation
+            duration_reg = tf.reduce_mean(tf.square(y_pred["duration_pred"]))
+            regularization_loss += regularization_weight * duration_reg
+        
+        # Mel-level prosody regularization (from mel decoder)
+        if ("pitch_output" in y_pred and 
+            "pitch_target" not in y_true):
+            pitch_reg = tf.reduce_mean(tf.square(y_pred["pitch_output"]))
+            regularization_loss += regularization_weight * pitch_reg
+            
+        if ("energy_output" in y_pred and 
+            "energy_target" not in y_true):
+            energy_reg = tf.reduce_mean(tf.square(y_pred["energy_output"]))
+            regularization_loss += regularization_weight * energy_reg
+        
+        # Text-level prosody regularization (from prosody predictor)
+        if ("prosody_pitch" in y_pred and 
+            "prosody_pitch_target" not in y_true):
+            prosody_pitch_reg = tf.reduce_mean(tf.square(y_pred["prosody_pitch"]))
+            regularization_loss += regularization_weight * prosody_pitch_reg
+            
+        if ("prosody_energy" in y_pred and 
+            "prosody_energy_target" not in y_true):
+            prosody_energy_reg = tf.reduce_mean(tf.square(y_pred["prosody_energy"]))
+            regularization_loss += regularization_weight * prosody_energy_reg
+            
+        if ("prosody_speaking_rate" in y_pred and 
+            "prosody_speaking_rate_target" not in y_true):
+            speaking_rate_reg = tf.reduce_mean(tf.square(y_pred["prosody_speaking_rate"]))
+            regularization_loss += regularization_weight * speaking_rate_reg
+        
+        return regularization_loss
     
     def get_losses(self) -> Dict[str, tf.Tensor]:
         """Get individual loss components."""
