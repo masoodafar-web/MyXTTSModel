@@ -344,6 +344,27 @@ def diffusion_loss(
     return tf.reduce_mean(loss)
 
 
+def speaking_rate_loss(
+    predicted_rate: tf.Tensor,
+    target_rate: tf.Tensor,
+    text_lengths: tf.Tensor
+) -> tf.Tensor:
+    """Simple L1 loss for speaking-rate predictions with masking."""
+    diff = tf.abs(predicted_rate - target_rate)
+
+    mask = tf.sequence_mask(
+        text_lengths,
+        maxlen=tf.shape(diff)[1],
+        dtype=tf.float32
+    )
+    diff = diff * tf.expand_dims(mask, axis=-1)
+
+    diff = tf.reduce_sum(diff, axis=1)
+    diff = diff / tf.maximum(tf.cast(text_lengths, tf.float32), 1.0)
+
+    return tf.reduce_mean(diff)
+
+
 class XTTSLoss(tf.keras.losses.Loss):
     """
     Enhanced combined loss function for XTTS training with stability improvements.
@@ -362,6 +383,9 @@ class XTTSLoss(tf.keras.losses.Loss):
         # Prosody loss weights (FastSpeech/FastPitch style)
         pitch_loss_weight: float = 0.1,      # Weight for pitch prediction loss
         energy_loss_weight: float = 0.1,     # Weight for energy prediction loss
+        prosody_pitch_loss_weight: float = 0.05,
+        prosody_energy_loss_weight: float = 0.05,
+        speaking_rate_loss_weight: float = 0.05,
         # Voice cloning loss weights
         voice_similarity_loss_weight: float = 1.0,  # Weight for contrastive speaker loss
         # Diffusion loss weights
@@ -407,6 +431,9 @@ class XTTSLoss(tf.keras.losses.Loss):
         # Prosody loss weights
         self.pitch_loss_weight = pitch_loss_weight
         self.energy_loss_weight = energy_loss_weight
+        self.prosody_pitch_loss_weight = prosody_pitch_loss_weight
+        self.prosody_energy_loss_weight = prosody_energy_loss_weight
+        self.speaking_rate_loss_weight = speaking_rate_loss_weight
         
         # Voice cloning loss weights
         self.voice_similarity_loss_weight = voice_similarity_loss_weight
@@ -515,7 +542,7 @@ class XTTSLoss(tf.keras.losses.Loss):
             )
             losses["pitch_loss"] = pitch_l
             total_loss += self.pitch_loss_weight * pitch_l
-        
+
         # Energy loss (if energy predictions available)
         if ("energy_output" in y_pred and 
             "energy_target" in y_true and
@@ -527,6 +554,40 @@ class XTTSLoss(tf.keras.losses.Loss):
             )
             losses["energy_loss"] = energy_l
             total_loss += self.energy_loss_weight * energy_l
+
+        # Prosody pitch loss on text-level prosody predictor
+        if ("prosody_pitch" in y_pred and
+            "prosody_pitch_target" in y_true and
+            "text_lengths" in y_true):
+            prosody_pitch_l = pitch_loss(
+                y_pred["prosody_pitch"],
+                y_true["prosody_pitch_target"],
+                y_true["text_lengths"]
+            )
+            losses["prosody_pitch_loss"] = prosody_pitch_l
+            total_loss += self.prosody_pitch_loss_weight * prosody_pitch_l
+
+        if ("prosody_energy" in y_pred and
+            "prosody_energy_target" in y_true and
+            "text_lengths" in y_true):
+            prosody_energy_l = energy_loss(
+                y_pred["prosody_energy"],
+                y_true["prosody_energy_target"],
+                y_true["text_lengths"]
+            )
+            losses["prosody_energy_loss"] = prosody_energy_l
+            total_loss += self.prosody_energy_loss_weight * prosody_energy_l
+
+        if ("prosody_speaking_rate" in y_pred and
+            "prosody_speaking_rate_target" in y_true and
+            "text_lengths" in y_true):
+            speaking_rate_l = speaking_rate_loss(
+                y_pred["prosody_speaking_rate"],
+                y_true["prosody_speaking_rate_target"],
+                y_true["text_lengths"]
+            )
+            losses["speaking_rate_loss"] = speaking_rate_l
+            total_loss += self.speaking_rate_loss_weight * speaking_rate_l
         
         # Voice similarity loss (contrastive speaker loss)
         if ("speaker_embedding" in y_pred and 

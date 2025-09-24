@@ -619,8 +619,10 @@ class XTTS(tf.keras.Model):
         prosody_speaking_rate = None
         
         if self.gst is not None:
-            # Use reference_mel for prosody extraction, fallback to audio_conditioning
-            prosody_reference = reference_mel if reference_mel is not None else audio_conditioning
+            # Use available signal for prosody extraction; fall back to current mel inputs when needed
+            prosody_reference = reference_mel if reference_mel is not None else (
+                audio_conditioning if audio_conditioning is not None else mel_inputs
+            )
             
             style_embedding, style_attention_weights = self.gst(
                 reference_mel=prosody_reference,

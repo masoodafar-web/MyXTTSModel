@@ -133,9 +133,25 @@ class ReferenceEncoder(tf.keras.layers.Layer):
         time_dim = tf.shape(x)[1]
         x = tf.reshape(x, [batch_size, time_dim, -1])
         
-        # Apply GRU
-        gru_output, final_state = self.gru(x, training=training)
-        
+        # Apply GRU (handle variable return signatures across TensorFlow versions)
+        gru_result = self.gru(x, training=training)
+
+        if isinstance(gru_result, (tuple, list)):
+            # First element: sequence output, the rest: per-sample states when return_state=True
+            state_tensors = gru_result[1:]
+            if not state_tensors:
+                final_state = gru_result[0][:, -1, :]
+            elif len(state_tensors) == 1:
+                final_state = state_tensors[0]
+            else:
+                final_state = tf.stack(state_tensors, axis=0)
+        else:
+            # Only sequence returned; grab last timestep
+            final_state = gru_result[:, -1, :]
+
+        if final_state.shape.rank is None or final_state.shape.rank < 2:
+            final_state = tf.expand_dims(final_state, 0)
+
         # Use final state as reference embedding
         reference_embedding = self.projection(final_state, training=training)
         
@@ -248,9 +264,10 @@ class ProsodyPredictor(tf.keras.layers.Layer):
         
         self.config = config
         
-        # Style conditioning layer
+        # Style conditioning layer (match text encoder dimensionality)
+        projection_dim = getattr(config, "text_encoder_dim", config.decoder_dim)
         self.style_projection = tf.keras.layers.Dense(
-            config.decoder_dim,
+            projection_dim,
             name="style_projection"
         )
         

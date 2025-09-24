@@ -101,6 +101,83 @@ from myxtts.training.trainer import XTTSTrainer
 from myxtts.utils.commons import setup_logging, find_latest_checkpoint
 from memory_optimizer import get_gpu_memory_info, get_recommended_settings
 
+
+# Presets to quickly scale the architecture while keeping components balanced
+MODEL_SIZE_PRESETS = {
+    "tiny": {
+        "text_encoder_dim": 256,
+        "text_encoder_layers": 4,
+        "text_head_dim": 64,
+        "audio_encoder_dim": 256,
+        "audio_encoder_layers": 4,
+        "audio_head_dim": 64,
+        "decoder_dim": 768,
+        "decoder_layers": 8,
+        "decoder_head_dim": 64,
+        "speaker_embedding_dim": 256,
+        "voice_conditioning_layers": 2,
+        "voice_feature_dim": 128,
+        "max_attention_len": 256,
+        "max_text_length": 320,
+        "enable_gradient_checkpointing": True,
+        "description": "Minimum footprint for quick experiments",
+    },
+    "small": {
+        "text_encoder_dim": 384,
+        "text_encoder_layers": 6,
+        "text_head_dim": 64,
+        "audio_encoder_dim": 512,
+        "audio_encoder_layers": 6,
+        "audio_head_dim": 64,
+        "decoder_dim": 1024,
+        "decoder_layers": 12,
+        "decoder_head_dim": 64,
+        "speaker_embedding_dim": 320,
+        "voice_conditioning_layers": 3,
+        "voice_feature_dim": 192,
+        "max_attention_len": 384,
+        "max_text_length": 420,
+        "enable_gradient_checkpointing": True,
+        "description": "Balanced quality vs. speed",
+    },
+    "normal": {
+        "text_encoder_dim": 512,
+        "text_encoder_layers": 8,
+        "text_head_dim": 64,
+        "audio_encoder_dim": 768,
+        "audio_encoder_layers": 8,
+        "audio_head_dim": 64,
+        "decoder_dim": 1536,
+        "decoder_layers": 16,
+        "decoder_head_dim": 64,
+        "speaker_embedding_dim": 512,
+        "voice_conditioning_layers": 4,
+        "voice_feature_dim": 256,
+        "max_attention_len": 512,
+        "max_text_length": 500,
+        "enable_gradient_checkpointing": True,
+        "description": "Enhanced default with full feature set",
+    },
+    "big": {
+        "text_encoder_dim": 768,
+        "text_encoder_layers": 10,
+        "text_head_dim": 64,
+        "audio_encoder_dim": 1024,
+        "audio_encoder_layers": 10,
+        "audio_head_dim": 64,
+        "decoder_dim": 2048,
+        "decoder_layers": 20,
+        "decoder_head_dim": 64,
+        "speaker_embedding_dim": 640,
+        "voice_conditioning_layers": 5,
+        "voice_feature_dim": 320,
+        "max_attention_len": 768,
+        "max_text_length": 600,
+        "enable_gradient_checkpointing": True,
+        "description": "Maximum capacity for highest quality",
+    },
+}
+
 # Import optimization modules for model improvements
 try:
     from fast_convergence_config import create_optimized_config
@@ -237,20 +314,21 @@ def apply_fast_convergence_config(config: XTTSConfig) -> XTTSConfig:
 
 def build_config(
     batch_size: int = 32,
-    grad_accum: int = 2,  # Optimized for larger effective batch size
+    grad_accum: int = 2,
     num_workers: int = 8,
-    epochs: int = 500,    # Increased for better convergence
-    lr: float = 8e-5,     # Optimized learning rate for stability
+    epochs: int = 500,
+    lr: float = 8e-5,
     checkpoint_dir: str = "./checkpointsmain",
-    text_dim: int = 512,  # Increased from 256 for better text representation
-    decoder_dim: int = 1536,  # Increased from 512 for higher quality (matches config.py)
-    max_attention_len: int = 512,  # Increased from 256 for larger model
-    enable_grad_checkpointing: bool = True,
+    text_dim_override: Optional[int] = None,
+    decoder_dim_override: Optional[int] = None,
+    max_attention_len_override: Optional[int] = None,
+    enable_grad_checkpointing_override: Optional[bool] = None,
     max_memory_fraction: float = 0.9,
     prefetch_buffer_size: int = 12,
     shuffle_buffer_multiplier: int = 30,
     decoder_strategy: str = "autoregressive",
     vocoder_type: str = "griffin_lim",
+    model_size: str = "normal",
     # GST parameters for prosody controllability
     enable_gst: bool = True,
     gst_num_style_tokens: int = 10,
@@ -261,24 +339,62 @@ def build_config(
     # Evaluation parameters for automatic checkpoint quality monitoring
     enable_automatic_evaluation: bool = False,
     evaluation_interval: int = 10,
-) -> XTTSConfig:
+    ) -> XTTSConfig:
+    preset_key = model_size.lower() if model_size else "normal"
+    preset = MODEL_SIZE_PRESETS.get(preset_key, MODEL_SIZE_PRESETS["normal"])
+
+    def _align_dim(base_dim: int, head_dim: int) -> int:
+        if base_dim < head_dim:
+            return head_dim * 2
+        multiples = max(1, int(round(base_dim / head_dim)))
+        return multiples * head_dim
+
+    text_dim_base = text_dim_override or preset["text_encoder_dim"]
+    text_dim = _align_dim(text_dim_base, preset["text_head_dim"])
+    text_heads = max(2, text_dim // preset["text_head_dim"])
+    text_layers = preset["text_encoder_layers"]
+
+    scale_vs_base = text_dim / preset["text_encoder_dim"]
+
+    audio_dim_scaled = preset["audio_encoder_dim"] * scale_vs_base
+    audio_dim = _align_dim(int(round(audio_dim_scaled)), preset["audio_head_dim"])
+    audio_heads = max(2, audio_dim // preset["audio_head_dim"])
+    audio_layers = preset["audio_encoder_layers"]
+
+    decoder_dim_base = decoder_dim_override or preset["decoder_dim"] * scale_vs_base
+    decoder_dim = _align_dim(int(round(decoder_dim_base)), preset["decoder_head_dim"])
+    decoder_heads = max(4, decoder_dim // preset["decoder_head_dim"])
+    decoder_layers = preset["decoder_layers"]
+
+    max_attention_len = max_attention_len_override or preset["max_attention_len"]
+    max_text_length = preset["max_text_length"]
+
+    if enable_grad_checkpointing_override is None:
+        enable_grad_checkpointing = preset["enable_gradient_checkpointing"]
+    else:
+        enable_grad_checkpointing = enable_grad_checkpointing_override
+
+    speaker_embedding_dim = preset["speaker_embedding_dim"]
+    voice_conditioning_layers = preset["voice_conditioning_layers"]
+    voice_feature_dim = preset["voice_feature_dim"]
+
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
         # Enhanced text encoder for better text understanding
         text_encoder_dim=text_dim,
-        text_encoder_layers=8,  # Increased from 4 for better text representation
-        text_encoder_heads=8,   # Increased from 4 for better attention
-        text_vocab_size=32000,  # Optimized NLLB vocab size (reduced from 256,256)
+        text_encoder_layers=text_layers,
+        text_encoder_heads=text_heads,
+        text_vocab_size=32000,
 
         # Enhanced audio encoder for superior voice conditioning
-        audio_encoder_dim=768,  # Increased from text_dim for better audio representation
-        audio_encoder_layers=8, # Increased from 4 for deeper audio understanding
-        audio_encoder_heads=12, # Increased from 4 for better attention
+        audio_encoder_dim=audio_dim,
+        audio_encoder_layers=audio_layers,
+        audio_encoder_heads=audio_heads,
 
         # Significantly enhanced decoder for higher quality synthesis
-        decoder_dim=decoder_dim,  # Now 1536 (increased from 512)
-        decoder_layers=16,        # Increased from 6 for more complex modeling
-        decoder_heads=24,         # Increased from 8 for better attention patterns
+        decoder_dim=decoder_dim,
+        decoder_layers=decoder_layers,
+        decoder_heads=decoder_heads,
 
         # High-quality mel spectrogram settings
         n_mels=80,
@@ -287,9 +403,9 @@ def build_config(
         win_length=1024,
 
         # Enhanced voice conditioning for superior voice cloning
-        speaker_embedding_dim=512,  # Increased from default 256
+        speaker_embedding_dim=speaker_embedding_dim,
         use_voice_conditioning=True,
-        voice_conditioning_layers=4,
+        voice_conditioning_layers=voice_conditioning_layers,
         voice_similarity_threshold=0.75,
         enable_voice_adaptation=True,
         voice_encoder_dropout=0.1,
@@ -300,7 +416,7 @@ def build_config(
         voice_conditioning_strength=1.0,
         max_reference_audio_length=10,
         min_reference_audio_length=2.0,
-        voice_feature_dim=256,
+        voice_feature_dim=voice_feature_dim,
         enable_voice_denoising=True,
         voice_cloning_loss_weight=2.0,  # Actual loss weight used in training
 
@@ -337,7 +453,7 @@ def build_config(
             "en", "es", "fr", "de", "it", "pt", "pl", "tr",
             "ru", "nl", "cs", "ar", "zh-cn", "ja", "hu", "ko",
         ],
-        max_text_length=500,
+        max_text_length=max_text_length,
         tokenizer_type="nllb",
         tokenizer_model="facebook/nllb-200-distilled-600M",
         
@@ -375,6 +491,11 @@ def build_config(
         mel_loss_weight=22.0,   # Reduced from 35.0 for better balance
         kl_loss_weight=1.8,     # Increased from 1.0 for regularization
         duration_loss_weight=0.8,  # Moderate duration loss
+        pitch_loss_weight=0.12,
+        energy_loss_weight=0.12,
+        prosody_pitch_loss_weight=0.06,
+        prosody_energy_loss_weight=0.06,
+        speaking_rate_loss_weight=0.05,
         
         # Voice cloning loss components for superior voice cloning capability
         voice_similarity_loss_weight=3.0,        # Weight for voice similarity loss
@@ -524,6 +645,12 @@ def main():
     parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers")
     parser.add_argument("--lr", type=float, default=8e-5, help="Learning rate (optimized for better convergence)")
     parser.add_argument(
+        "--model-size",
+        choices=sorted(MODEL_SIZE_PRESETS.keys()),
+        default="normal",
+        help="Model capacity preset to use (tiny, small, normal, big)"
+    )
+    parser.add_argument(
         "--decoder-strategy",
         choices=["autoregressive", "non_autoregressive"],
         default="autoregressive",
@@ -633,6 +760,17 @@ def main():
     batch_flag = any(arg.startswith("--batch-size") for arg in sys.argv[1:])
     grad_flag = any(arg.startswith("--grad-accum") for arg in sys.argv[1:])
     workers_flag = any(arg.startswith("--num-workers") for arg in sys.argv[1:])
+    size_flag = any(arg.startswith("--model-size") for arg in sys.argv[1:])
+
+    preset_key = args.model_size.lower()
+    if preset_key not in MODEL_SIZE_PRESETS:
+        logger.warning(f"Unknown model size '{args.model_size}', falling back to 'normal'")
+        preset_key = "normal"
+        args.model_size = "normal"
+    size_preset = MODEL_SIZE_PRESETS[preset_key]
+    logger.info(
+        f"Selected model size preset: {args.model_size} ({size_preset['description']})"
+    )
 
     recommended = None
     if gpu_available:
@@ -682,14 +820,45 @@ def main():
             "This heavily limits GPU utilization. Increase --batch-size or lower --grad-accum."
         )
 
-    # When hardware probing fails, fall back to the enhanced defaults defined in build_config
-    text_dim = recommended['text_encoder_dim'] if recommended else 512
-    decoder_dim = recommended['decoder_dim'] if recommended else 1536
-    max_attention_len = recommended['max_attention_sequence_length'] if recommended else 512
-    enable_grad_ckpt = recommended['enable_gradient_checkpointing'] if recommended else True
+    # When hardware probing fails, fall back to preset defaults defined in build_config
+    text_dim_override = None
+    decoder_dim_override = None
+    max_attention_len_override = None
+    enable_grad_ckpt_override = None
     max_memory_fraction = recommended['max_memory_fraction'] if recommended else 0.9
     prefetch_buffer_size = recommended['prefetch_buffer_size'] if recommended else 12
     shuffle_buffer_multiplier = recommended['shuffle_buffer_multiplier'] if recommended else 30
+
+    if recommended:
+        if not size_flag:
+            text_dim_override = recommended['text_encoder_dim']
+            decoder_dim_override = recommended['decoder_dim']
+        else:
+            logger.info(
+                "GPU category '%s' suggests dims %d/%d but honoring explicit model-size preset",
+                recommended['description'],
+                recommended['text_encoder_dim'],
+                recommended['decoder_dim'],
+            )
+
+        recommended_attention = recommended['max_attention_sequence_length']
+        max_attention_len_override = min(size_preset['max_attention_len'], recommended_attention)
+        if size_preset['max_attention_len'] < recommended_attention:
+            logger.info(
+                "Using preset max attention length %d (lower than GPU recommendation %d)",
+                size_preset['max_attention_len'],
+                recommended_attention,
+            )
+        elif max_attention_len_override < recommended_attention:
+            logger.info(
+                "Lowering max attention length to %d based on GPU capacity",
+                max_attention_len_override,
+            )
+
+        enable_grad_ckpt_override = recommended['enable_gradient_checkpointing']
+
+    if max_attention_len_override is None:
+        max_attention_len_override = size_preset['max_attention_len']
 
     config = build_config(
         batch_size=args.batch_size,
@@ -698,15 +867,16 @@ def main():
         epochs=args.epochs,
         lr=args.lr,
         checkpoint_dir=args.checkpoint_dir,
-        text_dim=text_dim,
-        decoder_dim=decoder_dim,
-        max_attention_len=max_attention_len,
-        enable_grad_checkpointing=enable_grad_ckpt,
+        text_dim_override=text_dim_override,
+        decoder_dim_override=decoder_dim_override,
+        max_attention_len_override=max_attention_len_override,
+        enable_grad_checkpointing_override=enable_grad_ckpt_override,
         max_memory_fraction=max_memory_fraction,
         prefetch_buffer_size=prefetch_buffer_size,
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
         decoder_strategy=args.decoder_strategy,
         vocoder_type=args.vocoder_type,
+        model_size=args.model_size,
         # GST parameters
         enable_gst=args.enable_gst,
         gst_num_style_tokens=args.gst_num_style_tokens,
@@ -729,6 +899,29 @@ def main():
     # Log final configuration summary
     logger.info("=== Final Training Configuration ===")
     logger.info(f"Optimization level: {args.optimization_level}")
+    logger.info(f"Model size preset: {args.model_size}")
+    logger.info(
+        "Text encoder: dim=%d, layers=%d, heads=%d",
+        config.model.text_encoder_dim,
+        config.model.text_encoder_layers,
+        config.model.text_encoder_heads,
+    )
+    logger.info(
+        "Audio encoder: dim=%d, layers=%d, heads=%d",
+        config.model.audio_encoder_dim,
+        config.model.audio_encoder_layers,
+        config.model.audio_encoder_heads,
+    )
+    logger.info(
+        "Decoder: dim=%d, layers=%d, heads=%d",
+        config.model.decoder_dim,
+        config.model.decoder_layers,
+        config.model.decoder_heads,
+    )
+    logger.info(
+        "Max attention length: %d",
+        config.model.max_attention_sequence_length,
+    )
     logger.info(f"Learning rate: {config.training.learning_rate}")
     logger.info(f"Epochs: {config.training.epochs}")
     logger.info(f"Batch size: {config.data.batch_size}")

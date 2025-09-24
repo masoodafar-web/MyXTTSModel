@@ -275,6 +275,11 @@ class TrainingConfig:
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 0.1  # Enabled with small weight for stability
     attention_loss_weight: float = 0.1  # Enabled with small weight for gradual alignment learning
+    pitch_loss_weight: float = 0.1       # Weight for mel-level pitch prediction head
+    energy_loss_weight: float = 0.1      # Weight for mel-level energy prediction head
+    prosody_pitch_loss_weight: float = 0.05   # Weight for text-level prosody pitch predictor
+    prosody_energy_loss_weight: float = 0.05  # Weight for text-level prosody energy predictor
+    speaking_rate_loss_weight: float = 0.05   # Weight for speaking-rate predictor regularization
     
     # Voice Cloning Loss Components - NEW for enhanced voice cloning
     voice_similarity_loss_weight: float = 3.0    # Weight for voice similarity loss

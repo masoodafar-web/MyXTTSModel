@@ -177,6 +177,11 @@ class XTTSTrainer:
                 stop_loss_weight=1.0,
                 attention_loss_weight=config.training.kl_loss_weight,
                 duration_loss_weight=config.training.duration_loss_weight,
+                pitch_loss_weight=getattr(config.training, 'pitch_loss_weight', 0.1),
+                energy_loss_weight=getattr(config.training, 'energy_loss_weight', 0.1),
+                prosody_pitch_loss_weight=getattr(config.training, 'prosody_pitch_loss_weight', 0.05),
+                prosody_energy_loss_weight=getattr(config.training, 'prosody_energy_loss_weight', 0.05),
+                speaking_rate_loss_weight=getattr(config.training, 'speaking_rate_loss_weight', 0.05),
                 # Stability improvements
                 use_adaptive_weights=getattr(config.training, 'use_adaptive_loss_weights', True),
                 loss_smoothing_factor=getattr(config.training, 'loss_smoothing_factor', 0.1),
@@ -578,15 +583,27 @@ class XTTSTrainer:
                         "stop_tokens": outputs["stop_tokens"]
                     }
 
+                    # Pre-compute masks for later reuse
+                    mel_mask = tf.sequence_mask(
+                        mel_lengths,
+                        maxlen=tf.shape(mel_spectrograms)[1],
+                        dtype=tf.float32
+                    )
+                    text_len_tensor = tf.shape(text_sequences)[1]
+                    text_mask = tf.sequence_mask(
+                        text_lengths,
+                        maxlen=text_len_tensor,
+                        dtype=tf.float32
+                    )
+
+                    def _resize_to_text(sequence: tf.Tensor) -> tf.Tensor:
+                        """Resize frame-level sequence [B, T, 1] to text length."""
+                        sequence = tf.expand_dims(sequence, axis=2)  # [B, T, 1, 1]
+                        resized = tf.image.resize(sequence, size=[text_len_tensor, 1], method='bilinear')
+                        return tf.squeeze(resized, axis=3)  # [B, text_len, 1]
+
                     if "duration_pred" in outputs and outputs["duration_pred"] is not None:
                         y_pred["duration_pred"] = outputs["duration_pred"]
-
-                        text_len_tensor = tf.shape(text_sequences)[1]
-                        text_mask = tf.sequence_mask(
-                            text_lengths,
-                            maxlen=text_len_tensor,
-                            dtype=tf.float32
-                        )
                         avg_duration = tf.cast(mel_lengths, tf.float32) / tf.maximum(
                             tf.cast(text_lengths, tf.float32),
                             1.0,
@@ -597,7 +614,53 @@ class XTTSTrainer:
 
                     if "attention_weights" in outputs and outputs["attention_weights"] is not None:
                         y_pred["attention_weights"] = outputs["attention_weights"]
-                    
+
+                    # Mel-level auxiliary targets for pitch and energy predictors
+                    frame_energy = tf.reduce_mean(tf.abs(mel_spectrograms), axis=2, keepdims=True)
+                    frame_energy *= tf.expand_dims(mel_mask, -1)
+
+                    mel_bins = tf.shape(mel_spectrograms)[2]
+                    frame_pitch_idx = tf.cast(
+                        tf.argmax(tf.square(mel_spectrograms), axis=2, output_type=tf.int32),
+                        tf.float32
+                    )
+                    frame_pitch = frame_pitch_idx / tf.maximum(tf.cast(mel_bins - 1, tf.float32), 1.0)
+                    frame_pitch = tf.expand_dims(frame_pitch, axis=-1)
+                    frame_pitch *= tf.expand_dims(mel_mask, -1)
+
+                    if "pitch_output" in outputs and outputs["pitch_output"] is not None:
+                        y_pred["pitch_output"] = outputs["pitch_output"]
+                        y_true["pitch_target"] = frame_pitch
+
+                    if "energy_output" in outputs and outputs["energy_output"] is not None:
+                        y_pred["energy_output"] = outputs["energy_output"]
+                        y_true["energy_target"] = frame_energy
+
+                    # Text-level prosody targets using resized mel-derived statistics
+                    if "prosody_pitch" in outputs and outputs["prosody_pitch"] is not None:
+                        prosody_pitch_target = _resize_to_text(frame_pitch)
+                        prosody_pitch_target *= tf.expand_dims(text_mask, -1)
+                        y_pred["prosody_pitch"] = outputs["prosody_pitch"]
+                        y_true["prosody_pitch_target"] = prosody_pitch_target
+
+                    if "prosody_energy" in outputs and outputs["prosody_energy"] is not None:
+                        prosody_energy_target = _resize_to_text(frame_energy)
+                        prosody_energy_target *= tf.expand_dims(text_mask, -1)
+                        y_pred["prosody_energy"] = outputs["prosody_energy"]
+                        y_true["prosody_energy_target"] = prosody_energy_target
+
+                    if "prosody_speaking_rate" in outputs and outputs["prosody_speaking_rate"] is not None:
+                        speaking_rate = tf.cast(mel_lengths, tf.float32) / tf.maximum(
+                            tf.cast(text_lengths, tf.float32),
+                            1.0,
+                        )
+                        speaking_rate = tf.expand_dims(speaking_rate, axis=1)
+                        speaking_rate = tf.tile(speaking_rate, [1, text_len_tensor])
+                        speaking_rate = tf.expand_dims(speaking_rate, axis=-1)
+                        speaking_rate *= tf.expand_dims(text_mask, -1)
+                        y_pred["prosody_speaking_rate"] = outputs["prosody_speaking_rate"]
+                        y_true["prosody_speaking_rate_target"] = speaking_rate
+
                     # Compute loss
                     loss = self.criterion(y_true, y_pred)
                     
@@ -609,23 +672,40 @@ class XTTSTrainer:
                     if is_mixed and hasattr(self.optimizer, 'scale_loss'):
                         scaled_loss = self.optimizer.scale_loss(loss_for_grad)
                         gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+                        if hasattr(self.optimizer, 'get_unscaled_gradients'):
+                            gradients = self.optimizer.get_unscaled_gradients(gradients)
                     else:
                         gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
 
-                # Clip gradients to prevent memory explosion
-                if gradients:
-                    gradients, _ = tf.clip_by_global_norm(gradients, clip_norm=0.5)  # Reduced clip norm
+                grad_var_pairs = [
+                    (g, v)
+                    for g, v in zip(gradients, self.model.trainable_variables)
+                    if g is not None
+                ]
 
-                # Apply gradients (LossScaleOptimizer will unscale internally if used)
-                self.optimizer.apply_gradients(zip(gradients, self.model.trainable_variables))
+                if not grad_var_pairs:
+                    self.logger.warning("Gradient tape returned no gradients for this step; skipping update.")
+                    individual_losses = self.criterion.get_losses()
+                    stability_metrics = self.criterion.get_stability_metrics()
+                    individual_losses.update(stability_metrics)
+                    individual_losses["gradient_norm"] = tf.constant(0.0)
+                    return {
+                        "total_loss": loss,
+                        **individual_losses
+                    }
+
+                grad_tensors, trainable_vars = zip(*grad_var_pairs)
+                grad_tensors, global_norm = tf.clip_by_global_norm(grad_tensors, clip_norm=0.5)
+
+                self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
                 stability_metrics = self.criterion.get_stability_metrics()
                 
                 # Monitor gradient norm for stability
-                if gradients:
-                    grad_norm = tf.linalg.global_norm(gradients)
+                grad_norm = global_norm
+                if grad_norm is not None:
                     individual_losses["gradient_norm"] = grad_norm
                     
                     # Log warning if gradient norm is very high
