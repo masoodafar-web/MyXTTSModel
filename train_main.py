@@ -258,6 +258,9 @@ def build_config(
     gst_style_embedding_dim: int = 256,
     gst_num_heads: int = 4,
     gst_style_loss_weight: float = 1.0,
+    # Evaluation parameters for automatic checkpoint quality monitoring
+    enable_automatic_evaluation: bool = False,
+    evaluation_interval: int = 10,
 ) -> XTTSConfig:
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
@@ -412,6 +415,10 @@ def build_config(
 
         multi_gpu=False,
         visible_gpus=None,
+        
+        # Automatic evaluation parameters for checkpoint quality monitoring
+        enable_automatic_evaluation=enable_automatic_evaluation,
+        evaluation_interval=evaluation_interval,
     )
 
     # Data configuration (comprehensive parameters with multi-speaker support)
@@ -707,6 +714,9 @@ def main():
         gst_style_embedding_dim=args.gst_style_embedding_dim,
         gst_num_heads=args.gst_num_heads,
         gst_style_loss_weight=args.gst_style_loss_weight,
+        # Evaluation parameters
+        enable_automatic_evaluation=args.enable_evaluation,
+        evaluation_interval=args.evaluation_interval,
     )
 
     # Apply optimization level
