@@ -663,6 +663,33 @@ class XTTSTrainer:
 
                     # Compute loss
                     loss = self.criterion(y_true, y_pred)
+
+                    aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
+                    aux_reg_value = 0.0
+                    if aux_reg_weight > 0.0:
+                        aux_reg_vars = []
+                        duration_layer = getattr(self.model.text_encoder, 'duration_predictor', None)
+                        if duration_layer is not None:
+                            aux_reg_vars.extend(duration_layer.trainable_variables)
+
+                        prosody_layer = getattr(self.model, 'prosody_predictor', None)
+                        if prosody_layer is not None:
+                            aux_reg_vars.extend(prosody_layer.trainable_variables)
+
+                        mel_decoder = getattr(self.model, 'mel_decoder', None)
+                        if mel_decoder is not None:
+                            pitch_proj = getattr(mel_decoder, 'pitch_projection', None)
+                            if pitch_proj is not None:
+                                aux_reg_vars.extend(pitch_proj.trainable_variables)
+                            energy_proj = getattr(mel_decoder, 'energy_projection', None)
+                            if energy_proj is not None:
+                                aux_reg_vars.extend(energy_proj.trainable_variables)
+
+                        if aux_reg_vars:
+                            aux_reg_value = tf.add_n([
+                                tf.reduce_sum(tf.square(var)) for var in aux_reg_vars
+                            ]) / tf.cast(len(aux_reg_vars), tf.float32)
+                            loss += aux_reg_weight * aux_reg_value
                     
                     # Per-replica loss scaling (average across replicas)
                     loss_for_grad = loss / self.strategy.num_replicas_in_sync
@@ -701,6 +728,9 @@ class XTTSTrainer:
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
+                aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
+                if aux_reg_weight > 0.0 and 'aux_reg_value' in locals() and aux_reg_value != 0.0:
+                    individual_losses["aux_head_reg"] = aux_reg_weight * aux_reg_value
                 stability_metrics = self.criterion.get_stability_metrics()
                 
                 # Monitor gradient norm for stability
@@ -959,7 +989,102 @@ class XTTSTrainer:
                         "mel_output": outputs["mel_output"],
                         "stop_tokens": outputs["stop_tokens"]
                     }
+
+                    mel_mask = tf.sequence_mask(
+                        micro_mel_len,
+                        maxlen=tf.shape(micro_mel)[1],
+                        dtype=tf.float32
+                    )
+                    text_len_tensor = tf.shape(micro_text)[1]
+                    text_mask = tf.sequence_mask(
+                        micro_text_len,
+                        maxlen=text_len_tensor,
+                        dtype=tf.float32
+                    )
+
+                    def _resize_to_text(sequence: tf.Tensor) -> tf.Tensor:
+                        sequence = tf.expand_dims(sequence, axis=2)
+                        resized = tf.image.resize(sequence, size=[text_len_tensor, 1], method='bilinear')
+                        return tf.squeeze(resized, axis=3)
+
+                    if "duration_pred" in outputs and outputs["duration_pred"] is not None:
+                        y_pred["duration_pred"] = outputs["duration_pred"]
+                        avg_duration = tf.cast(micro_mel_len, tf.float32) / tf.maximum(
+                            tf.cast(micro_text_len, tf.float32), 1.0)
+                        avg_duration = tf.expand_dims(avg_duration, axis=1)
+                        y_true["duration_target"] = avg_duration * text_mask
+
+                    if "attention_weights" in outputs and outputs["attention_weights"] is not None:
+                        y_pred["attention_weights"] = outputs["attention_weights"]
+
+                    frame_energy = tf.reduce_mean(tf.abs(micro_mel), axis=2, keepdims=True)
+                    frame_energy *= tf.expand_dims(mel_mask, -1)
+
+                    mel_bins = tf.shape(micro_mel)[2]
+                    frame_pitch_idx = tf.cast(
+                        tf.argmax(tf.square(micro_mel), axis=2, output_type=tf.int32),
+                        tf.float32
+                    )
+                    frame_pitch = frame_pitch_idx / tf.maximum(tf.cast(mel_bins - 1, tf.float32), 1.0)
+                    frame_pitch = tf.expand_dims(frame_pitch, axis=-1)
+                    frame_pitch *= tf.expand_dims(mel_mask, -1)
+
+                    if "pitch_output" in outputs and outputs["pitch_output"] is not None:
+                        y_pred["pitch_output"] = outputs["pitch_output"]
+                        y_true["pitch_target"] = frame_pitch
+
+                    if "energy_output" in outputs and outputs["energy_output"] is not None:
+                        y_pred["energy_output"] = outputs["energy_output"]
+                        y_true["energy_target"] = frame_energy
+
+                    if "prosody_pitch" in outputs and outputs["prosody_pitch"] is not None:
+                        prosody_pitch_target = _resize_to_text(frame_pitch)
+                        prosody_pitch_target *= tf.expand_dims(text_mask, -1)
+                        y_pred["prosody_pitch"] = outputs["prosody_pitch"]
+                        y_true["prosody_pitch_target"] = prosody_pitch_target
+
+                    if "prosody_energy" in outputs and outputs["prosody_energy"] is not None:
+                        prosody_energy_target = _resize_to_text(frame_energy)
+                        prosody_energy_target *= tf.expand_dims(text_mask, -1)
+                        y_pred["prosody_energy"] = outputs["prosody_energy"]
+                        y_true["prosody_energy_target"] = prosody_energy_target
+
+                    if "prosody_speaking_rate" in outputs and outputs["prosody_speaking_rate"] is not None:
+                        speaking_rate = tf.cast(micro_mel_len, tf.float32) / tf.maximum(
+                            tf.cast(micro_text_len, tf.float32), 1.0)
+                        speaking_rate = tf.expand_dims(speaking_rate, axis=1)
+                        speaking_rate = tf.tile(speaking_rate, [1, text_len_tensor])
+                        speaking_rate = tf.expand_dims(speaking_rate, axis=-1)
+                        speaking_rate *= tf.expand_dims(text_mask, -1)
+                        y_pred["prosody_speaking_rate"] = outputs["prosody_speaking_rate"]
+                        y_true["prosody_speaking_rate_target"] = speaking_rate
+
                     loss = self.criterion(y_true, y_pred)
+
+                    aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
+                    aux_reg_value = 0.0
+                    if aux_reg_weight > 0.0:
+                        aux_reg_vars = []
+                        duration_layer = getattr(self.model.text_encoder, 'duration_predictor', None)
+                        if duration_layer is not None:
+                            aux_reg_vars.extend(duration_layer.trainable_variables)
+                        prosody_layer = getattr(self.model, 'prosody_predictor', None)
+                        if prosody_layer is not None:
+                            aux_reg_vars.extend(prosody_layer.trainable_variables)
+                        mel_decoder = getattr(self.model, 'mel_decoder', None)
+                        if mel_decoder is not None:
+                            pitch_proj = getattr(mel_decoder, 'pitch_projection', None)
+                            if pitch_proj is not None:
+                                aux_reg_vars.extend(pitch_proj.trainable_variables)
+                            energy_proj = getattr(mel_decoder, 'energy_projection', None)
+                            if energy_proj is not None:
+                                aux_reg_vars.extend(energy_proj.trainable_variables)
+                        if aux_reg_vars:
+                            aux_reg_value = tf.add_n([
+                                tf.reduce_sum(tf.square(var)) for var in aux_reg_vars
+                            ]) / tf.cast(len(aux_reg_vars), tf.float32)
+                            loss += aux_reg_weight * aux_reg_value
+
                     scaled_loss = loss / accumulation_steps
                 
                 grads = tape.gradient(scaled_loss, self.model.trainable_variables)
@@ -985,6 +1110,8 @@ class XTTSTrainer:
                 total_losses["total_loss"] = total_losses.get("total_loss", 0.0) + float(loss)
                 for k, v in micro_losses.items():
                     total_losses[k] = total_losses.get(k, 0.0) + float(v)
+                if aux_reg_weight > 0.0 and aux_reg_value != 0.0:
+                    total_losses["aux_head_reg"] = total_losses.get("aux_head_reg", 0.0) + float(aux_reg_weight * aux_reg_value)
                 
                 # Cleanup per micro-batch
                 del outputs, y_true, y_pred, grads
