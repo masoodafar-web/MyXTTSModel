@@ -773,22 +773,22 @@ class XTTS(tf.keras.Model):
             "text_encoded": text_encoded,
         }
         
-        # Add prosody features to outputs
+        # Add prosody features to outputs (during training, always include to ensure gradient participation)
         if training and pitch_output is not None:
             outputs["pitch_output"] = pitch_output
         if training and energy_output is not None:
             outputs["energy_output"] = energy_output
         
-        # Add GST-related outputs
+        # Add GST-related outputs (during training, always include to ensure gradient participation)
         if style_embedding is not None:
             outputs["style_embedding"] = style_embedding
         if style_attention_weights is not None:
             outputs["style_attention_weights"] = style_attention_weights
-        if prosody_pitch is not None:
+        if training and prosody_pitch is not None:
             outputs["prosody_pitch"] = prosody_pitch
-        if prosody_energy is not None:
+        if training and prosody_energy is not None:
             outputs["prosody_energy"] = prosody_energy
-        if prosody_speaking_rate is not None:
+        if training and prosody_speaking_rate is not None:
             outputs["prosody_speaking_rate"] = prosody_speaking_rate
         
         # Add diffusion loss outputs
