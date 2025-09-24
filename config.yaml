@@ -30,6 +30,7 @@ training:
   loss_smoothing_factor: 0.1           # Exponential smoothing factor
   max_loss_spike_threshold: 2.0        # Maximum allowed loss spike multiplier
   gradient_norm_threshold: 5.0         # Threshold for gradient norm monitoring
+  gradient_clip_norm: 0.5              # Improved gradient clipping (prevents loss spikes)
   
   # Enhanced loss function options
   use_label_smoothing: true            # Enable label smoothing for regularization
