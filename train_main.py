@@ -534,8 +534,8 @@ def build_config(
         use_wandb=False,
         wandb_project="myxtts",
 
-        multi_gpu=False,
-        visible_gpus=None,
+        multi_gpu=True,
+        visible_gpus="0,1",
         
         # Automatic evaluation parameters for checkpoint quality monitoring
         enable_automatic_evaluation=enable_automatic_evaluation,

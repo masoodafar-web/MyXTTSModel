@@ -104,15 +104,33 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         
         # Memory optimization: limit maximum sequence length for attention
         # Use a generous cap so inference up to ~2k frames is unaffected.
-        max_seq_len = 2048
-        
-        if q_seq_len > max_seq_len or k_seq_len > max_seq_len:
-            # Truncate sequences to prevent memory explosion
-            q = q[:, :, :max_seq_len, :]
-            k = k[:, :, :max_seq_len, :]
-            v = v[:, :, :max_seq_len, :]
-            if mask is not None:
-                mask = mask[:, :, :max_seq_len, :max_seq_len]
+        max_seq_len = tf.constant(2048, dtype=tf.int32)
+
+        # Condition evaluates inside the TF graph (works with AutoGraph/MirroredStrategy)
+        truncate_condition = tf.logical_or(
+            q_seq_len > max_seq_len,
+            k_seq_len > max_seq_len
+        )
+
+        def _truncate_qkv():
+            truncated_q = q[:, :, :max_seq_len, :]
+            truncated_k = k[:, :, :max_seq_len, :]
+            truncated_v = v[:, :, :max_seq_len, :]
+            return truncated_q, truncated_k, truncated_v
+
+        def _keep_qkv():
+            return q, k, v
+
+        q, k, v = tf.cond(truncate_condition, _truncate_qkv, _keep_qkv)
+
+        if mask is not None:
+            def _truncate_mask():
+                return mask[:, :, :max_seq_len, :max_seq_len]
+
+            def _keep_mask():
+                return mask
+
+            mask = tf.cond(truncate_condition, _truncate_mask, _keep_mask)
         
         # Use tf.nn.scaled_dot_product_attention if available (TF 2.11+)
         try:
@@ -125,8 +143,8 @@ class MultiHeadAttention(tf.keras.layers.Layer):
                 dropout_rate=0.1 if self.dropout.rate > 0 else 0.0
             )
             # Return dummy weights since we can't get them from the built-in function
-            attention_weights = tf.zeros([tf.shape(q)[0], tf.shape(q)[1], 
-                                        tf.shape(q)[2], tf.shape(k)[2]])
+            attention_weights = tf.zeros([tf.shape(q)[0], tf.shape(q)[1],
+                                          tf.shape(q)[2], tf.shape(k)[2]])
             return output, attention_weights
         except AttributeError:
             # Fallback to manual implementation for older TensorFlow versions

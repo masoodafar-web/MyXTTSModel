@@ -88,9 +88,15 @@ class XTTSTrainer:
         # Memory optimization settings
         self.gradient_accumulation_steps = getattr(config.training, 'gradient_accumulation_steps', 1)
         self.enable_memory_cleanup = getattr(config.training, 'enable_memory_cleanup', True)
-        
+
         if self.gradient_accumulation_steps > 1:
-            self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
+            if getattr(config.training, 'multi_gpu', False):
+                self.logger.warning(
+                    "Gradient accumulation is not supported with multi-GPU training; disabling accumulation."
+                )
+                self.gradient_accumulation_steps = 1
+            else:
+                self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
         
         # Setup distribution strategy based on configuration
         self.strategy = setup_gpu_strategy(
@@ -754,7 +760,8 @@ class XTTSTrainer:
                 grad_tensors, trainable_vars = zip(*grad_var_pairs)
                 grad_tensors, global_norm = tf.clip_by_global_norm(grad_tensors, clip_norm=0.5)
 
-                self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
+                with self.strategy.scope():
+                    self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
@@ -1214,7 +1221,8 @@ class XTTSTrainer:
             # Use config-specified clipping or reasonable default
             clip_norm = getattr(self.config.training, 'gradient_clip_norm', 0.5)
             accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=clip_norm)
-            self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
+            with self.strategy.scope():
+                self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
 
         # Average losses across micro-steps
         for key in list(total_losses.keys()):
@@ -1743,7 +1751,8 @@ class XTTSTrainer:
             opt_weights = _get_opt_weights(self.optimizer)
             if not opt_weights:
                 dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
-                self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
+                with self.strategy.scope():
+                    self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
                 opt_weights = _get_opt_weights(self.optimizer)
             
             optimizer_state['weights'] = opt_weights

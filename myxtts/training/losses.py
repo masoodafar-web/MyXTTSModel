@@ -165,25 +165,17 @@ def attention_loss(
     mel_positions = tf.range(mel_time, dtype=tf.float32)
     text_positions = tf.range(text_time, dtype=tf.float32)
     
-    expected_alignment = []
-    for i in range(batch_size):
-        mel_len = mel_lengths[i]
-        text_len = text_lengths[i]
-        
-        # Linear alignment
-        alignment_ratio = tf.cast(text_len - 1, tf.float32) / tf.cast(mel_len - 1, tf.float32)
-        expected_text_pos = mel_positions * alignment_ratio
-        
-        # Create Gaussian around expected positions
-        text_pos_expanded = tf.expand_dims(text_positions, 0)  # [1, text_time]
-        expected_pos_expanded = tf.expand_dims(expected_text_pos, 1)  # [mel_time, 1]
-        
-        gaussian = tf.exp(-0.5 * tf.square(text_pos_expanded - expected_pos_expanded) / 2.0)
-        gaussian = gaussian / tf.reduce_sum(gaussian, axis=1, keepdims=True)
-        
-        expected_alignment.append(gaussian)
-    
-    expected_alignment = tf.stack(expected_alignment, axis=0)
+    batch_indices = tf.range(batch_size)
+    mel_lengths_f = tf.cast(tf.maximum(mel_lengths - 1, 1), tf.float32)
+    text_lengths_f = tf.cast(tf.maximum(text_lengths - 1, 1), tf.float32)
+    alignment_ratio = tf.math.divide_no_nan(text_lengths_f, mel_lengths_f)  # [batch]
+
+    expected_text_pos = alignment_ratio[:, tf.newaxis] * mel_positions[tf.newaxis, :]  # [batch, mel_time]
+
+    diff = tf.expand_dims(expected_text_pos, axis=2) - text_positions[tf.newaxis, tf.newaxis, :]  # [batch, mel_time, text_time]
+    gaussian = tf.exp(-0.5 * tf.square(diff) / 2.0)
+    gaussian_sum = tf.reduce_sum(gaussian, axis=2, keepdims=True) + 1e-8
+    expected_alignment = gaussian / gaussian_sum
     
     # Compute KL divergence
     attention_weights = tf.clip_by_value(attention_weights, 1e-8, 1.0 - 1e-8)
@@ -518,9 +510,23 @@ class XTTSLoss(tf.keras.losses.Loss):
         def _safe(name: str, value: tf.Tensor) -> tf.Tensor:
             tensor = tf.cast(value, tf.float32)
             finite_mask = tf.math.is_finite(tensor)
-            if not tf.reduce_all(finite_mask):
-                problematic = tf.boolean_mask(tensor, tf.logical_not(finite_mask))
+
+            try:
+                all_finite = bool(tf.reduce_all(finite_mask).numpy())
+            except Exception:
+                all_finite = False
+
+            if not all_finite:
+                try:
+                    non_finite_mask = tf.logical_not(finite_mask)
+                    if non_finite_mask.shape.ndims == 0:
+                        problematic = tensor
+                    else:
+                        problematic = tf.boolean_mask(tensor, non_finite_mask)
+                except Exception:
+                    problematic = tensor
                 tf.print("WARNING:", name, "contains non-finite values:", problematic, summarize=-1)
+
             return tf.where(finite_mask, tensor, tf.zeros_like(tensor))
 
         # Mel spectrogram loss

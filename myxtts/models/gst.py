@@ -98,9 +98,9 @@ class ReferenceEncoder(tf.keras.layers.Layer):
         
         # GRU for temporal modeling
         self.gru = tf.keras.layers.GRU(
-            config.gst_reference_encoder_dim // 2,
-            return_sequences=True,
-            return_state=True,
+            config.gst_reference_encoder_dim,
+            return_sequences=False,
+            return_state=False,
             name="gru"
         )
         
@@ -133,27 +133,9 @@ class ReferenceEncoder(tf.keras.layers.Layer):
         time_dim = tf.shape(x)[1]
         x = tf.reshape(x, [batch_size, time_dim, -1])
         
-        # Apply GRU (handle variable return signatures across TensorFlow versions)
-        gru_result = self.gru(x, training=training)
-
-        if isinstance(gru_result, (tuple, list)):
-            # First element: sequence output, the rest: per-sample states when return_state=True
-            state_tensors = gru_result[1:]
-            if not state_tensors:
-                final_state = gru_result[0][:, -1, :]
-            elif len(state_tensors) == 1:
-                final_state = state_tensors[0]
-            else:
-                final_state = tf.stack(state_tensors, axis=0)
-        else:
-            # Only sequence returned; grab last timestep
-            final_state = gru_result[:, -1, :]
-
-        if final_state.shape.rank is None or final_state.shape.rank < 2:
-            final_state = tf.expand_dims(final_state, 0)
-
-        # Use final state as reference embedding
-        reference_embedding = self.projection(final_state, training=training)
+        # Apply GRU and project to embedding space
+        gru_output = self.gru(x, training=training)
+        reference_embedding = self.projection(gru_output, training=training)
         
         return reference_embedding
 
