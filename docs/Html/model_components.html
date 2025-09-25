@@ -1,43 +1,647 @@
 <!DOCTYPE html>
-<html lang="fa">
+<html lang="fa" dir="rtl">
 <head>
   <meta charset="utf-8">
-  <title>بخش‌های مدل MyXTTS</title>
+  <title>راهنمای کامل بخش‌های مدل MyXTTS</title>
   <style>
-    body { font-family: sans-serif; line-height: 1.6; margin: 2rem; }
-    h1 { font-size: 1.8rem; margin-bottom: 1rem; }
-    ul { list-style: disc; margin-left: 1.5rem; }
-    li { margin-bottom: 0.4rem; }
+    body { 
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif; 
+      line-height: 1.7; 
+      margin: 2rem auto; 
+      max-width: 1200px;
+      color: #333;
+      background: #f8f9fa;
+    }
+    .container {
+      background: white;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    h1 { 
+      font-size: 2.2rem; 
+      margin-bottom: 1.5rem; 
+      color: #2c3e50;
+      text-align: center;
+      border-bottom: 3px solid #3498db;
+      padding-bottom: 0.5rem;
+    }
+    h2 {
+      font-size: 1.6rem;
+      color: #2980b9;
+      margin: 2rem 0 1rem 0;
+      border-right: 4px solid #3498db;
+      padding-right: 1rem;
+    }
+    h3 {
+      font-size: 1.3rem;
+      color: #34495e;
+      margin: 1.5rem 0 0.8rem 0;
+    }
+    .component {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+      transition: all 0.3s ease;
+    }
+    .component:hover {
+      background: #e3f2fd;
+      border-color: #2196f3;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(33, 150, 243, 0.15);
+    }
+    .component-name {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #1976d2;
+      margin-bottom: 0.5rem;
+    }
+    .component-desc {
+      color: #555;
+      margin-bottom: 1rem;
+    }
+    .data-flow {
+      background: #e8f5e8;
+      border: 2px solid #4caf50;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+      font-family: 'Courier New', monospace;
+      direction: ltr;
+      text-align: left;
+    }
+    .example {
+      background: #fff3e0;
+      border: 2px solid #ff9800;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+      font-style: italic;
+    }
+    .chart {
+      background: #f3e5f5;
+      border: 2px solid #9c27b0;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+      text-align: center;
+      font-family: monospace;
+      direction: ltr;
+    }
+    .category {
+      border-right: 6px solid #ff6b6b;
+      background: linear-gradient(to left, #fff5f5, #ffffff);
+      padding: 1.5rem;
+      margin: 2rem 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .category h2 {
+      border-right: none;
+      padding-right: 0;
+      color: #c0392b;
+    }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      color: #d63384;
+    }
+    .toc {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+    }
+    .toc h3 {
+      margin-top: 0;
+      color: #495057;
+    }
+    .toc ul {
+      list-style: none;
+      padding-right: 0;
+    }
+    .toc li {
+      margin: 0.5rem 0;
+      padding-right: 1rem;
+    }
+    .toc a {
+      text-decoration: none;
+      color: #007bff;
+      font-weight: 500;
+    }
+    .toc a:hover {
+      color: #0056b3;
+      text-decoration: underline;
+    }
   </style>
 </head>
 <body>
-  <h1>بخش‌های اصلی مدل MyXTTS</h1>
-  <ul>
-    <li><strong>XTTS</strong>: کلاس مرکزی که تمام رمزگذارها، دیکودرها و vocoder را برای تولید گفتار یکپارچه می‌کند.</li>
-    <li><strong>TextEncoder</strong>: رمزگذار متنی مبتنی بر ترنسفورمر که توکن‌های ورودی را به بردارهای زمینه‌ای برای دیکودر تبدیل می‌کند.</li>
-    <li><strong>AudioEncoder</strong>: رمزگذار صوتی که از مل‌اسپکتروگرام مرجع ویژگی‌های گفتاری و شرط اسپیکر استخراج می‌کند.</li>
-    <li><strong>PretrainedSpeakerEncoder</strong>: لایهٔ پوششی برای بارگذاری و استفاده از رمزگذارهای سخنگو پیش‌آموزش‌دیده مانند ECAPA-TDNN یا Resemblyzer.</li>
-    <li><strong>ContrastiveSpeakerLoss</strong>: زیان مقابل‌گرای موضوعی که بردارهای اسپیکر را برای نزدیکی گویندگان مشابه منظم می‌کند.</li>
-    <li><strong>GlobalStyleToken</strong>: ماژولی با بانک توکن سبک که از طریق توجه چندسری امضای لحن و حس گفتار را استخراج می‌کند.</li>
-    <li><strong>ReferenceEncoder</strong>: رمزگذار مرجع درون GST که از مل مرجع بردار سبک اولیه را با کانولوشن و GRU به‌دست می‌آورد.</li>
-    <li><strong>ProsodyPredictor</strong>: پیش‌بینی‌کننده‌ای که با تکیه بر سبک، گام، انرژی و سرعت گفتار متن را تخمین می‌زند.</li>
-    <li><strong>MelDecoder</strong>: دیکودر اتورگرسیو که با توجه، مل‌فریم‌های جدید و نشانه توقف را از بردارهای متن و اسپیکر می‌سازد.</li>
-    <li><strong>NonAutoregressiveDecoder</strong>: دیکودر سریع به سبک FastSpeech که پس از تنظیم طول، مل‌ها را موازی تولید می‌کند.</li>
-    <li><strong>DurationPredictor</strong>: شبکهٔ کانولوشنی که طول هر توکن متن را برای هم‌راستاسازی غیراتورگرسیو برآورد می‌کند.</li>
-    <li><strong>LengthRegulator</strong>: لایه‌ای که خروجی رمزگذار متن را طبق طول‌های پیش‌بینی‌شده گسترش می‌دهد تا با طول مل هماهنگ شود.</li>
-    <li><strong>DecoderStrategy</strong>: رابطی که بسته به پیکربندی بین مسیر اتورگرسیو، غیراتورگرسیو یا دیفیوشن سوییچ می‌کند.</li>
-    <li><strong>DiffusionDecoder</strong>: شبکهٔ دیفیوشن مبتنی بر U-Net که با فرآیند نویززدایی مل‌های با کیفیت بالا تولید می‌کند.</li>
-    <li><strong>TimeEmbedding</strong>: جاسازی‌کنندهٔ زمان که گام دیفیوشن را به بردار شرطی‌سازی برای شبکهٔ نویززدایی تبدیل می‌کند.</li>
-    <li><strong>DiffusionBlock</strong>: بلوک پردازشی داخل دیکودر دیفیوشن که کانولوشن و شرطی‌سازی زمانی را ترکیب می‌کند.</li>
-    <li><strong>VocoderInterface</strong>: رابطی که نوع vocoder را مدیریت می‌کند و بین HiFi-GAN و گزینه‌های جایگزین سوئیچ می‌زند.</li>
-    <li><strong>HiFiGANGenerator</strong>: ژنراتور HiFi-GAN که مل را با شبکهٔ افزایشی و بلوک‌های باقیمانده به موج صوتی تبدیل می‌کند.</li>
-    <li><strong>ResidualBlock</strong>: بلوک‌های باقیماندهٔ HiFi-GAN که عمق مدل vocoder را بدون از بین رفتن گرادیان افزایش می‌دهند.</li>
-    <li><strong>VocoderLoss</strong>: زیان چندمقیاسی vocoder که تطابق مل و موج و ضرر تطبیق ویژگی را با هم جمع می‌کند.</li>
-    <li><strong>TransformerBlock</strong>: بلوک عمومی ترنسفورمر با توجه چندسری و فیدفوروارد که در رمزگذار و دیکودر به کار می‌رود.</li>
-    <li><strong>MultiHeadAttention</strong>: پیاده‌سازی توجه چندسری عمومی که در بلوک‌های ترنسفورمر برای مدل‌سازی روابط توکن استفاده می‌شود.</li>
-    <li><strong>PositionalEncoding</strong>: جاسازی موقعیتی سینوسی که ترتیب توکن‌ها و فریم‌ها را برای ترنسفورمر رمزگذاری می‌کند.</li>
-    <li><strong>FeedForward</strong>: لایهٔ فیدفوروارد دوناحیه‌ای که مرحلهٔ غیرخطی ترنسفورمر را پس از توجه تکمیل می‌کند.</li>
-    <li><strong>ConvolutionalLayer</strong>: لایهٔ کانولوشنی با نرمال‌سازی و دراپ‌اوت که استخراج ویژگی‌های محلی را در رمزگذار صوتی انجام می‌دهد.</li>
-  </ul>
+  <div class="container">
+    <h1>📚 راهنمای کامل بخش‌های مدل MyXTTS</h1>
+    
+    <div class="toc">
+      <h3>📋 فهرست مطالب</h3>
+      <ul>
+        <li><a href="#core-components">🏗️ بخش‌های مرکزی</a></li>
+        <li><a href="#encoders">🔤 رمزگذارها (Encoders)</a></li>
+        <li><a href="#decoders">🎵 دیکودرها (Decoders)</a></li>
+        <li><a href="#prosody-control">🎭 کنترل لحن و آهنگ (Prosody Control)</a></li>
+        <li><a href="#vocoder">🔊 واکودر (Vocoder)</a></li>
+        <li><a href="#transformer-layers">⚙️ لایه‌های ترنسفورمر</a></li>
+        <li><a href="#training-components">🎯 بخش‌های آموزش</a></li>
+      </ul>
+    </div>
+
+    <div class="category" id="core-components">
+      <h2>🏗️ بخش‌های مرکزی</h2>
+      
+      <div class="component">
+        <div class="component-name">XTTS (کلاس اصلی)</div>
+        <div class="component-desc">
+          کلاس مرکزی که تمام رمزگذارها، دیکودرها و vocoder را برای تولید گفتار یکپارچه می‌کند.
+          این کلاس ورودی‌های متن و صوت مرجع را دریافت کرده و صوتی با کیفیت تولید می‌کند.
+        </div>
+        <div class="data-flow">
+          <strong>جریان داده:</strong><br>
+          text_tokens + reference_audio → TextEncoder + AudioEncoder → MelDecoder → HiFiGAN → audio_output
+        </div>
+        <div class="example">
+          <strong>مثال:</strong> متن "سلام چطوری؟" + صوت مرجع گوینده مورد نظر → صوت تولیدی با صدای آن گوینده
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="encoders">
+      <h2>🔤 رمزگذارها (Encoders)</h2>
+      
+      <div class="component">
+        <div class="component-name">TextEncoder (رمزگذار متن)</div>
+        <div class="component-desc">
+          رمزگذار متنی مبتنی بر ترنسفورمر که توکن‌های ورودی را به بردارهای زمینه‌ای برای دیکودر تبدیل می‌کند.
+          شامل embedding layer، positional encoding و چندین لایه transformer است.
+        </div>
+        <div class="chart">
+          text_tokens → token_embedding → positional_encoding → transformer_blocks → text_features
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Token IDs [batch, seq_len]<br>
+          <strong>خروجی:</strong> Text features [batch, seq_len, d_model]<br>
+          <strong>ابعاد:</strong> d_model = 512, layers = 6, heads = 8
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          ورودی: [101, 15, 234, 89, 102] (توکن‌های "سلام دوست")<br>
+          خروجی: بردار 512 بعدی برای هر توکن که معنای زمینه‌ای دارد
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">AudioEncoder (رمزگذار صوتی)</div>
+        <div class="component-desc">
+          رمزگذار صوتی که از مل‌اسپکتروگرام مرجع ویژگی‌های گفتاری و شرط اسپیکر استخراج می‌کند.
+          این بخش مسئول استخراج ویژگی‌های منحصر به فرد صدای گوینده است.
+        </div>
+        <div class="chart">
+          reference_mel → conv_layers → transformer_blocks → speaker_embedding + audio_features
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Mel spectrogram [batch, time, 80]<br>
+          <strong>خروجی:</strong> Speaker embedding [batch, speaker_dim] + Audio features<br>
+          <strong>ابعاد:</strong> speaker_dim = 256, audio_features = 512
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          ورودی: مل‌اسپکتروگرام 3 ثانیه صوت مرجع<br>
+          خروجی: بردار شناسایی گوینده + ویژگی‌های صوتی برای conditioning
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">PretrainedSpeakerEncoder (رمزگذار گوینده)</div>
+        <div class="component-desc">
+          لایهٔ پوششی برای بارگذاری و استفاده از رمزگذارهای سخنگو پیش‌آموزش‌دیده مانند ECAPA-TDNN یا Resemblyzer.
+          این مولفه کیفیت voice cloning را بهبود می‌بخشد.
+        </div>
+        <div class="data-flow">
+          <strong>مدل‌های پشتیبانی شده:</strong> ECAPA-TDNN, Resemblyzer, X-Vector<br>
+          <strong>ورودی:</strong> Raw audio یا mel spectrogram<br>
+          <strong>خروجی:</strong> Speaker embedding vector
+        </div>
+        <div class="example">
+          <strong>مثال:</strong> بارگذاری مدل ECAPA-TDNN آموزش دیده روی VoxCeleb برای استخراج دقیق‌تر speaker embedding
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="decoders">
+      <h2>🎵 دیکودرها (Decoders)</h2>
+      
+      <div class="component">
+        <div class="component-name">MelDecoder (دیکودر مل)</div>
+        <div class="component-desc">
+          دیکودر اتورگرسیو که با توجه، مل‌فریم‌های جدید و نشانه توقف را از بردارهای متن و اسپیکر می‌سازد.
+          این بخش قلب اصلی تولید مل‌اسپکتروگرام است.
+        </div>
+        <div class="chart">
+          text_features + speaker_embedding → decoder_layers (self + cross attention) → mel_frames + stop_tokens
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Text features + Speaker embedding + Previous mel frames<br>
+          <strong>خروجی:</strong> Mel frames [batch, time, 80] + Stop tokens [batch, time, 1]<br>
+          <strong>معماری:</strong> 12 لایه decoder با 16 attention head
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          در هر گام: ویژگی‌های متن + embedding گوینده + فریم‌های قبلی → فریم بعدی مل + احتمال پایان
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">NonAutoregressiveDecoder (دیکودر غیر اتورگرسیو)</div>
+        <div class="component-desc">
+          دیکودر سریع به سبک FastSpeech که پس از تنظیم طول، مل‌ها را موازی تولید می‌کند.
+          این روش سرعت inference را تا 10 برابر افزایش می‌دهد.
+        </div>
+        <div class="chart">
+          text_features → duration_predictor → length_regulator → parallel_decoder → mel_output
+        </div>
+        <div class="data-flow">
+          <strong>مزایا:</strong> سرعت بالا، inference موازی<br>
+          <strong>نیاز:</strong> Duration predictor برای alignment<br>
+          <strong>سرعت:</strong> ~10x سریعتر از autoregressive
+        </div>
+        <div class="example">
+          <strong>مثال:</strong> به جای تولید فریم به فریم، تمام فریم‌های مل را به صورت همزمان تولید می‌کند
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">DurationPredictor (پیش‌بین طول)</div>
+        <div class="component-desc">
+          شبکهٔ کانولوشنی که طول هر توکن متن را برای هم‌راستاسازی غیراتورگرسیو برآورد می‌کند.
+          این بخش تشخیص می‌دهد هر کلمه چند فریم مل نیاز دارد.
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Text features [batch, text_len, d_model]<br>
+          <strong>خروجی:</strong> Duration per token [batch, text_len, 1]<br>
+          <strong>معماری:</strong> Convolutional layers + ReLU activation
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          "سلام" → 15 فریم<br>
+          "دوست" → 20 فریم<br>
+          "عزیز" → 18 فریم
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">LengthRegulator (تنظیم‌کننده طول)</div>
+        <div class="component-desc">
+          لایه‌ای که خروجی رمزگذار متن را طبق طول‌های پیش‌بینی‌شده گسترش می‌دهد تا با طول مل هماهنگ شود.
+        </div>
+        <div class="chart">
+          text_features + durations → expand_features → aligned_features (text_len → mel_len)
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          ورودی: 3 توکن با طول‌های [15, 20, 18]<br>
+          خروجی: 53 فریم (15+20+18) که هر توکن به تعداد فریم مناسب تکرار شده
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">DecoderStrategy (استراتژی دیکودر)</div>
+        <div class="component-desc">
+          رابطی که بسته به پیکربندی بین مسیر اتورگرسیو، غیراتورگرسیو یا دیفیوشن سوییچ می‌کند.
+          این بخش امکان انتخاب بین سرعت و کیفیت را فراهم می‌کند.
+        </div>
+        <div class="data-flow">
+          <strong>گزینه‌ها:</strong><br>
+          - Autoregressive: کیفیت بالا، سرعت متوسط<br>
+          - Non-autoregressive: سرعت بالا، کیفیت خوب<br>
+          - Diffusion: کیفیت فوق‌العاده، سرعت پایین
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">DiffusionDecoder (دیکودر دیفیوشن)</div>
+        <div class="component-desc">
+          شبکهٔ دیفیوشن مبتنی بر U-Net که با فرآیند نویززدایی مل‌های با کیفیت بالا تولید می‌کند.
+          بالاترین کیفیت را ارائه می‌دهد اما کندترین روش است.
+        </div>
+        <div class="chart">
+          noise → denoising_steps (T steps) → clean_mel_spectrogram
+        </div>
+        <div class="data-flow">
+          <strong>فرآیند:</strong> Gaussian noise → T مرحله denoising → mel output<br>
+          <strong>تعداد گام‌ها:</strong> 50-1000 (بسته به کیفیت مورد نظر)<br>
+          <strong>کیفیت:</strong> بالاترین کیفیت ممکن
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="prosody-control">
+      <h2>🎭 کنترل لحن و آهنگ (Prosody Control)</h2>
+      
+      <div class="component">
+        <div class="component-name">GlobalStyleToken (GST)</div>
+        <div class="component-desc">
+          ماژولی با بانک توکن سبک که از طریق توجه چندسری امضای لحن و حس گفتار را استخراج می‌کند.
+          این بخش امکان کنترل احساسات و سبک بیان را فراهم می‌کند.
+        </div>
+        <div class="chart">
+          reference_audio → reference_encoder → style_attention → style_embedding
+        </div>
+        <div class="data-flow">
+          <strong>بانک سبک:</strong> 10 توکن سبک مختلف<br>
+          <strong>ورودی:</strong> Reference mel spectrogram<br>
+          <strong>خروجی:</strong> Weighted combination of style tokens<br>
+          <strong>کنترل:</strong> emotion, speaking rate, emphasis
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          صوت مرجع شاد → بیشتر از style token "شادی"<br>
+          صوت مرجع آرام → بیشتر از style token "آرامش"
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">ReferenceEncoder (رمزگذار مرجع)</div>
+        <div class="component-desc">
+          رمزگذار مرجع درون GST که از مل مرجع بردار سبک اولیه را با کانولوشن و GRU به‌دست می‌آورد.
+        </div>
+        <div class="chart">
+          mel_reference → conv2d_layers → GRU → reference_encoding
+        </div>
+        <div class="data-flow">
+          <strong>معماری:</strong> 6 لایه Conv2D + 1 لایه GRU<br>
+          <strong>تبدیل:</strong> [batch, time, 80] → [batch, 128]
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">ProsodyPredictor (پیش‌بین لحن)</div>
+        <div class="component-desc">
+          پیش‌بینی‌کننده‌ای که با تکیه بر سبک، گام، انرژی و سرعت گفتار متن را تخمین می‌زند.
+          این بخش کنترل دقیق‌تر prosody را امکان‌پذیر می‌کند.
+        </div>
+        <div class="data-flow">
+          <strong>پیش‌بینی‌ها:</strong><br>
+          - Pitch (گام صدا)<br>
+          - Energy (انرژی)<br>
+          - Speaking rate (سرعت گفتار)<br>
+          - Duration (طول آوا)
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          برای جمله سوالی: گام بالاتر در انتها<br>
+          برای جمله تاکیدی: انرژی بیشتر روی کلمات مهم
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="vocoder">
+      <h2>🔊 واکودر (Vocoder)</h2>
+      
+      <div class="component">
+        <div class="component-name">VocoderInterface (رابط واکودر)</div>
+        <div class="component-desc">
+          رابطی که نوع vocoder را مدیریت می‌کند و بین HiFi-GAN و گزینه‌های جایگزین سوئیچ می‌زند.
+          این بخش امکان استفاده از vocoder های مختلف را فراهم می‌کند.
+        </div>
+        <div class="data-flow">
+          <strong>پشتیبانی از:</strong> HiFi-GAN, Neural Vocoder, WaveGlow<br>
+          <strong>انتخاب بر اساس:</strong> کیفیت، سرعت، حافظه مورد نیاز
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">HiFiGANGenerator (ژنراتور HiFi-GAN)</div>
+        <div class="component-desc">
+          ژنراتور HiFi-GAN که مل را با شبکهٔ افزایشی و بلوک‌های باقیمانده به موج صوتی تبدیل می‌کند.
+          بالاترین کیفیت صوتی را با سرعت قابل قبول ارائه می‌دهد.
+        </div>
+        <div class="chart">
+          mel_spectrogram → upsampling_layers → residual_blocks → audio_waveform
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Mel spectrogram [batch, time, 80]<br>
+          <strong>خروجی:</strong> Audio waveform [batch, samples]<br>
+          <strong>نرخ نمونه‌برداری:</strong> 22050 Hz<br>
+          <strong>کیفیت:</strong> Near human-level quality
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          مل اسپکتروگرام 3 ثانیه → 66,150 نمونه صوتی (3 * 22050)
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">ResidualBlock (بلوک باقیمانده)</div>
+        <div class="component-desc">
+          بلوک‌های باقیماندهٔ HiFi-GAN که عمق مدل vocoder را بدون از بین رفتن گرادیان افزایش می‌دهند.
+        </div>
+        <div class="chart">
+          input → conv1d + leaky_relu → conv1d + leaky_relu → add(input) → output
+        </div>
+        <div class="data-flow">
+          <strong>معماری:</strong> Skip connections برای جریان بهتر گرادیان<br>
+          <strong>فعال‌سازی:</strong> Leaky ReLU<br>
+          <strong>تعداد:</strong> 3 بلوک در هر layer
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">VocoderLoss (زیان واکودر)</div>
+        <div class="component-desc">
+          زیان چندمقیاسی vocoder که تطابق مل و موج و ضرر تطبیق ویژگی را با هم جمع می‌کند.
+        </div>
+        <div class="data-flow">
+          <strong>انواع زیان:</strong><br>
+          - Mel reconstruction loss<br>
+          - Adversarial loss (GAN)<br>
+          - Feature matching loss<br>
+          - Spectral convergence loss
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="transformer-layers">
+      <h2>⚙️ لایه‌های ترنسفورمر</h2>
+      
+      <div class="component">
+        <div class="component-name">TransformerBlock (بلوک ترنسفورمر)</div>
+        <div class="component-desc">
+          بلوک عمومی ترنسفورمر با توجه چندسری و فیدفوروارد که در رمزگذار و دیکودر به کار می‌رود.
+        </div>
+        <div class="chart">
+          input → multi_head_attention → add&norm → feed_forward → add&norm → output
+        </div>
+        <div class="data-flow">
+          <strong>ساختار:</strong> Self-attention + Feed-forward + Residual connections<br>
+          <strong>نرمال‌سازی:</strong> Layer normalization<br>
+          <strong>Dropout:</strong> 0.1 برای regularization
+        </div>
+        <div class="example">
+          <strong>مثال:</strong> در TextEncoder: 6 بلوک متوالی برای درک عمیق متن
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">MultiHeadAttention (توجه چندسری)</div>
+        <div class="component-desc">
+          پیاده‌سازی توجه چندسری عمومی که در بلوک‌های ترنسفورمر برای مدل‌سازی روابط توکن استفاده می‌شود.
+        </div>
+        <div class="chart">
+          Q, K, V → split_heads → scaled_dot_product_attention → concat_heads → linear_projection
+        </div>
+        <div class="data-flow">
+          <strong>تعداد head:</strong> 8 (TextEncoder), 16 (MelDecoder)<br>
+          <strong>مزیت:</strong> توجه به جنبه‌های مختلف اطلاعات<br>
+          <strong>محاسبه:</strong> Attention(Q,K,V) = softmax(QK^T/√dk)V
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          در جمله "گربه روی زمین نشست":<br>
+          - Head 1: ارتباط "گربه" و "نشست"<br>
+          - Head 2: ارتباط "روی" و "زمین"
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">PositionalEncoding (کدگذاری موقعیت)</div>
+        <div class="component-desc">
+          جاسازی موقعیتی سینوسی که ترتیب توکن‌ها و فریم‌ها را برای ترنسفورمر رمزگذاری می‌کند.
+        </div>
+        <div class="chart">
+          PE(pos,2i) = sin(pos/10000^(2i/d_model))<br>
+          PE(pos,2i+1) = cos(pos/10000^(2i/d_model))
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Token embeddings<br>
+          <strong>خروجی:</strong> Embeddings + Position information<br>
+          <strong>روش:</strong> Sinusoidal functions
+        </div>
+        <div class="example">
+          <strong>مثال:</strong> کلمه "سلام" در موقعیت 1 تعبیه متفاوتی نسبت به موقعیت 5 دارد
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">FeedForward (پیش‌خورا)</div>
+        <div class="component-desc">
+          لایهٔ فیدفوروارد دوناحیه‌ای که مرحلهٔ غیرخطی ترنسفورمر را پس از توجه تکمیل می‌کند.
+        </div>
+        <div class="chart">
+          input → linear(d_model → 4*d_model) → ReLU → linear(4*d_model → d_model) → output
+        </div>
+        <div class="data-flow">
+          <strong>ساختار:</strong> Linear → ReLU → Linear<br>
+          <strong>ابعاد:</strong> d_model → 4*d_model → d_model<br>
+          <strong>نقش:</strong> پردازش غیرخطی اطلاعات
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">ConvolutionalLayer (لایه کانولوشنی)</div>
+        <div class="component-desc">
+          لایهٔ کانولوشنی با نرمال‌سازی و دراپ‌اوت که استخراج ویژگی‌های محلی را در رمزگذار صوتی انجام می‌دهد.
+        </div>
+        <div class="data-flow">
+          <strong>کاربرد:</strong> Audio processing, Feature extraction<br>
+          <strong>نرمال‌سازی:</strong> Batch normalization<br>
+          <strong>فعال‌سازی:</strong> ReLU یا Gated activation
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="training-components">
+      <h2>🎯 بخش‌های آموزش</h2>
+      
+      <div class="component">
+        <div class="component-name">ContrastiveSpeakerLoss (زیان تباینی گوینده)</div>
+        <div class="component-desc">
+          زیان مقابل‌گرای موضوعی که بردارهای اسپیکر را برای نزدیکی گویندگان مشابه منظم می‌کند.
+          این بخش کیفیت voice cloning را بهبود می‌بخشد.
+        </div>
+        <div class="data-flow">
+          <strong>هدف:</strong> Same speaker → Close embeddings, Different speakers → Far embeddings<br>
+          <strong>روش:</strong> GE2E (Generalized End-to-End) loss<br>
+          <strong>Temperature:</strong> 0.1 برای scaling
+        </div>
+        <div class="example">
+          <strong>مثال:</strong><br>
+          دو نمونه از همان گوینده: فاصله < 0.3<br>
+          دو گوینده متفاوت: فاصله > 0.8
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">TimeEmbedding (جاسازی زمان)</div>
+        <div class="component-desc">
+          جاسازی‌کنندهٔ زمان که گام دیفیوشن را به بردار شرطی‌سازی برای شبکهٔ نویززدایی تبدیل می‌کند.
+          فقط در DiffusionDecoder استفاده می‌شود.
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Diffusion timestep [0, T]<br>
+          <strong>خروجی:</strong> Time embedding vector<br>
+          <strong>روش:</strong> Sinusoidal embedding مشابه positional encoding
+        </div>
+      </div>
+
+      <div class="component">
+        <div class="component-name">DiffusionBlock (بلوک دیفیوشن)</div>
+        <div class="component-desc">
+          بلوک پردازشی داخل دیکودر دیفیوشن که کانولوشن و شرطی‌سازی زمانی را ترکیب می‌کند.
+        </div>
+        <div class="chart">
+          noisy_input + time_embedding + conditioning → conv_layers → denoised_output
+        </div>
+        <div class="data-flow">
+          <strong>ورودی:</strong> Noisy mel + Time step + Text/Speaker conditioning<br>
+          <strong>پردازش:</strong> U-Net style convolutions با skip connections<br>
+          <strong>خروجی:</strong> Predicted noise یا clean signal
+        </div>
+      </div>
+    </div>
+
+    <div style="background: #e8f5e8; border: 2px solid #4caf50; border-radius: 8px; padding: 1.5rem; margin: 2rem 0;">
+      <h3 style="color: #2e7d32; margin-top: 0;">📊 خلاصه جریان کلی داده‌ها</h3>
+      <div class="chart">
+        <strong>جریان کامل تولید گفتار:</strong><br>
+        Text Input → TextEncoder → Text Features<br>
+        ↓<br>
+        Reference Audio → AudioEncoder → Speaker Embedding + Audio Features<br>
+        ↓<br>
+        Text Features + Speaker Embedding → MelDecoder → Mel Spectrogram<br>
+        ↓<br>
+        Mel Spectrogram → HiFiGAN Vocoder → Audio Waveform<br>
+        <br>
+        <strong>اختیاری:</strong><br>
+        Reference Audio → GST → Style Embedding → Enhanced Prosody Control
+      </div>
+    </div>
+
+    <div style="background: #fff3e0; border: 2px solid #ff9800; border-radius: 8px; padding: 1.5rem; margin: 2rem 0;">
+      <h3 style="color: #ef6c00; margin-top: 0;">💡 نکات مهم پیاده‌سازی</h3>
+      <ul>
+        <li><strong>حافظه:</strong> استفاده از gradient checkpointing برای کاهش مصرف حافظه</li>
+        <li><strong>سرعت:</strong> انتخاب بین Autoregressive (کیفیت) و Non-autoregressive (سرعت)</li>
+        <li><strong>کیفیت:</strong> HiFi-GAN vocoder برای بهترین کیفیت صوتی</li>
+        <li><strong>Voice Cloning:</strong> PretrainedSpeakerEncoder + ContrastiveSpeakerLoss برای accuracy بالا</li>
+        <li><strong>Prosody Control:</strong> GST برای کنترل احساسات و سبک بیان</li>
+        <li><strong>مقیاس‌پذیری:</strong> Multi-GPU support با distributed training</li>
+      </ul>
+    </div>
+
+    <footer style="text-align: center; margin-top: 3rem; padding: 1rem; border-top: 1px solid #ddd; color: #666;">
+      <p>📝 این مستندات بر اساس کد موجود در <code>myxtts/models/</code> تهیه شده است.</p>
+      <p>🔄 آخرین بروزرسانی: نسخه کامل با جزئیات تکنیکی و مثال‌های عملی</p>
+    </footer>
+  </div>
 </body>
 </html>
