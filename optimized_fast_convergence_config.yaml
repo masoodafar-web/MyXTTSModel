@@ -36,7 +36,7 @@ training:
   beta1: 0.9
   beta2: 0.999
   eps: 1.0e-08
-  mel_loss_weight: 22.0
+  mel_loss_weight: 2.5
   kl_loss_weight: 1.8
   stop_loss_weight: 1.5
   attention_loss_weight: 0.3

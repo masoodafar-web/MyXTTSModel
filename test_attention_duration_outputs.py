@@ -93,7 +93,7 @@ def test_loss_computation():
     
     # Create a loss function with enabled weights
     loss_fn = XTTSLoss(
-        mel_loss_weight=35.0,
+        mel_loss_weight=2.5,
         stop_loss_weight=1.0,
         attention_loss_weight=1.0,
         duration_loss_weight=0.1
@@ -165,7 +165,7 @@ def test_model_without_optional_outputs():
     print("\n🧪 Testing loss computation without optional outputs...")
     
     loss_fn = XTTSLoss(
-        mel_loss_weight=35.0,
+        mel_loss_weight=2.5,
         stop_loss_weight=1.0,
         attention_loss_weight=1.0,
         duration_loss_weight=0.1

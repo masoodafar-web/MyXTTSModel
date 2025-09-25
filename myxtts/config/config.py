@@ -271,7 +271,7 @@ class TrainingConfig:
     scheduler_params: Dict[str, Any] = None
     
     # Loss weights (adjusted for better balance and voice cloning)
-    mel_loss_weight: float = 35.0  # Reduced from 45.0 for better stability
+    mel_loss_weight: float = 2.5  # Fixed from 35.0 for stability
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 0.1  # Enabled with small weight for stability
     attention_loss_weight: float = 0.1  # Enabled with small weight for gradual alignment learning
@@ -335,6 +335,27 @@ class TrainingConfig:
     def __post_init__(self):
         if self.scheduler_params is None:
             self.scheduler_params = {}
+        
+        # Validate loss weights to prevent training instability
+        self.validate_loss_weights()
+    
+    def validate_loss_weights(self):
+        """Validate loss weights to prevent training instability."""
+        # Check mel_loss_weight for reasonable bounds
+        if self.mel_loss_weight > 10.0:
+            import warnings
+            warnings.warn(
+                f"mel_loss_weight ({self.mel_loss_weight}) is too high (>10.0). "
+                f"This can cause loss values in hundreds/thousands. "
+                f"Consider using values between 1.0-5.0 for stability.",
+                UserWarning
+            )
+        
+        if self.mel_loss_weight > 50.0:
+            raise ValueError(
+                f"mel_loss_weight ({self.mel_loss_weight}) is dangerously high (>50.0). "
+                f"This will cause training instability. Use values between 1.0-5.0."
+            )
 
 
 @dataclass

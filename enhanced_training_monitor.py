@@ -188,7 +188,7 @@ class EnhancedTrainingMonitor:
                 self.logger.info(f"Rebalancing: KL loss too dominant (ratio: {current_ratio:.1f})")
         
         # Ensure weights stay within reasonable bounds
-        optimized_weights['mel_loss_weight'] = np.clip(optimized_weights['mel_loss_weight'], 10.0, 100.0)
+        optimized_weights['mel_loss_weight'] = np.clip(optimized_weights['mel_loss_weight'], 1.0, 5.0)
         optimized_weights['kl_loss_weight'] = np.clip(optimized_weights['kl_loss_weight'], 0.1, 10.0)
         
         return optimized_weights
@@ -257,7 +257,7 @@ class EnhancedTrainingMonitor:
             'huber_delta': 0.8,  # Slightly more sensitive
             
             # Improved loss weights (fine-tuned for convergence)
-            'mel_loss_weight': 25.0,  # Reduced from 35.0 for better balance
+            'mel_loss_weight': 2.5,  # Fixed from 25.0 for optimal balance
             'kl_loss_weight': 1.5,    # Slightly increased for better regularization
             'stop_loss_weight': 2.0,   # Moderate weight for stop token loss
             'attention_loss_weight': 0.5,  # Light attention loss for alignment

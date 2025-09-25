@@ -95,7 +95,7 @@ training:
   scheduler_params: {}
   
   # Loss weights
-  mel_loss_weight: 45.0
+  mel_loss_weight: 2.5
   kl_loss_weight: 1.0
   duration_loss_weight: 1.0
   
