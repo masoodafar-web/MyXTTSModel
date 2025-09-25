@@ -35,18 +35,16 @@ USAGE EXAMPLES:
 ===============
 
 Basic voice cloning:
-  python inference_main.py --text "Hello world" --reference-audio speaker.wav --clone-voice
+  python3 inference_main.py --text "Hello world" --reference-audio speaker.wav --clone-voice
 
 Advanced voice cloning with custom parameters:
-  python inference_main.py --text "Hello world" --reference-audio speaker.wav --clone-voice \
-    --voice-cloning-temperature 0.6 --voice-conditioning-strength 1.2
+  python3 inference_main.py --text "Hello world" --reference-audio speaker.wav --clone-voice --voice-cloning-temperature 0.6 --voice-conditioning-strength 1.2
 
 Multiple reference audios for voice blending:
-  python inference_main.py --text "Hello world" \
-    --multiple-reference-audios speaker1.wav speaker2.wav --clone-voice
+  python3 inference_main.py --text "Hello world" --multiple-reference-audios speaker1.wav speaker2.wav --clone-voice
 
 High-quality synthesis without voice cloning:
-  python inference_main.py --text "Hello world" --temperature 0.8
+  python3 inference_main.py --text "Hello world" --temperature 0.8
 """
 
 from __future__ import annotations
@@ -54,7 +52,8 @@ from __future__ import annotations
 import argparse
 import os
 from typing import Optional, List
-
+import os, sys
+os.environ['CUDA_VISIBLE_DEVICES'] = '1'  # choose GPU
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
 
@@ -94,6 +93,11 @@ def parse_args() -> argparse.Namespace:
         "--checkpoint-dir",
         default="./checkpointsmain",
         help="Directory to search when --checkpoint is not provided (default: ./checkpointsmain).",
+    )
+    parser.add_argument(
+        "--model-size",
+        choices=["tiny", "small", "normal", "big"],
+        help="Model preset to use when building config without a YAML file (must match training).",
     )
     text_group = parser.add_mutually_exclusive_group(required=True)
     text_group.add_argument("--text", help="Text to synthesize.")
@@ -227,29 +231,6 @@ def parse_args() -> argparse.Namespace:
         default="ecapa_tdnn",
         help="Type of pre-trained speaker encoder to use (default: ecapa_tdnn).",
     )
-    parser.add_argument(
-        "--voice-conditioning-strength",
-        type=float,
-        default=1.0,
-        help="Strength of voice conditioning (0.0-2.0, default: 1.0).",
-    )
-    parser.add_argument(
-        "--voice-cloning-temperature",
-        type=float,
-        default=0.7,
-        help="Temperature for voice cloning (default: 0.7).",
-    )
-    parser.add_argument(
-        "--voice-similarity-threshold",
-        type=float,
-        default=0.75,
-        help="Voice similarity threshold for quality control (default: 0.75).",
-    )
-    parser.add_argument(
-        "--enable-voice-interpolation",
-        action="store_true",
-        help="Enable voice interpolation for blending multiple voices.",
-    )
     
     # Multi-language support (NEW)
     parser.add_argument(
@@ -267,17 +248,6 @@ def parse_args() -> argparse.Namespace:
         "--enable-phone-normalization",
         action="store_true",
         help="Enable phone-level text normalization.",
-    )
-    
-    # Multi-speaker support (NEW)
-    parser.add_argument(
-        "--speaker-id",
-        help="Speaker ID for multi-speaker models.",
-    )
-    parser.add_argument(
-        "--list-speakers",
-        action="store_true",
-        help="List available speakers in multi-speaker model and exit.",
     )
     
     # Evaluation and optimization options
@@ -328,12 +298,24 @@ def load_text(args: argparse.Namespace) -> str:
     return contents
 
 
-def load_config(config_path: Optional[str], checkpoint_dir: str) -> XTTSConfig:
+def load_config(
+    config_path: Optional[str],
+    checkpoint_dir: str,
+    model_size: Optional[str] = None,
+    logger=None,
+) -> XTTSConfig:
     """Load configuration from YAML or reuse the training build_config."""
     if config_path:
         config = XTTSConfig.from_yaml(config_path)
+        if model_size:
+            if logger is None:
+                logger = setup_logging()
+            logger.warning(
+                "Model size preset '%s' ignored because explicit config file was provided.",
+                model_size,
+            )
     else:
-        config = build_config(checkpoint_dir=checkpoint_dir)
+        config = build_config(checkpoint_dir=checkpoint_dir, model_size=model_size)
 
     # Ensure checkpoint directory is up to date regardless of source
     config.training.checkpoint_dir = checkpoint_dir
@@ -577,6 +559,39 @@ def main():
     args = parse_args()
     logger = setup_logging()
 
+    # Sanity checks for critical voice cloning knobs
+    if args.voice_conditioning_strength < 0.0 or args.voice_conditioning_strength > 2.0:
+        clamped_strength = float(np.clip(args.voice_conditioning_strength, 0.0, 2.0))
+        logger.warning(
+            "Voice conditioning strength %.3f out of range [0.0, 2.0]; clamping to %.3f",
+            args.voice_conditioning_strength,
+            clamped_strength,
+        )
+        args.voice_conditioning_strength = clamped_strength
+
+    if args.voice_cloning_temperature <= 0.0:
+        logger.warning(
+            "Voice cloning temperature %.3f must be positive; using 0.1",
+            args.voice_cloning_temperature,
+        )
+        args.voice_cloning_temperature = 0.1
+
+    if args.temperature <= 0.0:
+        logger.warning(
+            "Sampling temperature %.3f must be positive; using 0.7",
+            args.temperature,
+        )
+        args.temperature = 0.7
+
+    if not 0.0 < args.voice_similarity_threshold <= 1.0:
+        clamped_threshold = float(np.clip(args.voice_similarity_threshold, 1e-3, 1.0))
+        logger.warning(
+            "Voice similarity threshold %.3f outside (0, 1]; clamping to %.3f",
+            args.voice_similarity_threshold,
+            clamped_threshold,
+        )
+        args.voice_similarity_threshold = clamped_threshold
+
     # Log accelerator availability (useful for debugging inference speed)
     gpus = tf.config.list_physical_devices("GPU")
     if gpus:
@@ -585,7 +600,7 @@ def main():
         logger.info("No GPU detected; inference will run on CPU.")
 
     text = load_text(args)
-    config = load_config(args.config_path, args.checkpoint_dir)
+    config = load_config(args.config_path, args.checkpoint_dir, args.model_size, logger)
     
     # Update configuration with command line arguments
     if args.decoder_strategy:
@@ -646,6 +661,8 @@ def main():
         list_style_tokens(config, logger)
         return
     
+    checkpoint_prefix = resolve_checkpoint(args, logger)
+
     # Multi-language support (NEW)
     detected_language = config.data.language  # Default language
     if args.detect_language:
@@ -669,14 +686,11 @@ def main():
         return
     
     if args.speaker_id:
-        logger.info(f"👤 Using speaker ID: {args.speaker_id}")
-        # Store speaker ID for use during inference
-        target_speaker_id = args.speaker_id
-    else:
-        target_speaker_id = None
+        logger.info(f"👤 Requested speaker ID: {args.speaker_id}")
+        logger.warning(
+            "Speaker selection is not yet wired into inference; provide reference audio or voice cloning for speaker control."
+        )
         
-    checkpoint_prefix = resolve_checkpoint(args, logger)
-    
     # Validate reference audio files if provided
     if args.reference_audio and not validate_reference_audio(args.reference_audio, logger):
         return

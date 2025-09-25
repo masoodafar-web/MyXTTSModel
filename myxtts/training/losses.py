@@ -189,11 +189,25 @@ def attention_loss(
     attention_weights = tf.clip_by_value(attention_weights, 1e-8, 1.0 - 1e-8)
     expected_alignment = tf.clip_by_value(expected_alignment, 1e-8, 1.0 - 1e-8)
     
-    kl_loss = tf.reduce_sum(
-        expected_alignment * tf.math.log(expected_alignment / attention_weights),
-        axis=[1, 2]
+    mel_mask = tf.sequence_mask(
+        mel_lengths,
+        maxlen=mel_time,
+        dtype=tf.float32
     )
-    
+    text_mask = tf.sequence_mask(
+        text_lengths,
+        maxlen=text_time,
+        dtype=tf.float32
+    )
+    combined_mask = mel_mask[:, :, None] * text_mask[:, None, :]
+
+    kl_matrix = expected_alignment * tf.math.log(expected_alignment / attention_weights)
+    kl_matrix *= combined_mask
+
+    valid_pairs = tf.reduce_sum(combined_mask, axis=[1, 2])
+    kl_loss = tf.reduce_sum(kl_matrix, axis=[1, 2]) / tf.maximum(valid_pairs, 1.0)
+    kl_loss = tf.clip_by_value(kl_loss, 0.0, 200.0)
+
     return tf.reduce_mean(kl_loss)
 
 
@@ -203,19 +217,24 @@ def duration_loss(
     text_lengths: tf.Tensor
 ) -> tf.Tensor:
     """
-    Duration prediction loss.
+    Duration prediction loss with log compression and robust clipping.
     
     Args:
         predicted_durations: Predicted durations [batch, text_len]
-        target_durations: Target durations [batch, text_len] 
+        target_durations: Target durations [batch, text_len]
         text_lengths: Text sequence lengths [batch]
         
     Returns:
         Duration loss tensor
     """
-    # MSE loss
-    loss = tf.square(predicted_durations - target_durations)
-    
+    # Work in log space to keep large ratios in a reasonable range
+    predicted = tf.math.log1p(tf.nn.relu(predicted_durations))
+    target = tf.math.log1p(tf.nn.relu(target_durations))
+
+    diff = predicted - target
+    diff = tf.clip_by_value(diff, -5.0, 5.0)
+    loss = tf.square(diff)
+
     # Apply masking
     mask = tf.sequence_mask(
         text_lengths,
@@ -223,12 +242,13 @@ def duration_loss(
         dtype=tf.float32
     )
     loss = loss * mask
-    
+
     # Normalize by sequence lengths
     loss = tf.reduce_sum(loss, axis=1)
     loss = loss / tf.maximum(tf.cast(text_lengths, tf.float32), 1.0)
-    
-    return tf.reduce_mean(loss)
+
+    loss = tf.clip_by_value(tf.reduce_mean(loss), 0.0, 25.0)
+    return loss
 
 
 def pitch_loss(
@@ -247,8 +267,16 @@ def pitch_loss(
     Returns:
         Pitch loss scalar
     """
-    # L1 loss for pitch (more robust than L2)
-    loss = tf.abs(predicted_pitch - target_pitch)
+    def _compress(x: tf.Tensor) -> tf.Tensor:
+        signed = tf.math.sign(x)
+        magnitude = tf.math.log1p(tf.abs(x))
+        return signed * magnitude
+
+    compressed_pred = _compress(predicted_pitch)
+    compressed_target = _compress(target_pitch)
+
+    loss = tf.abs(compressed_pred - compressed_target)
+    loss = tf.clip_by_value(loss, 0.0, 5.0)
     loss = tf.squeeze(loss, axis=-1)  # [batch, seq_len]
     
     if sequence_lengths is not None:
@@ -285,8 +313,11 @@ def energy_loss(
     Returns:
         Energy loss scalar
     """
-    # L1 loss for energy (more robust than L2)
-    loss = tf.abs(predicted_energy - target_energy)
+    compressed_pred = tf.math.log1p(tf.nn.relu(predicted_energy))
+    compressed_target = tf.math.log1p(tf.nn.relu(target_energy))
+
+    loss = tf.abs(compressed_pred - compressed_target)
+    loss = tf.clip_by_value(loss, 0.0, 8.0)
     loss = tf.squeeze(loss, axis=-1)  # [batch, seq_len]
     
     if sequence_lengths is not None:
@@ -351,6 +382,7 @@ def speaking_rate_loss(
 ) -> tf.Tensor:
     """Simple L1 loss for speaking-rate predictions with masking."""
     diff = tf.abs(predicted_rate - target_rate)
+    diff = tf.clip_by_value(diff, 0.0, 10.0)
 
     mask = tf.sequence_mask(
         text_lengths,
@@ -461,6 +493,8 @@ class XTTSLoss(tf.keras.losses.Loss):
         self.step_count = tf.Variable(0, trainable=False, name="loss_step_count")
         self.loss_history = tf.Variable(tf.zeros([10]), trainable=False, name="loss_history")
         self.history_index = tf.Variable(0, trainable=False, name="history_index")
+        self._weighted_losses = {}
+        self._raw_total_loss_tensor = None
     
     def call(
         self,
@@ -479,7 +513,16 @@ class XTTSLoss(tf.keras.losses.Loss):
         """
         losses = {}
         total_loss = 0.0
-        
+        weighted_contrib = {}
+
+        def _safe(name: str, value: tf.Tensor) -> tf.Tensor:
+            tensor = tf.cast(value, tf.float32)
+            finite_mask = tf.math.is_finite(tensor)
+            if not tf.reduce_all(finite_mask):
+                problematic = tf.boolean_mask(tensor, tf.logical_not(finite_mask))
+                tf.print("WARNING:", name, "contains non-finite values:", problematic, summarize=-1)
+            return tf.where(finite_mask, tensor, tf.zeros_like(tensor))
+
         # Mel spectrogram loss
         if "mel_target" in y_true and "mel_output" in y_pred:
             mel_l = mel_loss(
@@ -487,16 +530,18 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_pred["mel_output"],
                 y_true.get("mel_lengths")
             )
-            losses["mel_loss"] = mel_l
+            losses["mel_loss"] = _safe("mel_loss", mel_l)
             
             # Apply adaptive weighting for mel loss
             if self.use_adaptive_weights:
                 mel_weight = self._adaptive_mel_weight(mel_l)
             else:
                 mel_weight = self.mel_loss_weight
-                
+
             total_loss += mel_weight * mel_l
-        
+            weighted_contrib["mel_loss"] = _safe("w_mel_loss", mel_weight * mel_l)
+            weighted_contrib["mel_weight"] = _safe("w_mel_weight", mel_weight)
+
         # Stop token loss
         if "stop_target" in y_true and "stop_tokens" in y_pred:
             stop_l = stop_token_loss(
@@ -504,9 +549,10 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_pred["stop_tokens"],
                 y_true.get("mel_lengths")
             )
-            losses["stop_loss"] = stop_l
+            losses["stop_loss"] = _safe("stop_loss", stop_l)
             total_loss += self.stop_loss_weight * stop_l
-        
+            weighted_contrib["stop_loss"] = _safe("w_stop_loss", self.stop_loss_weight * stop_l)
+
         # Attention loss (if attention weights available)
         if ("attention_weights" in y_pred and 
             "text_lengths" in y_true and 
@@ -516,9 +562,10 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["text_lengths"],
                 y_true["mel_lengths"]
             )
-            losses["attention_loss"] = attn_l
+            losses["attention_loss"] = _safe("attention_loss", attn_l)
             total_loss += self.attention_loss_weight * attn_l
-        
+            weighted_contrib["attention_loss"] = _safe("w_attention_loss", self.attention_loss_weight * attn_l)
+
         # Duration loss (if duration predictions available)
         if ("duration_pred" in y_pred and 
             "duration_target" in y_true and
@@ -528,9 +575,10 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["duration_target"],
                 y_true["text_lengths"]
             )
-            losses["duration_loss"] = dur_l
+            losses["duration_loss"] = _safe("duration_loss", dur_l)
             total_loss += self.duration_loss_weight * dur_l
-        
+            weighted_contrib["duration_loss"] = _safe("w_duration_loss", self.duration_loss_weight * dur_l)
+
         # Pitch loss (if pitch predictions available)
         if ("pitch_output" in y_pred and 
             "pitch_target" in y_true and
@@ -540,8 +588,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["pitch_target"],
                 y_true["mel_lengths"]
             )
-            losses["pitch_loss"] = pitch_l
+            losses["pitch_loss"] = _safe("pitch_loss", pitch_l)
             total_loss += self.pitch_loss_weight * pitch_l
+            weighted_contrib["pitch_loss"] = _safe("w_pitch_loss", self.pitch_loss_weight * pitch_l)
 
         # Energy loss (if energy predictions available)
         if ("energy_output" in y_pred and 
@@ -552,8 +601,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["energy_target"],
                 y_true["mel_lengths"]
             )
-            losses["energy_loss"] = energy_l
+            losses["energy_loss"] = _safe("energy_loss", energy_l)
             total_loss += self.energy_loss_weight * energy_l
+            weighted_contrib["energy_loss"] = _safe("w_energy_loss", self.energy_loss_weight * energy_l)
 
         # Prosody pitch loss on text-level prosody predictor
         if ("prosody_pitch" in y_pred and
@@ -564,8 +614,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["prosody_pitch_target"],
                 y_true["text_lengths"]
             )
-            losses["prosody_pitch_loss"] = prosody_pitch_l
+            losses["prosody_pitch_loss"] = _safe("prosody_pitch_loss", prosody_pitch_l)
             total_loss += self.prosody_pitch_loss_weight * prosody_pitch_l
+            weighted_contrib["prosody_pitch_loss"] = _safe("w_prosody_pitch_loss", self.prosody_pitch_loss_weight * prosody_pitch_l)
 
         if ("prosody_energy" in y_pred and
             "prosody_energy_target" in y_true and
@@ -575,8 +626,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["prosody_energy_target"],
                 y_true["text_lengths"]
             )
-            losses["prosody_energy_loss"] = prosody_energy_l
+            losses["prosody_energy_loss"] = _safe("prosody_energy_loss", prosody_energy_l)
             total_loss += self.prosody_energy_loss_weight * prosody_energy_l
+            weighted_contrib["prosody_energy_loss"] = _safe("w_prosody_energy_loss", self.prosody_energy_loss_weight * prosody_energy_l)
 
         if ("prosody_speaking_rate" in y_pred and
             "prosody_speaking_rate_target" in y_true and
@@ -586,9 +638,10 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["prosody_speaking_rate_target"],
                 y_true["text_lengths"]
             )
-            losses["speaking_rate_loss"] = speaking_rate_l
+            losses["speaking_rate_loss"] = _safe("speaking_rate_loss", speaking_rate_l)
             total_loss += self.speaking_rate_loss_weight * speaking_rate_l
-        
+            weighted_contrib["speaking_rate_loss"] = _safe("w_speaking_rate_loss", self.speaking_rate_loss_weight * speaking_rate_l)
+
         # Voice similarity loss (contrastive speaker loss)
         if ("speaker_embedding" in y_pred and 
             "speaker_labels" in y_true):
@@ -596,9 +649,10 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["speaker_labels"],
                 y_pred["speaker_embedding"]
             )
-            losses["voice_similarity_loss"] = voice_sim_l
+            losses["voice_similarity_loss"] = _safe("voice_similarity_loss", voice_sim_l)
             total_loss += self.voice_similarity_loss_weight * voice_sim_l
-        
+            weighted_contrib["voice_similarity_loss"] = _safe("w_voice_similarity_loss", self.voice_similarity_loss_weight * voice_sim_l)
+
         # Diffusion loss (for diffusion-based decoders)
         if ("diffusion_noise_pred" in y_pred and 
             "diffusion_noise_target" in y_true):
@@ -607,23 +661,29 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["diffusion_noise_target"],
                 y_true.get("mel_lengths")
             )
-            losses["diffusion_loss"] = diff_l
+            losses["diffusion_loss"] = _safe("diffusion_loss", diff_l)
             total_loss += self.diffusion_loss_weight * diff_l
-        
+            weighted_contrib["diffusion_loss"] = _safe("w_diffusion_loss", self.diffusion_loss_weight * diff_l)
+
         # Gradient participation regularization: Ensure all model outputs participate in gradients
         # This prevents the "Gradients do not exist for variables" warning by adding a small
         # regularization term for outputs that don't have corresponding targets
         gradient_reg_loss = self._ensure_gradient_participation(y_pred, y_true)
         if gradient_reg_loss > 0:
-            losses["gradient_participation_loss"] = gradient_reg_loss
+            losses["gradient_participation_loss"] = _safe("gradient_participation_loss", gradient_reg_loss)
             total_loss += gradient_reg_loss
-        
+            weighted_contrib["gradient_participation_loss"] = _safe("w_gradient_participation_loss", gradient_reg_loss)
+
         # Apply loss smoothing and spike detection
+        raw_total_loss = total_loss
+        self._raw_total_loss_tensor = raw_total_loss
+        weighted_contrib["raw_total_loss"] = _safe("w_raw_total_loss", raw_total_loss)
+        self._weighted_losses = {k: _safe(k, v) for k, v in weighted_contrib.items()}
         total_loss = self._apply_loss_smoothing(total_loss)
-        
+
         # Store individual losses for monitoring
-        self.losses = losses
-        
+        self.losses = {k: _safe(k, v) for k, v in losses.items()}
+
         return total_loss
     
     def _adaptive_mel_weight(self, current_mel_loss: tf.Tensor) -> tf.Tensor:
@@ -671,42 +731,85 @@ class XTTSLoss(tf.keras.losses.Loss):
         Returns:
             Smoothed loss with spike protection
         """
-        # Update loss history for spike detection
-        history_idx = self.history_index % 10
-        self.loss_history = tf.tensor_scatter_nd_update(
-            self.loss_history,
-            [[history_idx]],
-            [current_loss]
+        current_loss = tf.cast(current_loss, tf.float32)
+        current_loss = tf.where(
+            tf.math.is_finite(current_loss),
+            current_loss,
+            tf.constant(0.0, dtype=tf.float32)
         )
+
+        if not tf.reduce_all(tf.math.is_finite(self.loss_history)):
+            self.loss_history.assign(tf.zeros_like(self.loss_history))
+
+        if not tf.math.is_finite(self.running_total_loss):
+            self.running_total_loss.assign(tf.constant(0.0, dtype=tf.float32))
+
+        history_length = tf.cast(tf.shape(self.loss_history)[0], self.history_index.dtype)
+        history_idx = tf.math.mod(self.history_index, history_length)
+        history_idx_i32 = tf.cast(history_idx, tf.int32)
+        base_history = self.loss_history.read_value()
+        updated_history = tf.tensor_scatter_nd_update(
+            base_history,
+            tf.reshape(history_idx_i32, [1, 1]),
+            tf.reshape(current_loss, [1])
+        )
+        self.loss_history.assign(updated_history)
         self.history_index.assign_add(1)
-        
-        # Compute running total loss average
-        decay = tf.minimum(tf.cast(self.step_count, tf.float32) / 500.0, 0.95)
-        self.running_total_loss.assign(
-            decay * self.running_total_loss + (1.0 - decay) * current_loss
+
+        recent_losses = tf.where(
+            tf.math.is_finite(self.loss_history),
+            self.loss_history,
+            tf.zeros_like(self.loss_history)
         )
-        
-        # Spike detection: if current loss is much higher than recent average
+
+        decay = tf.minimum(tf.cast(self.step_count, tf.float32) / 500.0, 0.95)
+        running_total = decay * self.running_total_loss + (1.0 - decay) * current_loss
+        running_total = tf.where(
+            tf.math.is_finite(running_total),
+            running_total,
+            current_loss
+        )
+        self.running_total_loss.assign(running_total)
+
         if self.step_count > 10:
-            recent_avg = tf.reduce_mean(self.loss_history)
-            spike_ratio = current_loss / (recent_avg + 1e-8)
-            
-            # If we detect a spike, apply dampening
-            if spike_ratio > self.max_loss_spike_threshold:
-                dampening_factor = tf.minimum(
-                    self.max_loss_spike_threshold / spike_ratio,
-                    1.0
-                )
-                smoothed_loss = current_loss * dampening_factor
-            else:
-                # Apply light exponential smoothing for stability
-                smoothed_loss = (
-                    (1.0 - self.loss_smoothing_factor) * current_loss +
-                    self.loss_smoothing_factor * self.running_total_loss
-                )
+            recent_avg = tf.reduce_mean(recent_losses)
+            recent_avg = tf.where(
+                tf.math.is_finite(recent_avg),
+                recent_avg,
+                current_loss
+            )
+            denominator = recent_avg + 1e-8
+            spike_ratio = current_loss / denominator
+            spike_ratio = tf.where(
+                tf.math.is_finite(spike_ratio),
+                spike_ratio,
+                tf.ones_like(spike_ratio)
+            )
+
+            max_spike = tf.cast(self.max_loss_spike_threshold, tf.float32)
+            safe_ratio = tf.where(spike_ratio <= 0.0, tf.ones_like(spike_ratio), spike_ratio)
+            dampening_factor = tf.minimum(max_spike / safe_ratio, 1.0)
+            dampening_factor = tf.where(
+                tf.math.is_finite(dampening_factor),
+                dampening_factor,
+                tf.ones_like(dampening_factor)
+            )
+
+            smoothed_loss = tf.where(
+                spike_ratio > max_spike,
+                current_loss * dampening_factor,
+                (1.0 - self.loss_smoothing_factor) * current_loss +
+                self.loss_smoothing_factor * running_total
+            )
         else:
             smoothed_loss = current_loss
-            
+
+        smoothed_loss = tf.where(
+            tf.math.is_finite(smoothed_loss),
+            smoothed_loss,
+            current_loss
+        )
+
         return smoothed_loss
     
     def _ensure_gradient_participation(
@@ -794,6 +897,14 @@ class XTTSLoss(tf.keras.losses.Loss):
             metrics["step_count"] = tf.cast(self.step_count, tf.float32)
         
         return metrics
+
+    def get_weighted_losses(self) -> Dict[str, tf.Tensor]:
+        """Return the weighted loss contributions from the last forward pass."""
+        return {k: tf.identity(v) for k, v in self._weighted_losses.items()}
+
+    def get_raw_total_loss(self) -> Optional[tf.Tensor]:
+        """Return the raw (pre-smoothed) total loss."""
+        return self._raw_total_loss_tensor
     
     def reset_stability_state(self):
         """Reset stability tracking state (useful for validation/testing)."""
@@ -802,6 +913,7 @@ class XTTSLoss(tf.keras.losses.Loss):
         self.step_count.assign(0)
         self.loss_history.assign(tf.zeros([10]))
         self.history_index.assign(0)
+        self._raw_total_loss_tensor = None
 
 
 def create_stop_targets(mel_lengths: tf.Tensor, max_length: int) -> tf.Tensor:

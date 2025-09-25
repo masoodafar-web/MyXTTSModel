@@ -175,7 +175,7 @@ class XTTSTrainer:
             self.criterion = XTTSLoss(
                 mel_loss_weight=config.training.mel_loss_weight,
                 stop_loss_weight=1.0,
-                attention_loss_weight=config.training.kl_loss_weight,
+                attention_loss_weight=getattr(config.training, 'attention_loss_weight', 0.02),
                 duration_loss_weight=config.training.duration_loss_weight,
                 pitch_loss_weight=getattr(config.training, 'pitch_loss_weight', 0.1),
                 energy_loss_weight=getattr(config.training, 'energy_loss_weight', 0.1),
@@ -608,6 +608,8 @@ class XTTSTrainer:
                             tf.cast(text_lengths, tf.float32),
                             1.0,
                         )
+                        max_duration = getattr(self.config.training, 'max_duration_frames', 30.0)
+                        avg_duration = tf.clip_by_value(avg_duration, 0.0, max_duration)
                         avg_duration = tf.expand_dims(avg_duration, axis=1)
                         duration_target = avg_duration * text_mask
                         y_true["duration_target"] = duration_target
@@ -663,6 +665,34 @@ class XTTSTrainer:
 
                     # Compute loss
                     loss = self.criterion(y_true, y_pred)
+                    raw_total_loss = self.criterion.get_raw_total_loss()
+                    raw_total_tensor = None
+                    if raw_total_loss is not None:
+                        try:
+                            raw_total_tensor = tf.convert_to_tensor(raw_total_loss, dtype=tf.float32)
+                        except Exception:
+                            raw_total_tensor = None
+
+                    finite_raw = False
+                    if raw_total_tensor is not None:
+                        try:
+                            finite_raw = bool(tf.reduce_all(tf.math.is_finite(raw_total_tensor)).numpy())
+                        except Exception:
+                            finite_raw = False
+
+                    if raw_total_tensor is None or not finite_raw:
+                        warn_dict = {}
+                        weighted_losses = self.criterion.get_weighted_losses()
+                        for key, value in weighted_losses.items():
+                            try:
+                                warn_dict[key] = float(value.numpy())
+                            except Exception:
+                                warn_dict[key] = None
+                        self.logger.warning(
+                            "Non-finite raw loss detected; falling back to smoothed loss. Contributions: %s",
+                            warn_dict,
+                        )
+                        raw_total_tensor = loss
 
                     aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
                     aux_reg_value = 0.0
@@ -692,7 +722,7 @@ class XTTSTrainer:
                             loss += aux_reg_weight * aux_reg_value
                     
                     # Per-replica loss scaling (average across replicas)
-                    loss_for_grad = loss / self.strategy.num_replicas_in_sync
+                    loss_for_grad = raw_total_tensor / self.strategy.num_replicas_in_sync
 
                     # Mixed precision handling (Keras 3 API)
                     is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
@@ -732,6 +762,13 @@ class XTTSTrainer:
                 if aux_reg_weight > 0.0 and 'aux_reg_value' in locals() and aux_reg_value != 0.0:
                     individual_losses["aux_head_reg"] = aux_reg_weight * aux_reg_value
                 stability_metrics = self.criterion.get_stability_metrics()
+                weighted_losses = self.criterion.get_weighted_losses()
+                if weighted_losses:
+                    for key, value in weighted_losses.items():
+                        individual_losses[f"w_{key}"] = value
+                raw_total = self.criterion.get_raw_total_loss()
+                if raw_total is not None:
+                    individual_losses["raw_total_loss"] = raw_total
                 
                 # Monitor gradient norm for stability
                 grad_norm = global_norm
@@ -745,10 +782,36 @@ class XTTSTrainer:
                 
                 # Add stability metrics to output
                 individual_losses.update(stability_metrics)
+
+                # Log breakdown when loss spikes dramatically to help debugging
+                loss_alert_threshold = getattr(self.config.training, 'loss_alert_threshold', 500.0)
+                try:
+                    loss_scalar = float(loss.numpy())
+                except Exception:
+                    loss_scalar = None
+                if loss_scalar is not None and loss_scalar > loss_alert_threshold:
+                    breakdown = {}
+                    if weighted_losses:
+                        for key, value in weighted_losses.items():
+                            try:
+                                breakdown[key] = float(value.numpy())
+                            except Exception:
+                                breakdown[key] = None
+                    if raw_total is not None:
+                        try:
+                            breakdown["raw_total_loss"] = float(raw_total.numpy())
+                        except Exception:
+                            breakdown["raw_total_loss"] = None
+                    self.logger.warning(
+                        "Loss spike detected (%.2f > %.2f). Contributions: %s",
+                        loss_scalar,
+                        loss_alert_threshold,
+                        breakdown
+                    )
                 
                 # Clear intermediate tensors to free memory
                 del outputs, y_true, y_pred, gradients
-                
+
                 return {
                     "total_loss": loss,
                     **individual_losses
@@ -1011,6 +1074,8 @@ class XTTSTrainer:
                         y_pred["duration_pred"] = outputs["duration_pred"]
                         avg_duration = tf.cast(micro_mel_len, tf.float32) / tf.maximum(
                             tf.cast(micro_text_len, tf.float32), 1.0)
+                        max_duration = getattr(self.config.training, 'max_duration_frames', 30.0)
+                        avg_duration = tf.clip_by_value(avg_duration, 0.0, max_duration)
                         avg_duration = tf.expand_dims(avg_duration, axis=1)
                         y_true["duration_target"] = avg_duration * text_mask
 
@@ -1060,6 +1125,34 @@ class XTTSTrainer:
                         y_true["prosody_speaking_rate_target"] = speaking_rate
 
                     loss = self.criterion(y_true, y_pred)
+                    raw_total_loss = self.criterion.get_raw_total_loss()
+                    raw_total_tensor = None
+                    if raw_total_loss is not None:
+                        try:
+                            raw_total_tensor = tf.convert_to_tensor(raw_total_loss, dtype=tf.float32)
+                        except Exception:
+                            raw_total_tensor = None
+
+                    finite_raw = False
+                    if raw_total_tensor is not None:
+                        try:
+                            finite_raw = bool(tf.reduce_all(tf.math.is_finite(raw_total_tensor)).numpy())
+                        except Exception:
+                            finite_raw = False
+
+                    if raw_total_tensor is None or not finite_raw:
+                        warn_dict = {}
+                        weighted_losses = self.criterion.get_weighted_losses()
+                        for key, value in weighted_losses.items():
+                            try:
+                                warn_dict[key] = float(value.numpy())
+                            except Exception:
+                                warn_dict[key] = None
+                        self.logger.warning(
+                            "Non-finite raw loss detected during accumulation; using smoothed loss. Contributions: %s",
+                            warn_dict,
+                        )
+                        raw_total_tensor = loss
 
                     aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
                     aux_reg_value = 0.0
@@ -1085,7 +1178,7 @@ class XTTSTrainer:
                             ]) / tf.cast(len(aux_reg_vars), tf.float32)
                             loss += aux_reg_weight * aux_reg_value
 
-                    scaled_loss = loss / accumulation_steps
+                    scaled_loss = raw_total_tensor / accumulation_steps
                 
                 grads = tape.gradient(scaled_loss, self.model.trainable_variables)
                 
@@ -1122,11 +1215,48 @@ class XTTSTrainer:
             clip_norm = getattr(self.config.training, 'gradient_clip_norm', 0.5)
             accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=clip_norm)
             self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
-        
+
         # Average losses across micro-steps
         for key in list(total_losses.keys()):
             total_losses[key] /= float(accumulation_steps)
-        
+
+        # Attach most recent weighted loss breakdown for debugging
+        weighted_losses = self.criterion.get_weighted_losses()
+        raw_total = self.criterion.get_raw_total_loss()
+        if weighted_losses:
+            for key, value in weighted_losses.items():
+                try:
+                    total_losses[f"w_{key}"] = float(value.numpy())
+                except Exception:
+                    pass
+        if raw_total is not None:
+            try:
+                total_losses["raw_total_loss"] = float(raw_total.numpy())
+            except Exception:
+                pass
+
+        loss_alert_threshold = getattr(self.config.training, 'loss_alert_threshold', 500.0)
+        total_loss_value = total_losses.get("total_loss")
+        if total_loss_value is not None and total_loss_value > loss_alert_threshold:
+            breakdown = {}
+            if weighted_losses:
+                for key, value in weighted_losses.items():
+                    try:
+                        breakdown[key] = float(value.numpy())
+                    except Exception:
+                        breakdown[key] = None
+            if raw_total is not None:
+                try:
+                    breakdown["raw_total_loss"] = float(raw_total.numpy())
+                except Exception:
+                    breakdown["raw_total_loss"] = None
+            self.logger.warning(
+                "Loss spike detected during accumulation (%.2f > %.2f). Contributions: %s",
+                total_loss_value,
+                loss_alert_threshold,
+                breakdown
+            )
+
         # Convenience keys
         if "total_loss" in total_losses and "loss" not in total_losses:
             try:
@@ -1250,7 +1380,14 @@ class XTTSTrainer:
             
             # Get individual losses
             individual_losses = self.criterion.get_losses()
-            
+            weighted_losses = self.criterion.get_weighted_losses()
+            if weighted_losses:
+                for key, value in weighted_losses.items():
+                    individual_losses[f"w_{key}"] = value
+            raw_total = self.criterion.get_raw_total_loss()
+            if raw_total is not None:
+                individual_losses["raw_total_loss"] = raw_total
+
             return {
                 "total_loss": loss,
                 **individual_losses

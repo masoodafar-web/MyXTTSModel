@@ -274,12 +274,13 @@ class TrainingConfig:
     mel_loss_weight: float = 35.0  # Reduced from 45.0 for better stability
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 0.1  # Enabled with small weight for stability
-    attention_loss_weight: float = 0.1  # Enabled with small weight for gradual alignment learning
+    attention_loss_weight: float = 0.02  # Lower weight to prevent attention loss spikes
     pitch_loss_weight: float = 0.1       # Weight for mel-level pitch prediction head
     energy_loss_weight: float = 0.1      # Weight for mel-level energy prediction head
     prosody_pitch_loss_weight: float = 0.05   # Weight for text-level prosody pitch predictor
     prosody_energy_loss_weight: float = 0.05  # Weight for text-level prosody energy predictor
     speaking_rate_loss_weight: float = 0.05   # Weight for speaking-rate predictor regularization
+    max_duration_frames: float = 30.0         # Cap per-token duration target to avoid loss spikes
     auxiliary_head_regularization: float = 1e-6  # L2 regularization for auxiliary heads
     
     # Voice Cloning Loss Components - NEW for enhanced voice cloning
@@ -294,6 +295,7 @@ class TrainingConfig:
     loss_smoothing_factor: float = 0.1          # Exponential smoothing factor
     max_loss_spike_threshold: float = 2.0       # Maximum allowed loss spike multiplier
     gradient_norm_threshold: float = 5.0        # Threshold for gradient norm monitoring
+    loss_alert_threshold: float = 500.0         # Threshold for triggering loss breakdown logging
     
     # Enhanced loss function options
     use_label_smoothing: bool = True            # Enable label smoothing for regularization

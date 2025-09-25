@@ -635,7 +635,7 @@ def main():
     )
     parser.add_argument("--checkpoint-dir", default="./checkpointsmain", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=500, help="Number of epochs (increased for better convergence)")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
     parser.add_argument(
         "--grad-accum",
         type=int,
