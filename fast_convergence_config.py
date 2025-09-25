@@ -82,8 +82,8 @@ def create_optimized_config() -> Dict[str, Any]:
             'restart_period': 8000,     # Restart every 8k steps
             'restart_mult': 0.8,        # Decrease LR after each restart
             
-            # CRITICAL: Optimized loss weights for fast convergence
-            'mel_loss_weight': 22.0,    # Reduced from 35.0 for better balance
+            # CRITICAL: Fixed loss weights to prevent three-digit loss values
+            'mel_loss_weight': 2.5,     # Fixed from 22.0 - addresses "لاس سه رقمیه" issue
             'kl_loss_weight': 1.8,      # Slightly increased for regularization  
             'stop_loss_weight': 1.5,    # Moderate weight for stop tokens
             'attention_loss_weight': 0.3,  # Light attention guidance
@@ -202,7 +202,7 @@ def create_optimization_summary() -> str:
 ## Key Optimizations Applied 🚀
 
 ### 1. Loss Weight Rebalancing ⚖️
-- **mel_loss_weight**: 22.0 (reduced from 35.0 for better balance)
+- **mel_loss_weight**: 2.5 (fixed from 22.0 - addresses "لاس سه رقمیه" issue)
 - **kl_loss_weight**: 1.8 (increased for better regularization)
 - **stop_loss_weight**: 1.5 (moderate weight for stop prediction)
 - **attention_loss_weight**: 0.3 (light attention guidance)

@@ -72,8 +72,8 @@ def mel_loss(
     else:
         loss = tf.reduce_mean(loss)
     
-    # Apply gradient clipping at the loss level for additional stability
-    loss = tf.clip_by_value(loss, 0.0, 100.0)  # Prevent extreme loss values
+    # Apply improved loss clipping to prevent three-digit loss values
+    loss = tf.clip_by_value(loss, 0.0, 10.0)  # Much tighter clipping for stability
     
     return loss
 
@@ -376,7 +376,7 @@ class XTTSLoss(tf.keras.losses.Loss):
     
     def __init__(
         self,
-        mel_loss_weight: float = 45.0,
+        mel_loss_weight: float = 2.5,  # Fixed from 45.0 - was causing three-digit loss values
         stop_loss_weight: float = 1.0,
         attention_loss_weight: float = 0.1,  # Enabled with small weight for gradual alignment learning
         duration_loss_weight: float = 0.1,   # Enabled: model now returns duration predictions

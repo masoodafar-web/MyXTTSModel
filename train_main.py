@@ -214,9 +214,9 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
     logger = setup_logging()
     
     if level == "basic":
-        # Keep original parameters for compatibility
+        # Fixed parameters for stable training (addresses "لاس سه رقمیه" issue)
         config.training.learning_rate = 5e-5
-        config.training.mel_loss_weight = 45.0
+        config.training.mel_loss_weight = 2.5   # Fixed from 45.0 - was causing three-digit loss
         config.training.kl_loss_weight = 1.0
         config.training.weight_decay = 1e-6
         config.training.gradient_clip_norm = 1.0
@@ -487,8 +487,8 @@ def build_config(
         scheduler="noam",   # Will be updated to cosine_with_restarts via optimization level
         scheduler_params={},
 
-        # Optimized loss weights for fast convergence and voice cloning
-        mel_loss_weight=22.0,   # Reduced from 35.0 for better balance
+        # Fixed loss weights for proper convergence (addresses "لاس سه رقمیه" issue)
+        mel_loss_weight=2.5,    # Fixed from 22.0 - was still causing high loss values
         kl_loss_weight=1.8,     # Increased from 1.0 for regularization
         duration_loss_weight=0.8,  # Moderate duration loss
         pitch_loss_weight=0.12,

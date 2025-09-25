@@ -1116,9 +1116,11 @@ class XTTSTrainer:
                 # Cleanup per micro-batch
                 del outputs, y_true, y_pred, grads
         
-        # Clip and apply accumulated gradients once
+        # Clip and apply accumulated gradients with improved clipping
         if accumulated_gradients is not None:
-            accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=1.0)
+            # Use config-specified clipping or reasonable default
+            clip_norm = getattr(self.config.training, 'gradient_clip_norm', 0.5)
+            accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=clip_norm)
             self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
         
         # Average losses across micro-steps

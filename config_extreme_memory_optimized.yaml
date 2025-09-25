@@ -80,7 +80,7 @@ training:
   use_wandb: false
   wandb_project: "myxtts"
   
-  # Loss weights
-  mel_loss_weight: 45.0
+  # Fixed loss weights (addresses "لاس سه رقمیه" issue)
+  mel_loss_weight: 2.5   # Fixed from 45.0 - was causing three-digit loss values
   kl_loss_weight: 1.0
   duration_loss_weight: 1.0
