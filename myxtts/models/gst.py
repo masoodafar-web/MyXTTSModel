@@ -159,14 +159,6 @@ class GlobalStyleToken(tf.keras.layers.Layer):
         # Reference encoder for extracting prosody from reference audio
         self.reference_encoder = ReferenceEncoder(config, name="reference_encoder")
         
-        # Bank of learnable style tokens
-        self.style_tokens = self.add_weight(
-            name="style_tokens",
-            shape=(self.num_style_tokens, self.style_token_dim),
-            initializer="glorot_uniform",
-            trainable=True
-        )
-        
         # Multi-head attention for style selection
         self.multihead_attention = MultiHeadAttention(
             self.style_token_dim,
@@ -178,6 +170,18 @@ class GlobalStyleToken(tf.keras.layers.Layer):
         self.output_projection = tf.keras.layers.Dense(
             config.gst_style_embedding_dim,
             name="style_output_projection"
+        )
+        
+    def build(self, input_shape):
+        """Build layer - create style tokens here for proper distributed training."""
+        super().build(input_shape)
+        
+        # Bank of learnable style tokens - created in build for distributed compatibility
+        self.style_tokens = self.add_weight(
+            name="style_tokens",
+            shape=(self.num_style_tokens, self.style_token_dim),
+            initializer="glorot_uniform",
+            trainable=True
         )
         
     def call(

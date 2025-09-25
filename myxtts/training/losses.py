@@ -742,11 +742,30 @@ class XTTSLoss(tf.keras.losses.Loss):
             tf.constant(0.0, dtype=tf.float32)
         )
 
-        if not tf.reduce_all(tf.math.is_finite(self.loss_history)):
+        # Graph-safe loss history validation
+        def _reset_history():
             self.loss_history.assign(tf.zeros_like(self.loss_history))
+            return tf.constant(0.0)
+        
+        def _no_reset():
+            return tf.constant(0.0)
+        
+        tf.cond(
+            tf.reduce_all(tf.math.is_finite(self.loss_history)),
+            _no_reset,
+            _reset_history
+        )
 
-        if not tf.math.is_finite(self.running_total_loss):
+        # Graph-safe running total validation
+        def _reset_total():
             self.running_total_loss.assign(tf.constant(0.0, dtype=tf.float32))
+            return tf.constant(0.0)
+        
+        tf.cond(
+            tf.math.is_finite(self.running_total_loss),
+            _no_reset,
+            _reset_total
+        )
 
         history_length = tf.cast(tf.shape(self.loss_history)[0], self.history_index.dtype)
         history_idx = tf.math.mod(self.history_index, history_length)
@@ -775,38 +794,28 @@ class XTTSLoss(tf.keras.losses.Loss):
         )
         self.running_total_loss.assign(running_total)
 
-        if self.step_count > 10:
+        # Simplified graph-safe loss smoothing
+        def _apply_advanced_smoothing():
             recent_avg = tf.reduce_mean(recent_losses)
             recent_avg = tf.where(
                 tf.math.is_finite(recent_avg),
                 recent_avg,
                 current_loss
             )
-            denominator = recent_avg + 1e-8
-            spike_ratio = current_loss / denominator
-            spike_ratio = tf.where(
-                tf.math.is_finite(spike_ratio),
-                spike_ratio,
-                tf.ones_like(spike_ratio)
-            )
+            
+            # Simple smoothing without complex spike detection
+            smoothed = (1.0 - self.loss_smoothing_factor) * current_loss + \
+                      self.loss_smoothing_factor * running_total
+            return tf.where(tf.math.is_finite(smoothed), smoothed, current_loss)
+        
+        def _simple_smoothing():
+            return current_loss
 
-            max_spike = tf.cast(self.max_loss_spike_threshold, tf.float32)
-            safe_ratio = tf.where(spike_ratio <= 0.0, tf.ones_like(spike_ratio), spike_ratio)
-            dampening_factor = tf.minimum(max_spike / safe_ratio, 1.0)
-            dampening_factor = tf.where(
-                tf.math.is_finite(dampening_factor),
-                dampening_factor,
-                tf.ones_like(dampening_factor)
-            )
-
-            smoothed_loss = tf.where(
-                spike_ratio > max_spike,
-                current_loss * dampening_factor,
-                (1.0 - self.loss_smoothing_factor) * current_loss +
-                self.loss_smoothing_factor * running_total
-            )
-        else:
-            smoothed_loss = current_loss
+        smoothed_loss = tf.cond(
+            tf.greater(self.step_count, 10),
+            _apply_advanced_smoothing,
+            _simple_smoothing
+        )
 
         smoothed_loss = tf.where(
             tf.math.is_finite(smoothed_loss),
@@ -897,8 +906,19 @@ class XTTSLoss(tf.keras.losses.Loss):
                 loss_variance = tf.reduce_mean(tf.square(recent_losses - loss_mean))
                 metrics["loss_variance"] = loss_variance
                 metrics["loss_stability_score"] = tf.exp(-loss_variance)  # Higher = more stable
+            else:
+                # Initialize with default values for graph compatibility
+                metrics["loss_variance"] = tf.constant(0.0)
+                metrics["loss_stability_score"] = tf.constant(1.0)
             
             metrics["step_count"] = tf.cast(self.step_count, tf.float32)
+        else:
+            # Initialize all metrics for step_count <= 0
+            metrics["running_mel_loss"] = tf.constant(0.0)
+            metrics["running_total_loss"] = tf.constant(0.0)
+            metrics["loss_variance"] = tf.constant(0.0)
+            metrics["loss_stability_score"] = tf.constant(1.0)
+            metrics["step_count"] = tf.constant(0.0)
         
         return metrics
 

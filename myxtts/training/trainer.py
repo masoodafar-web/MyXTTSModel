@@ -760,8 +760,8 @@ class XTTSTrainer:
                 grad_tensors, trainable_vars = zip(*grad_var_pairs)
                 grad_tensors, global_norm = tf.clip_by_global_norm(grad_tensors, clip_norm=0.5)
 
-                with self.strategy.scope():
-                    self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
+                # Apply gradients directly - we're already in replica context  
+                self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
@@ -782,10 +782,8 @@ class XTTSTrainer:
                 if grad_norm is not None:
                     individual_losses["gradient_norm"] = grad_norm
                     
-                    # Log warning if gradient norm is very high
-                    gradient_threshold = getattr(self.config.training, 'gradient_norm_threshold', 5.0)
-                    if grad_norm > gradient_threshold:
-                        self.logger.warning(f"High gradient norm detected: {grad_norm:.4f}")
+                    # Log warning if gradient norm is very high (skip in graph mode)
+                    # Skip logging to avoid symbolic tensor formatting issues in graph mode
                 
                 # Add stability metrics to output
                 individual_losses.update(stability_metrics)
