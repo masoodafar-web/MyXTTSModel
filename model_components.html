@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="fa">
+<head>
+  <meta charset="utf-8">
+  <title>بخش‌های مدل MyXTTS</title>
+  <style>
+    body { font-family: sans-serif; line-height: 1.6; margin: 2rem; }
+    h1 { font-size: 1.8rem; margin-bottom: 1rem; }
+    ul { list-style: disc; margin-left: 1.5rem; }
+    li { margin-bottom: 0.4rem; }
+  </style>
+</head>
+<body>
+  <h1>بخش‌های اصلی مدل MyXTTS</h1>
+  <ul>
+    <li><strong>XTTS</strong>: کلاس مرکزی که تمام رمزگذارها، دیکودرها و vocoder را برای تولید گفتار یکپارچه می‌کند.</li>
+    <li><strong>TextEncoder</strong>: رمزگذار متنی مبتنی بر ترنسفورمر که توکن‌های ورودی را به بردارهای زمینه‌ای برای دیکودر تبدیل می‌کند.</li>
+    <li><strong>AudioEncoder</strong>: رمزگذار صوتی که از مل‌اسپکتروگرام مرجع ویژگی‌های گفتاری و شرط اسپیکر استخراج می‌کند.</li>
+    <li><strong>PretrainedSpeakerEncoder</strong>: لایهٔ پوششی برای بارگذاری و استفاده از رمزگذارهای سخنگو پیش‌آموزش‌دیده مانند ECAPA-TDNN یا Resemblyzer.</li>
+    <li><strong>ContrastiveSpeakerLoss</strong>: زیان مقابل‌گرای موضوعی که بردارهای اسپیکر را برای نزدیکی گویندگان مشابه منظم می‌کند.</li>
+    <li><strong>GlobalStyleToken</strong>: ماژولی با بانک توکن سبک که از طریق توجه چندسری امضای لحن و حس گفتار را استخراج می‌کند.</li>
+    <li><strong>ReferenceEncoder</strong>: رمزگذار مرجع درون GST که از مل مرجع بردار سبک اولیه را با کانولوشن و GRU به‌دست می‌آورد.</li>
+    <li><strong>ProsodyPredictor</strong>: پیش‌بینی‌کننده‌ای که با تکیه بر سبک، گام، انرژی و سرعت گفتار متن را تخمین می‌زند.</li>
+    <li><strong>MelDecoder</strong>: دیکودر اتورگرسیو که با توجه، مل‌فریم‌های جدید و نشانه توقف را از بردارهای متن و اسپیکر می‌سازد.</li>
+    <li><strong>NonAutoregressiveDecoder</strong>: دیکودر سریع به سبک FastSpeech که پس از تنظیم طول، مل‌ها را موازی تولید می‌کند.</li>
+    <li><strong>DurationPredictor</strong>: شبکهٔ کانولوشنی که طول هر توکن متن را برای هم‌راستاسازی غیراتورگرسیو برآورد می‌کند.</li>
+    <li><strong>LengthRegulator</strong>: لایه‌ای که خروجی رمزگذار متن را طبق طول‌های پیش‌بینی‌شده گسترش می‌دهد تا با طول مل هماهنگ شود.</li>
+    <li><strong>DecoderStrategy</strong>: رابطی که بسته به پیکربندی بین مسیر اتورگرسیو، غیراتورگرسیو یا دیفیوشن سوییچ می‌کند.</li>
+    <li><strong>DiffusionDecoder</strong>: شبکهٔ دیفیوشن مبتنی بر U-Net که با فرآیند نویززدایی مل‌های با کیفیت بالا تولید می‌کند.</li>
+    <li><strong>TimeEmbedding</strong>: جاسازی‌کنندهٔ زمان که گام دیفیوشن را به بردار شرطی‌سازی برای شبکهٔ نویززدایی تبدیل می‌کند.</li>
+    <li><strong>DiffusionBlock</strong>: بلوک پردازشی داخل دیکودر دیفیوشن که کانولوشن و شرطی‌سازی زمانی را ترکیب می‌کند.</li>
+    <li><strong>VocoderInterface</strong>: رابطی که نوع vocoder را مدیریت می‌کند و بین HiFi-GAN و گزینه‌های جایگزین سوئیچ می‌زند.</li>
+    <li><strong>HiFiGANGenerator</strong>: ژنراتور HiFi-GAN که مل را با شبکهٔ افزایشی و بلوک‌های باقیمانده به موج صوتی تبدیل می‌کند.</li>
+    <li><strong>ResidualBlock</strong>: بلوک‌های باقیماندهٔ HiFi-GAN که عمق مدل vocoder را بدون از بین رفتن گرادیان افزایش می‌دهند.</li>
+    <li><strong>VocoderLoss</strong>: زیان چندمقیاسی vocoder که تطابق مل و موج و ضرر تطبیق ویژگی را با هم جمع می‌کند.</li>
+    <li><strong>TransformerBlock</strong>: بلوک عمومی ترنسفورمر با توجه چندسری و فیدفوروارد که در رمزگذار و دیکودر به کار می‌رود.</li>
+    <li><strong>MultiHeadAttention</strong>: پیاده‌سازی توجه چندسری عمومی که در بلوک‌های ترنسفورمر برای مدل‌سازی روابط توکن استفاده می‌شود.</li>
+    <li><strong>PositionalEncoding</strong>: جاسازی موقعیتی سینوسی که ترتیب توکن‌ها و فریم‌ها را برای ترنسفورمر رمزگذاری می‌کند.</li>
+    <li><strong>FeedForward</strong>: لایهٔ فیدفوروارد دوناحیه‌ای که مرحلهٔ غیرخطی ترنسفورمر را پس از توجه تکمیل می‌کند.</li>
+    <li><strong>ConvolutionalLayer</strong>: لایهٔ کانولوشنی با نرمال‌سازی و دراپ‌اوت که استخراج ویژگی‌های محلی را در رمزگذار صوتی انجام می‌دهد.</li>
+  </ul>
+</body>
+</html>
