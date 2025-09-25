@@ -154,25 +154,23 @@ def attention_loss(
     Returns:
         Attention loss tensor
     """
-    batch_size = tf.shape(attention_weights)[0]
     mel_time = tf.shape(attention_weights)[2]
     text_time = tf.shape(attention_weights)[3]
-    
-    # Average over heads
+
+    # Average over heads – the loss operates on the aggregated alignment map.
     attention_weights = tf.reduce_mean(attention_weights, axis=1)  # [batch, mel_time, text_time]
-    
-    # Create expected monotonic alignment
-    mel_positions = tf.range(mel_time, dtype=tf.float32)
-    text_positions = tf.range(text_time, dtype=tf.float32)
-    
-    batch_indices = tf.range(batch_size)
+
+    # Compute an ideal monotonic alignment without using any Python-side loops.
+    mel_positions = tf.cast(tf.range(mel_time), tf.float32)[tf.newaxis, :]          # [1, mel_time]
+    text_positions = tf.cast(tf.range(text_time), tf.float32)[tf.newaxis, tf.newaxis, :]  # [1, 1, text_time]
+
     mel_lengths_f = tf.cast(tf.maximum(mel_lengths - 1, 1), tf.float32)
     text_lengths_f = tf.cast(tf.maximum(text_lengths - 1, 1), tf.float32)
-    alignment_ratio = tf.math.divide_no_nan(text_lengths_f, mel_lengths_f)  # [batch]
+    alignment_ratio = tf.math.divide_no_nan(text_lengths_f, mel_lengths_f)[:, tf.newaxis]  # [batch, 1]
 
-    expected_text_pos = alignment_ratio[:, tf.newaxis] * mel_positions[tf.newaxis, :]  # [batch, mel_time]
+    expected_text_pos = alignment_ratio * mel_positions  # [batch, mel_time]
+    diff = expected_text_pos[:, :, tf.newaxis] - text_positions  # [batch, mel_time, text_time]
 
-    diff = tf.expand_dims(expected_text_pos, axis=2) - text_positions[tf.newaxis, tf.newaxis, :]  # [batch, mel_time, text_time]
     gaussian = tf.exp(-0.5 * tf.square(diff) / 2.0)
     gaussian_sum = tf.reduce_sum(gaussian, axis=2, keepdims=True) + 1e-8
     expected_alignment = gaussian / gaussian_sum
