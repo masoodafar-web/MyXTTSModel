@@ -7,11 +7,21 @@ data loading, model training, validation, and checkpointing.
 
 import os
 import time
+import sys
 from typing import Dict, Optional, Tuple, Any
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 import wandb
+
+# Import Advanced GPU Stabilizer for consistent GPU utilization
+try:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+    from advanced_gpu_stabilizer import AdvancedGPUStabilizer, setup_advanced_gpu_optimization
+    GPU_STABILIZER_AVAILABLE = True
+except ImportError as e:
+    GPU_STABILIZER_AVAILABLE = False
+    print(f"Warning: Advanced GPU Stabilizer not available: {e}")
 
 from ..models.xtts import XTTS
 from ..data.ljspeech import LJSpeechDataset
@@ -129,6 +139,21 @@ class XTTSTrainer:
                     self.logger.info(f"GPU Memory - Current: {gpu_memory['current'] / 1024**3:.1f}GB, Peak: {gpu_memory['peak'] / 1024**3:.1f}GB")
             except Exception:
                 pass
+
+        # Initialize Advanced GPU Stabilizer for consistent GPU utilization
+        self.gpu_stabilizer = None
+        if GPU_STABILIZER_AVAILABLE and self.device == "GPU":
+            try:
+                self.gpu_stabilizer = AdvancedGPUStabilizer(
+                    max_prefetch_batches=32,
+                    num_prefetch_threads=12,
+                    memory_fraction=0.9,
+                    enable_memory_pinning=True,
+                    aggressive_mode=True
+                )
+                self.logger.info("🚀 Advanced GPU Stabilizer initialized for consistent GPU utilization")
+            except Exception as e:
+                self.logger.warning(f"Could not initialize GPU Stabilizer: {e}")
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
@@ -1524,12 +1549,33 @@ class XTTSTrainer:
         train_dataset: tf.data.Dataset,
         steps_per_epoch: Optional[int] = None
     ) -> Dict[str, float]:
-        """Train for one epoch."""
+        """Train for one epoch with GPU stabilization."""
         train_losses = {}
         num_batches = 0
         
+        # Setup GPU-stabilized data loading if available
+        if self.gpu_stabilizer and hasattr(train_dataset, '__iter__'):
+            try:
+                # Create optimized DataLoader wrapper for TensorFlow dataset
+                self.logger.info("🔧 Setting up GPU-stabilized data loading...")
+                
+                # Start aggressive prefetching
+                dataset_iter = iter(train_dataset)
+                self.gpu_stabilizer.start_aggressive_prefetching_tf(dataset_iter)
+                
+                # Use stabilized data loading
+                use_stabilized_loading = True
+                self.logger.info("✅ GPU-stabilized data loading active")
+                
+            except Exception as e:
+                self.logger.warning(f"Could not setup GPU stabilization: {e}")
+                dataset_iter = iter(train_dataset)
+                use_stabilized_loading = False
+        else:
+            dataset_iter = iter(train_dataset)
+            use_stabilized_loading = False
+        
         # Use tqdm for progress bar
-        dataset_iter = iter(train_dataset)
         if steps_per_epoch:
             pbar = tqdm(range(steps_per_epoch), desc=f"Epoch {self.current_epoch}")
         else:
@@ -1543,8 +1589,15 @@ class XTTSTrainer:
                 # Measure data loading time
                 data_start_time = time.perf_counter()
                 
-                # Get batch
-                if steps_per_epoch:
+                # Get batch - use stabilized loading if available
+                if use_stabilized_loading and self.gpu_stabilizer:
+                    try:
+                        batch = self.gpu_stabilizer.get_next_batch_tf(timeout=30)
+                    except Exception as e:
+                        self.logger.warning(f"Stabilized loading failed, falling back: {e}")
+                        batch = next(dataset_iter)
+                        use_stabilized_loading = False
+                elif steps_per_epoch:
                     batch = next(dataset_iter)
                 else:
                     batch = step

@@ -73,13 +73,15 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'batch_size': 48,
             'gradient_accumulation_steps': 1,
             'max_attention_sequence_length': 512,
-            'max_memory_fraction': 0.90,
+            'max_memory_fraction': 0.85,  # Reduced to prevent OOM during async prefetching
             'enable_gradient_checkpointing': False,
             'text_encoder_dim': 512,
             'decoder_dim': 1536,  # Keep divisible by decoder heads (24)
             'num_workers': 16,
-            'prefetch_buffer_size': 32,
-            'shuffle_buffer_multiplier': 48,
+            'prefetch_buffer_size': 48,  # Increased for better GPU utilization
+            'shuffle_buffer_multiplier': 64,  # Increased
+            'prefetch_factor': 8,  # New parameter for DataLoader
+            'persistent_workers': True,
             'description': "High-end GPU (20GB+)"
         }
     elif gpu_memory_mb >= 12000:  # 12-20GB (RTX 3080 Ti, RTX 4070 Ti, etc.)
@@ -87,13 +89,15 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'batch_size': 32,
             'gradient_accumulation_steps': 1,
             'max_attention_sequence_length': 512,
-            'max_memory_fraction': 0.85,
+            'max_memory_fraction': 0.80,  # Reduced for async prefetching
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 384,
             'decoder_dim': 768,   # 24 heads -> 32-dim per head
             'num_workers': 12,
-            'prefetch_buffer_size': 24,
-            'shuffle_buffer_multiplier': 40,
+            'prefetch_buffer_size': 32,  # Increased
+            'shuffle_buffer_multiplier': 48,  # Increased
+            'prefetch_factor': 6,  # New parameter
+            'persistent_workers': True,
             'description': "Mid-range GPU (12-20GB)"
         }
     elif gpu_memory_mb >= 8000:   # 8-12GB (RTX 3070, RTX 4060 Ti, etc.)
@@ -101,13 +105,15 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'batch_size': 16,
             'gradient_accumulation_steps': 2,
             'max_attention_sequence_length': 384,
-            'max_memory_fraction': 0.75,
+            'max_memory_fraction': 0.70,  # Reduced for stability
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 256,
             'decoder_dim': 576,   # Still divisible by 24 heads while staying compact
             'num_workers': 8,
-            'prefetch_buffer_size': 18,
-            'shuffle_buffer_multiplier': 32,
+            'prefetch_buffer_size': 24,  # Increased
+            'shuffle_buffer_multiplier': 36,  # Increased
+            'prefetch_factor': 4,  # New parameter
+            'persistent_workers': True,
             'description': "Entry-level GPU (8-12GB)"
         }
     else:  # <8GB
@@ -115,13 +121,15 @@ def get_recommended_settings(gpu_memory_mb: int) -> Dict[str, Any]:
             'batch_size': 8,
             'gradient_accumulation_steps': 4,
             'max_attention_sequence_length': 256,
-            'max_memory_fraction': 0.65,
+            'max_memory_fraction': 0.60,  # Reduced for safety
             'enable_gradient_checkpointing': True,
             'text_encoder_dim': 128,
             'decoder_dim': 384,   # Minimum size that respects 24-way attention split
             'num_workers': 4,
-            'prefetch_buffer_size': 12,
-            'shuffle_buffer_multiplier': 24,
+            'prefetch_buffer_size': 16,  # Increased slightly
+            'shuffle_buffer_multiplier': 28,  # Increased
+            'prefetch_factor': 3,  # New parameter
+            'persistent_workers': True,
             'description': "Low-memory GPU (<8GB)"
         }
 

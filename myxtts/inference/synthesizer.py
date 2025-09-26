@@ -183,6 +183,11 @@ class XTTSInference:
         
         # Extract generated mel spectrogram
         mel_spectrogram = outputs["mel_output"].numpy()[0]  # Remove batch dimension
+        
+        # Debug: Log mel spectrogram shape
+        self.logger.info(f"Generated mel spectrogram shape: {mel_spectrogram.shape}")
+        if mel_spectrogram.size == 0:
+            self.logger.error("Generated mel spectrogram is empty!")
 
         # Convert mel to waveform using neural vocoder when available
         if generate_neural_audio and "audio_output" in outputs:
@@ -364,13 +369,27 @@ class XTTSInference:
     
     def _postprocess_audio(self, audio: np.ndarray) -> np.ndarray:
         """Post-process generated audio."""
+        # Check if audio is empty
+        if audio.size == 0:
+            self.logger.warning("Generated audio is empty, returning silence")
+            return np.zeros(int(0.1 * self.config.model.sample_rate), dtype=np.float32)  # 0.1 second of silence
+        
         # Trim silence
         if self.config.data.trim_silence:
             audio, _ = librosa.effects.trim(audio, top_db=20)
+            
+            # Check again after trimming
+            if audio.size == 0:
+                self.logger.warning("Audio became empty after trimming silence")
+                return np.zeros(int(0.1 * self.config.model.sample_rate), dtype=np.float32)
         
         # Normalize
         if self.config.data.normalize_audio:
-            audio = audio / np.max(np.abs(audio)) * 0.9
+            max_val = np.max(np.abs(audio))
+            if max_val > 0:
+                audio = audio / max_val * 0.9
+            else:
+                self.logger.warning("Audio has zero amplitude, skipping normalization")
         
         # Ensure proper data type
         audio = audio.astype(np.float32)

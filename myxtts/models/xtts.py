@@ -586,8 +586,8 @@ class XTTS(tf.keras.Model):
                 dtype=tf.float32
             )
         
-        # Encode text (always with duration prediction during training for consistent gradients)
-        if training:
+        # Encode text (duration prediction controlled by config)
+        if training and self.config.use_duration_predictor:
             text_encoded, duration_pred = self.text_encoder(
                 text_inputs,
                 attention_mask=text_mask,
@@ -799,8 +799,8 @@ class XTTS(tf.keras.Model):
         if speaker_embedding is not None:
             outputs["speaker_embedding"] = speaker_embedding
             
-        # Add duration predictions during training (always include to prevent gradient warnings)
-        if training and duration_pred is not None:
+        # Add duration predictions during training if enabled
+        if training and self.config.use_duration_predictor and duration_pred is not None:
             outputs["duration_pred"] = duration_pred
         if training and attention_weights is not None:
             outputs["attention_weights"] = attention_weights
@@ -882,7 +882,7 @@ class XTTS(tf.keras.Model):
             for step in range(max_length):
                 # Decode current step
                 if hasattr(self, 'mel_decoder'):
-                    mel_output, stop_tokens = self.mel_decoder(
+                    mel_output, stop_tokens, pitch_output, energy_output = self.mel_decoder(
                         current_mel,
                         text_encoded,
                         speaker_embedding=speaker_embedding,
@@ -911,7 +911,12 @@ class XTTS(tf.keras.Model):
                 current_mel = tf.concat([current_mel, mel_frame], axis=1)
                 
                 # Check for stop condition
-                if tf.reduce_all(stop_prob > 0.5):
+                stop_prob_value = float(tf.reduce_mean(stop_prob))
+                if step == 0:  # Never stop on the first frame
+                    continue
+                elif step > 5 and stop_prob_value > 0.8:  # More conservative stop condition
+                    break
+                elif step > max_length * 0.8:  # Safety break if we're near max length
                     break
             
             # Concatenate all frames

@@ -97,6 +97,9 @@ class AudioProcessor:
             fmin=fmin,
             fmax=self.fmax
         )
+        
+        # Also initialize mel_basis for backward compatibility
+        self.mel_basis = self.mel_filters
     
     def _init_vad_model(self):
         """Initialize Silero VAD model."""
@@ -196,15 +199,6 @@ class AudioProcessor:
         except Exception as e:
             print(f"Warning: Loudness normalization failed: {e}")
             return audio
-        
-        # Create mel filter bank
-        self.mel_basis = librosa.filters.mel(
-            sr=self.sample_rate,
-            n_fft=self.n_fft,
-            n_mels=self.n_mels,
-            fmin=self.fmin,
-            fmax=self.fmax
-        )
     
     def load_audio(
         self, 

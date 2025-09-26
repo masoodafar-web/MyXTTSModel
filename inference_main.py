@@ -35,16 +35,16 @@ USAGE EXAMPLES:
 ===============
 
 Basic voice cloning:
-  python3 inference_main.py --text "Hello world" --reference-audio speaker.wav --clone-voice
+  python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --reference-audio speaker.wav --clone-voice --model-size tiny
 
 Advanced voice cloning with custom parameters:
-  python3 inference_main.py --text "Hello world" --reference-audio speaker.wav --clone-voice --voice-cloning-temperature 0.6 --voice-conditioning-strength 1.2
+  python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --reference-audio speaker.wav --clone-voice --voice-cloning-temperature 0.6 --voice-conditioning-strength 1.2
 
 Multiple reference audios for voice blending:
-  python3 inference_main.py --text "Hello world" --multiple-reference-audios speaker1.wav speaker2.wav --clone-voice
+  python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --multiple-reference-audios speaker1.wav speaker2.wav --clone-voice
 
 High-quality synthesis without voice cloning:
-  python3 inference_main.py --text "Hello world" --temperature 0.8
+  python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --temperature 0.8
 """
 
 from __future__ import annotations
