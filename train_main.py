@@ -215,14 +215,20 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
     
     if level == "basic":
         # Fixed parameters for stable training (addresses "لاس سه رقمیه" issue)
-        config.training.learning_rate = 5e-5
-        config.training.mel_loss_weight = 2.5   # Fixed from 45.0 - was causing three-digit loss
-        config.training.kl_loss_weight = 1.0
-        config.training.weight_decay = 1e-6
-        config.training.gradient_clip_norm = 1.0
-        config.training.warmup_steps = 2000
+        config.training.learning_rate = 1e-5    # Much lower for stability
+        config.training.mel_loss_weight = 1.0    # Much lower - key fix for NaN issue
+        config.training.kl_loss_weight = 0.5     # Reduced for balance
+        config.training.weight_decay = 1e-7      # Lower weight decay
+        config.training.gradient_clip_norm = 0.5 # Tighter gradient clipping
+        config.training.warmup_steps = 3000      # Longer warmup
         config.training.scheduler = "noam"
-        logger.info("✅ Applied BASIC optimization level (original parameters)")
+        
+        # Disable problematic features
+        config.training.use_adaptive_loss_weights = False
+        config.training.use_label_smoothing = False
+        config.training.use_huber_loss = False
+        
+        logger.info("✅ Applied BASIC optimization level (NaN-safe parameters)")
         return config
     
     elif level == "enhanced":
