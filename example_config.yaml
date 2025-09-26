@@ -74,7 +74,7 @@ training:
   kl_loss_weight: 1.0
   learning_rate: 5.0e-05
   log_step: 100
-  mel_loss_weight: 45.0
+  mel_loss_weight: 2.5
   optimizer: adamw
   save_step: 1000
   scheduler: noam

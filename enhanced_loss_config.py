@@ -51,7 +51,7 @@ class FastConvergenceOptimizer:
             
             # ==== OPTIMIZED LOSS WEIGHTS ====
             # Fine-tuned based on convergence analysis
-            'mel_loss_weight': 22.0,  # Reduced from 35.0 for better balance
+            'mel_loss_weight': 2.5,  # Fixed from 22.0 for optimal balance
             'kl_loss_weight': 1.8,    # Slightly increased for regularization
             'stop_loss_weight': 1.5,  # Moderate weight for stop prediction
             'attention_loss_weight': 0.3,  # Light attention guidance
@@ -257,7 +257,7 @@ class FastConvergenceOptimizer:
         
         # Apply critical optimizations
         critical_updates = {
-            'mel_loss_weight': 22.0,
+            'mel_loss_weight': 2.5,
             'learning_rate': 8e-5,
             'gradient_clip_norm': 0.8,
             'use_adaptive_loss_weights': True,

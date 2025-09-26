@@ -71,7 +71,7 @@ training:
   # Loss weights
   mel_loss_weight: 1.0
   duration_loss_weight: 1.0  # For non-autoregressive training
-  vocoder_mel_loss_weight: 30.0  # Reduced for faster convergence
+  vocoder_mel_loss_weight: 2.5  # Fixed for stability
   vocoder_feature_loss_weight: 1.5
 
 data:

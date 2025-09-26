@@ -71,7 +71,7 @@ training:
   # Loss weights
   mel_loss_weight: 1.0
   stop_loss_weight: 0.5
-  vocoder_mel_loss_weight: 45.0
+  vocoder_mel_loss_weight: 2.5
   vocoder_feature_loss_weight: 2.0
 
 data:

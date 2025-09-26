@@ -117,7 +117,7 @@ class CompleteValidator:
                     'training': {
                         'epochs': 100,
                         'learning_rate': 1e-4,
-                        'mel_loss_weight': 35.0,
+                        'mel_loss_weight': 2.5,
                         'kl_loss_weight': 1.0,
                         'use_adaptive_loss_weights': True,
                         'loss_smoothing_factor': 0.1
@@ -349,7 +349,7 @@ LJ001-0003|Final test sentence to verify structure.|Final test sentence to verif
                     'eps': 1e-8,
                     
                     # OPTIMIZED LOSS WEIGHTS for fast convergence
-                    'mel_loss_weight': 22.0,            # Reduced from 35.0 for balance
+                    'mel_loss_weight': 2.5,            # Fixed from 22.0 for stability
                     'kl_loss_weight': 1.8,              # Increased for regularization
                     'stop_loss_weight': 1.5,            # Moderate stop token weight
                     'attention_loss_weight': 0.3,       # Light attention guidance

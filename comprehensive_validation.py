@@ -74,7 +74,7 @@ class ComprehensiveValidator:
         
         # Training configuration - optimized for convergence
         config.training.learning_rate = 1e-4
-        config.training.mel_loss_weight = 35.0
+        config.training.mel_loss_weight = 2.5
         config.training.kl_loss_weight = 1.0
         config.training.gradient_clip_norm = 1.0
         config.training.warmup_steps = 1000

@@ -271,7 +271,7 @@ class VocoderLoss(tf.keras.layers.Layer):
         self.feature_loss_weight = 2.0
         
         # Mel spectrogram loss weight
-        self.mel_loss_weight = 45.0
+        self.mel_loss_weight = 2.5
     
     def call(
         self,

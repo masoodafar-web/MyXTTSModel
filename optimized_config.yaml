@@ -52,7 +52,7 @@ training:
   cosine_restarts: true
   restart_period: 8000
   restart_mult: 0.8
-  mel_loss_weight: 22.0
+  mel_loss_weight: 2.5
   kl_loss_weight: 1.8
   stop_loss_weight: 1.5
   attention_loss_weight: 0.3

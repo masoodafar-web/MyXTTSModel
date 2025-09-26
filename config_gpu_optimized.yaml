@@ -28,7 +28,7 @@ training:
   max_memory_fraction: 0.85          # Use 85% of GPU memory max
   
   # Loss weights
-  mel_loss_weight: 45.0
+  mel_loss_weight: 2.5
   kl_loss_weight: 1.0
   
   # Checkpointing
