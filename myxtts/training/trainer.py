@@ -35,7 +35,8 @@ from ..utils.commons import (
     get_device,
     configure_gpus,
     ensure_gpu_placement,
-    setup_gpu_strategy
+    setup_gpu_strategy,
+    get_device_context,
 )
 from .losses import XTTSLoss, create_stop_targets
 
@@ -98,15 +99,16 @@ class XTTSTrainer:
         # Memory optimization settings
         self.gradient_accumulation_steps = getattr(config.training, 'gradient_accumulation_steps', 1)
         self.enable_memory_cleanup = getattr(config.training, 'enable_memory_cleanup', True)
+        # Avoid clearing sessions or forcing device ops mid-graph under MirroredStrategy
+        if getattr(config.training, 'multi_gpu', False):
+            self.enable_memory_cleanup = False
+            self.logger.debug("Disabled periodic memory cleanup under MirroredStrategy to avoid graph resets")
 
         if self.gradient_accumulation_steps > 1:
+            # Enable gradient accumulation for both single and multi-GPU training
+            self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
             if getattr(config.training, 'multi_gpu', False):
-                self.logger.warning(
-                    "Gradient accumulation is not supported with multi-GPU training; disabling accumulation."
-                )
-                self.gradient_accumulation_steps = 1
-            else:
-                self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
+                self.logger.info("Multi-GPU training with gradient accumulation - using per-replica accumulation")
         
         # Setup distribution strategy based on configuration
         self.strategy = setup_gpu_strategy(
@@ -157,9 +159,8 @@ class XTTSTrainer:
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
-            # CRITICAL FIX: Ensure model is created on GPU
-            device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
-            with device_context:
+            # CRITICAL FIX: Ensure model is created with strategy-managed placement
+            with get_device_context():
                 # Initialize model
                 if model is None:
                     self.model = XTTS(config.model)
@@ -175,20 +176,19 @@ class XTTSTrainer:
                         dummy_text_len = tf.constant([10], dtype=tf.int32)
                         dummy_mel_len = tf.constant([20], dtype=tf.int32)
                         
-                        with tf.device('/GPU:0'):
-                            dummy_text = tf.cast(dummy_text, tf.int32)
-                            dummy_mel = tf.cast(dummy_mel, tf.float32)
-                            dummy_text_len = tf.cast(dummy_text_len, tf.int32)
-                            dummy_mel_len = tf.cast(dummy_mel_len, tf.int32)
-                            
-                            _ = self.model(
-                                text_inputs=dummy_text,
-                                mel_inputs=dummy_mel,
-                                text_lengths=dummy_text_len,
-                                mel_lengths=dummy_mel_len,
-                                training=False
-                            )
-                            self.logger.debug("Model successfully built on GPU")
+                        dummy_text = tf.cast(dummy_text, tf.int32)
+                        dummy_mel = tf.cast(dummy_mel, tf.float32)
+                        dummy_text_len = tf.cast(dummy_text_len, tf.int32)
+                        dummy_mel_len = tf.cast(dummy_mel_len, tf.int32)
+
+                        _ = self.model(
+                            text_inputs=dummy_text,
+                            mel_inputs=dummy_mel,
+                            text_lengths=dummy_text_len,
+                            mel_lengths=dummy_mel_len,
+                            training=False
+                        )
+                        self.logger.debug("Model successfully built on GPU")
                     except Exception as e:
                         self.logger.debug(f"Model GPU initialization note: {e}")
             
@@ -564,9 +564,7 @@ class XTTSTrainer:
             Dictionary with loss values
         """
         # CRITICAL FIX: Wrap entire training step in GPU device context
-        device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
-        
-        with device_context:
+        with get_device_context():
             # Memory optimization: cap text/mel lengths independently to avoid OOM
             max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
             if max_text_len:
@@ -785,8 +783,8 @@ class XTTSTrainer:
                 grad_tensors, trainable_vars = zip(*grad_var_pairs)
                 grad_tensors, global_norm = tf.clip_by_global_norm(grad_tensors, clip_norm=0.5)
 
-                with self.strategy.scope():
-                    self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
+                # Apply gradients (already in distributed context, no need for strategy.scope())
+                self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
@@ -807,10 +805,7 @@ class XTTSTrainer:
                 if grad_norm is not None:
                     individual_losses["gradient_norm"] = grad_norm
                     
-                    # Log warning if gradient norm is very high
-                    gradient_threshold = getattr(self.config.training, 'gradient_norm_threshold', 5.0)
-                    if grad_norm > gradient_threshold:
-                        self.logger.warning(f"High gradient norm detected: {grad_norm:.4f}")
+                    # Note: Gradient norm logging removed for Graph mode compatibility
                 
                 # Add stability metrics to output
                 individual_losses.update(stability_metrics)
@@ -1042,9 +1037,7 @@ class XTTSTrainer:
         total_losses = {}
         
         # Reuse device context and placement logic similar to train_step
-        device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
-        
-        with device_context:
+        with get_device_context():
             for step in range(accumulation_steps):
                 start_idx = step * micro_batch_size
                 end_idx = min((step + 1) * micro_batch_size, tf.shape(text_sequences)[0])
@@ -1314,13 +1307,20 @@ class XTTSTrainer:
     def cleanup_gpu_memory(self):
         """Clean up GPU memory to prevent fragmentation."""
         if self.device == "GPU":
+            # Do not clear session under MirroredStrategy to avoid invalidating graphs
+            try:
+                strategy = tf.distribute.get_strategy()
+                if isinstance(strategy, tf.distribute.MirroredStrategy):
+                    return
+            except Exception:
+                pass
             tf.keras.backend.clear_session()
             import gc
             gc.collect()
             
             # Force GPU memory cleanup
             try:
-                with tf.device('/GPU:0'):
+                with get_device_context():
                     # Create and delete a small tensor to trigger cleanup
                     temp = tf.ones([1, 1])
                     del temp
@@ -1371,9 +1371,7 @@ class XTTSTrainer:
             Dictionary with loss values
         """
         # CRITICAL FIX: Wrap entire validation step in GPU device context
-        device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
-        
-        with device_context:
+        with get_device_context():
             # Ensure tensors are on GPU if available
             if self.device == "GPU":
                 text_sequences = ensure_gpu_placement(text_sequences)
@@ -1610,28 +1608,26 @@ class XTTSTrainer:
                 compute_start_time = time.perf_counter()
                 
                 # ENHANCED: Ensure proper device placement for training steps
-                device_context = tf.device('/GPU:0') if self.device == "GPU" else tf.device('/CPU:0')
-                
-                with device_context:
+                with get_device_context():
                     # Ensure tensors are on correct device
                     text_sequences = ensure_gpu_placement(text_sequences) if self.device == "GPU" else text_sequences
                     mel_spectrograms = ensure_gpu_placement(mel_spectrograms) if self.device == "GPU" else mel_spectrograms
                     text_lengths = ensure_gpu_placement(text_lengths) if self.device == "GPU" else text_lengths
                     mel_lengths = ensure_gpu_placement(mel_lengths) if self.device == "GPU" else mel_lengths
                     
-                    # Training step: use gradient accumulation if configured
-                    if self.gradient_accumulation_steps > 1:
-                        # Use gradient accumulation for memory efficiency
+                    # Training step: prioritize distributed training for multi-GPU
+                    if (
+                        getattr(self.config.training, 'multi_gpu', False)
+                        and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+                    ):
+                        # Multi-GPU: use distributed training step (handles gradient accumulation internally)
+                        step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
+                    elif self.gradient_accumulation_steps > 1:
+                        # Single-GPU: use gradient accumulation for memory efficiency
                         step_losses = self.train_step_with_accumulation(
                             (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
                             accumulation_steps=self.gradient_accumulation_steps
                         )
-                    elif (
-                        getattr(self.config.training, 'multi_gpu', False)
-                        and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-                    ):
-                        # Multi-GPU: use distributed training step
-                        step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
                     else:
                         # Use regular training step
                         step_losses = self.train_step(
