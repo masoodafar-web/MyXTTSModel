@@ -9,6 +9,7 @@ import os
 import json
 import pickle
 import tensorflow as tf
+from contextlib import nullcontext
 from typing import Dict, Any, Optional, List
 import logging
 
@@ -227,37 +228,52 @@ def setup_gpu_strategy(enable_multi_gpu: bool = False):
 
 def ensure_gpu_placement(tensor):
     """
-    Ensure a tensor is placed on GPU if available.
-    
-    Args:
-        tensor: TensorFlow tensor
-        
-    Returns:
-        Tensor placed on GPU if available, otherwise CPU
+    Ensure a tensor is placed on GPU when appropriate.
+
+    Strategy-aware behavior:
+    - Under MirroredStrategy (multi-GPU), DO NOT force placement; let the
+      strategy handle replica device placement to avoid cross-device copies.
+    - Otherwise (single GPU), gently coerce to GPU:0 for better locality.
     """
+    try:
+        strategy = tf.distribute.get_strategy()
+        num_replicas = getattr(strategy, 'num_replicas_in_sync', 1)
+        if num_replicas and num_replicas > 1:
+            # In distributed context: return as-is
+            return tensor
+    except Exception:
+        pass
+
+    # Non-distributed path: move to GPU:0 if available
     if tf.config.list_physical_devices('GPU'):
         with tf.device('/GPU:0'):
-            # Use tf.cast to force tensor movement to GPU memory
-            # tf.identity alone might not move the tensor
             if tensor.dtype == tf.float64:
-                return tf.cast(tensor, tf.float32)  # Convert to float32 for GPU efficiency
-            else:
-                return tf.cast(tensor, tensor.dtype)  # Force movement to GPU
+                return tf.cast(tensor, tf.float32)
+            return tf.cast(tensor, tensor.dtype)
     return tensor
 
 
 def get_device_context():
     """
-    Get the appropriate device context for layer creation.
-    
-    Returns:
-        Device context manager
+    Return an appropriate device context manager for ops/variable creation.
+
+    Strategy-aware behavior:
+    - Under MirroredStrategy (multi-GPU), return a no-op context so the
+      strategy can place variables/ops on each replica.
+    - Otherwise, prefer GPU:0 when available, else CPU:0.
     """
+    try:
+        strategy = tf.distribute.get_strategy()
+        num_replicas = getattr(strategy, 'num_replicas_in_sync', 1)
+        if num_replicas and num_replicas > 1:
+            return nullcontext()
+    except Exception:
+        pass
+
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         return tf.device('/GPU:0')
-    else:
-        return tf.device('/CPU:0')
+    return tf.device('/CPU:0')
 
 
 def create_dropout_layer(rate: float, seed: Optional[int] = None, name: str = "dropout"):

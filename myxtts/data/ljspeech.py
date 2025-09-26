@@ -1111,7 +1111,8 @@ class LJSpeechDataset:
         use_cache_files: bool = True,
         memory_cache: bool = False,
         num_parallel_calls: Optional[int] = None,
-        buffer_size_multiplier: int = 10
+        buffer_size_multiplier: int = 10,
+        drop_remainder: bool = False,
     ) -> tf.data.Dataset:
         """
         Create optimized TensorFlow dataset with minimal CPU overhead.
@@ -1187,12 +1188,13 @@ class LJSpeechDataset:
                     mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
                 if max_tokens > 0 and tokens.shape[0] > max_tokens:
                     tokens = tokens[:max_tokens]
-                text_len = np.array([tokens.shape[0]], dtype=np.int32)
+                # Return scalar lengths to simplify batching and distribution
+                text_len = np.int32(tokens.shape[0])
 
                 mel_frames_cap = getattr(self.config, 'max_mel_frames', None)
                 if mel_frames_cap and mel.shape[0] > mel_frames_cap:
                     mel = mel[:mel_frames_cap]
-                mel_len = np.array([mel.shape[0]], dtype=np.int32)
+                mel_len = np.int32(mel.shape[0])
                 return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
 
             def _load_from_cache_optimized(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor,
@@ -1204,9 +1206,10 @@ class LJSpeechDataset:
                 )
                 tokens.set_shape([None])
                 mel.set_shape([None, self.audio_processor.n_mels])
-                text_len.set_shape([1])
-                mel_len.set_shape([1])
-                return tokens, mel, tf.squeeze(text_len, axis=0), tf.squeeze(mel_len, axis=0)
+                text_len.set_shape([])
+                mel_len.set_shape([])
+                # Already scalar lengths; return as-is
+                return tokens, mel, text_len, mel_len
 
             # Map with parallel processing
             dataset = ds.map(
@@ -1309,7 +1312,7 @@ class LJSpeechDataset:
                 tf.constant(0, dtype=tf.int32),
                 tf.constant(0, dtype=tf.int32)
             ),
-            drop_remainder=False  # Keep all data
+            drop_remainder=drop_remainder
         )
 
         # Repeat dataset for training
@@ -1329,7 +1332,10 @@ class LJSpeechDataset:
             
             if use_enhanced_prefetch and bool(getattr(self.config, 'prefetch_to_gpu', True)):
                 gpus = tf.config.list_logical_devices('GPU')
-                if gpus and len(gpus) > 0:
+                # Under multi-GPU (MirroredStrategy), avoid pinning prefetch to GPU:0.
+                # Let the distribution strategy handle input placement.
+                multi_gpu = len(gpus) > 1
+                if gpus and len(gpus) > 0 and not multi_gpu:
                     gpu_device = '/GPU:0'
                     
                     # Intelligent buffer sizing based on hardware and auto-tuning
@@ -1349,6 +1355,7 @@ class LJSpeechDataset:
                             buffer_size=gpu_buf
                         )
                     )
+                # If multi-GPU, keep host prefetching only (strategy will shard inputs)
                     
                     # Additional optimization: Enable GPU memory growth to avoid fragmentation
                     if getattr(self.config, 'optimize_cpu_gpu_overlap', True):

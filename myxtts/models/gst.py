@@ -48,21 +48,30 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         k = self.split_heads(k, batch_size)  # (batch_size, num_heads, seq_len_k, depth)
         v = self.split_heads(v, batch_size)  # (batch_size, num_heads, seq_len_v, depth)
         
-        # Scaled dot-product attention
-        attention_weights = tf.matmul(q, k, transpose_b=True)  # (batch_size, num_heads, seq_len_q, seq_len_k)
-        attention_weights = attention_weights / tf.math.sqrt(tf.cast(self.depth, tf.float32))
-        
+        # Scaled dot-product attention in float32 for stability
+        q32 = tf.cast(q, tf.float32)
+        k32 = tf.cast(k, tf.float32)
+        v32 = tf.cast(v, tf.float32)
+        attn_scores32 = tf.matmul(q32, k32, transpose_b=True)  # (batch, heads, q_len, k_len)
+        scale32 = tf.math.sqrt(tf.cast(self.depth, tf.float32))
+        attn_weights32 = attn_scores32 / scale32
+
         if mask is not None:
-            attention_weights += (mask * -1e9)
-            
-        attention_weights = tf.nn.softmax(attention_weights, axis=-1)
+            mask32 = tf.cast(mask, tf.float32)
+            attn_weights32 += (mask32 * tf.cast(-1e9, tf.float32))
+
+        attn_weights32 = tf.nn.softmax(attn_weights32, axis=-1)
         
         # Apply attention to values
-        attention_output = tf.matmul(attention_weights, v)  # (batch_size, num_heads, seq_len_q, depth)
+        attention_output32 = tf.matmul(attn_weights32, v32)  # (batch_size, num_heads, seq_len_q, depth)
         
         # Concatenate heads
-        attention_output = tf.transpose(attention_output, perm=[0, 2, 1, 3])
+        attention_output = tf.transpose(attention_output32, perm=[0, 2, 1, 3])
         attention_output = tf.reshape(attention_output, (batch_size, -1, self.d_model))
+        attention_output = tf.cast(attention_output, query.dtype)
+
+        # Cast attention weights to match input dtype for consistency
+        attention_weights = tf.cast(attn_weights32, query.dtype)
         
         # Final linear projection
         output = self.dense(attention_output)

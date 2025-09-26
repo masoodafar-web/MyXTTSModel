@@ -98,9 +98,16 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         Returns:
             Tuple of (attention_output, attention_weights)
         """
+        # Compute attention in float32 for numerical stability, cast back at the end
+        orig_dtype = q.dtype
+        q32 = tf.cast(q, tf.float32)
+        k32 = tf.cast(k, tf.float32)
+        v32 = tf.cast(v, tf.float32)
+        mask32 = tf.cast(mask, tf.float32) if mask is not None else None
+
         # Get sequence lengths
-        q_seq_len = tf.shape(q)[2]
-        k_seq_len = tf.shape(k)[2]
+        q_seq_len = tf.shape(q32)[2]
+        k_seq_len = tf.shape(k32)[2]
         
         # Memory optimization: limit maximum sequence length for attention
         # Use a generous cap so inference up to ~2k frames is unaffected.
@@ -113,60 +120,59 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         )
 
         def _truncate_qkv():
-            truncated_q = q[:, :, :max_seq_len, :]
-            truncated_k = k[:, :, :max_seq_len, :]
-            truncated_v = v[:, :, :max_seq_len, :]
+            truncated_q = q32[:, :, :max_seq_len, :]
+            truncated_k = k32[:, :, :max_seq_len, :]
+            truncated_v = v32[:, :, :max_seq_len, :]
             return truncated_q, truncated_k, truncated_v
 
         def _keep_qkv():
             return q, k, v
 
-        q, k, v = tf.cond(truncate_condition, _truncate_qkv, _keep_qkv)
+        q32, k32, v32 = tf.cond(truncate_condition, _truncate_qkv, _keep_qkv)
 
-        if mask is not None:
+        if mask32 is not None:
             def _truncate_mask():
-                return mask[:, :, :max_seq_len, :max_seq_len]
+                return mask32[:, :, :max_seq_len, :max_seq_len]
 
             def _keep_mask():
-                return mask
+                return mask32
 
-            mask = tf.cond(truncate_condition, _truncate_mask, _keep_mask)
+            mask32 = tf.cond(truncate_condition, _truncate_mask, _keep_mask)
         
         # Use tf.nn.scaled_dot_product_attention if available (TF 2.11+)
         try:
-            # Modern TensorFlow has built-in memory-efficient attention
-            output = tf.nn.scaled_dot_product_attention(
-                query=q,
-                key=k,
-                value=v,
-                attn_mask=mask,
+            # Use built-in attention in float32 for stability
+            output32 = tf.nn.scaled_dot_product_attention(
+                query=q32,
+                key=k32,
+                value=v32,
+                attn_mask=mask32,
                 dropout_rate=0.1 if self.dropout.rate > 0 else 0.0
             )
-            # Return dummy weights since we can't get them from the built-in function
-            attention_weights = tf.zeros([tf.shape(q)[0], tf.shape(q)[1],
-                                          tf.shape(q)[2], tf.shape(k)[2]])
-            return output, attention_weights
+            # Return dummy weights since built-in op doesn't expose them
+            attention_weights32 = tf.zeros([tf.shape(q32)[0], tf.shape(q32)[1],
+                                            tf.shape(q32)[2], tf.shape(k32)[2]], dtype=tf.float32)
+            return tf.cast(output32, orig_dtype), tf.cast(attention_weights32, orig_dtype)
         except AttributeError:
             # Fallback to manual implementation for older TensorFlow versions
             pass
         
         # Compute attention scores with memory limits
-        scores = tf.matmul(q, k, transpose_b=True) / tf.math.sqrt(
-            tf.cast(self.d_k, tf.float32)
-        )
+        scale32 = tf.math.sqrt(tf.cast(self.d_k, tf.float32))
+        scores32 = tf.matmul(q32, k32, transpose_b=True) / scale32
         
         # Apply mask if provided
-        if mask is not None:
-            scores += (mask * -1e9)
+        if mask32 is not None:
+            scores32 += (mask32 * tf.cast(-1e9, tf.float32))
         
         # Use memory-efficient softmax for large tensors
-        attention_weights = tf.nn.softmax(scores, axis=-1)
-        attention_weights = self.dropout(attention_weights)
+        attention_weights32 = tf.nn.softmax(scores32, axis=-1)
+        attention_weights32 = self.dropout(attention_weights32)
         
         # Apply attention to values
-        output = tf.matmul(attention_weights, v)
+        output32 = tf.matmul(attention_weights32, v32)
         
-        return output, attention_weights
+        return tf.cast(output32, orig_dtype), tf.cast(attention_weights32, orig_dtype)
     
     def call(
         self,
@@ -287,7 +293,8 @@ class PositionalEncoding(tf.keras.layers.Layer):
             Output with positional encoding added
         """
         seq_len = tf.shape(inputs)[1]
-        return inputs + self.pe[:, :seq_len, :]
+        positional = tf.cast(self.pe[:, :seq_len, :], inputs.dtype)
+        return inputs + positional
 
 
 class FeedForward(tf.keras.layers.Layer):

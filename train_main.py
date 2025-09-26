@@ -91,6 +91,7 @@ With optimization levels:
   python3 train_main.py --optimization-level enhanced --train-data ../dataset/dataset_train
   python3 train_main.py --optimization-level experimental --apply-fast-convergence
   python3 train_main.py --model-size tiny --optimization-level enhanced
+  python3 train_main.py --model-size tiny --optimization-level enhanced --disable-gpu-stabilizer
 Legacy compatibility:
   python3 train_main.py --optimization-level basic --train-data ../dataset/dataset_train
 """
@@ -357,6 +358,8 @@ def build_config(
     # Evaluation parameters for automatic checkpoint quality monitoring
     enable_automatic_evaluation: bool = False,
     evaluation_interval: int = 10,
+    # Debugging / diagnostics
+    use_simple_loss: bool = False,
     ) -> XTTSConfig:
     preset_key = model_size.lower() if model_size else "normal"
     preset = MODEL_SIZE_PRESETS.get(preset_key, MODEL_SIZE_PRESETS["normal"])
@@ -561,6 +564,8 @@ def build_config(
         # Automatic evaluation parameters for checkpoint quality monitoring
         enable_automatic_evaluation=enable_automatic_evaluation,
         evaluation_interval=evaluation_interval,
+        # Diagnostics
+        use_simple_loss=use_simple_loss,
     )
 
     # Data configuration (comprehensive parameters with multi-speaker support)
@@ -619,7 +624,7 @@ def build_config(
         max_mel_frames=max_attention_len,
         enable_xla=True,
         enable_tensorrt=False,
-        mixed_precision=True,
+        mixed_precision=False,  # Disable mixed precision for stability on multi-GPU
         pin_memory=True,
         persistent_workers=True,
         # Additional GPU utilization optimizations (handled in DataLoader creation)
@@ -774,6 +779,24 @@ def main():
         default=1.0,
         help="Weight for style consistency loss (default: 1.0)"
     )
+    # Emergency simple loss to validate the training loop
+    parser.add_argument(
+        "--simple-loss",
+        action="store_true",
+        help="Use a minimal, stable loss function to debug training stalls"
+    )
+    
+    # GPU Stabilizer control
+    parser.add_argument(
+        "--enable-gpu-stabilizer",
+        action="store_true",
+        help="Enable Advanced GPU Stabilizer for consistent GPU utilization"
+    )
+    parser.add_argument(
+        "--disable-gpu-stabilizer",
+        action="store_true",
+        help="Explicitly disable GPU Stabilizer (default behavior)"
+    )
     
     args = parser.parse_args()
 
@@ -912,6 +935,8 @@ def main():
         # Evaluation parameters
         enable_automatic_evaluation=args.enable_evaluation,
         evaluation_interval=args.evaluation_interval,
+        # Debugging
+        use_simple_loss=args.simple_loss,
     )
 
     # Apply optimization level
@@ -980,10 +1005,19 @@ def main():
             logger.warning(f"Could not initialize enhanced training monitor: {e}")
 
     # Initialize Advanced GPU Stabilizer for consistent GPU utilization
+    # Can be controlled via command line arguments: --enable-gpu-stabilizer or --disable-gpu-stabilizer
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     gpu_optimizer = None
     
-    if torch.cuda.is_available():
+    # Determine GPU stabilizer state from command line arguments
+    if args.enable_gpu_stabilizer and args.disable_gpu_stabilizer:
+        logger.error("❌ Cannot use both --enable-gpu-stabilizer and --disable-gpu-stabilizer")
+        sys.exit(1)
+    
+    gpu_stabilizer_enabled = args.enable_gpu_stabilizer
+    multi_gpu_active = bool(getattr(config.training, 'multi_gpu', False))
+    
+    if gpu_stabilizer_enabled and torch.cuda.is_available() and not multi_gpu_active:
         logger.info("🚀 Initializing Advanced GPU Stabilizer...")
         try:
             from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
@@ -996,17 +1030,50 @@ def main():
             )
             logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
         except ImportError:
-            # Fallback to old optimizer
-            from gpu_utilization_optimizer import create_gpu_optimizer
-            gpu_optimizer = create_gpu_optimizer(
-                device=device,
-                max_prefetch_batches=16,
-                enable_async_loading=True,
-                memory_fraction=0.85
-            )
-            logger.info("✅ Basic GPU Optimizer ready (fallback)")
+            try:
+                from gpu_utilization_optimizer import create_gpu_optimizer
+                gpu_optimizer = create_gpu_optimizer(
+                    device=device,
+                    max_prefetch_batches=16,
+                    enable_async_loading=True,
+                    memory_fraction=0.85
+                )
+                logger.info("✅ Basic GPU Optimizer ready (fallback)")
+            except ImportError as e:
+                logger.warning(f"Could not initialize GPU optimizers: {e}")
     else:
-        logger.warning("⚠️  CUDA not available, skipping GPU optimization")
+        if not gpu_stabilizer_enabled:
+            logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
+        elif multi_gpu_active:
+            logger.info("🔴 GPU Stabilizer disabled for multi-GPU training")
+        elif not torch.cuda.is_available():
+            logger.warning("⚠️  CUDA not available, skipping GPU optimization")
+    # if torch.cuda.is_available() and not multi_gpu_active:
+    #     logger.info("🚀 Initializing Advanced GPU Stabilizer...")
+    #     try:
+    #         from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
+    #         gpu_optimizer = create_advanced_gpu_stabilizer(
+    #             max_prefetch_batches=32,
+    #             num_prefetch_threads=12,
+    #             memory_fraction=0.9,
+    #             enable_memory_pinning=True,
+    #             aggressive_mode=True
+    #         )
+    #         logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
+    #     except ImportError:
+    #         from gpu_utilization_optimizer import create_gpu_optimizer
+    #         gpu_optimizer = create_gpu_optimizer(
+    #             device=device,
+    #             max_prefetch_batches=16,
+    #             enable_async_loading=True,
+    #             memory_fraction=0.85
+    #         )
+    #         logger.info("✅ Basic GPU Optimizer ready (fallback)")
+    # else:
+    #     if multi_gpu_active:
+    #         logger.info("Skipping GPU stabilizer for multi-GPU training")
+    #     elif not torch.cuda.is_available():
+    #         logger.warning("⚠️  CUDA not available, skipping GPU optimization")
 
     # Instantiate model and trainer (optionally resume)
     resume_ckpt: Optional[str] = None
@@ -1023,8 +1090,7 @@ def main():
         else:
             logger.info("No existing checkpoint found, starting fresh")
 
-    model = XTTS(config.model)
-    trainer = XTTSTrainer(config=config, model=model, resume_checkpoint=resume_ckpt)
+    trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt, gpu_stabilizer_enabled=gpu_stabilizer_enabled)
     
     # Fix optimizer variable mismatch issue
     try:
@@ -1048,7 +1114,10 @@ def main():
         logger.info("✅ Advanced GPU Stabilizer will be used during training for consistent utilization")
 
     # Train with GPU utilization monitoring
-    logger.info("🚀 Starting optimized training with improved convergence and GPU utilization...")
+    if gpu_optimizer:
+        logger.info("🚀 Starting optimized training with improved convergence and GPU utilization...")
+    else:
+        logger.info("🚀 Starting optimized training with improved convergence...")
     
     if gpu_optimizer:
         # Enhanced training with GPU monitoring

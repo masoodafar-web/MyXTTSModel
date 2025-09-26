@@ -305,6 +305,9 @@ class TrainingConfig:
     huber_delta: float = 1.0                   # Delta parameter for Huber loss
     stop_token_positive_weight: float = 5.0    # Weight for positive stop tokens
     
+    # Debug/simple-loss switch (for diagnosing training stalls)
+    use_simple_loss: bool = False
+    
     # Learning rate improvements
     use_warmup_cosine_schedule: bool = True     # Use cosine annealing with warmup
     cosine_restarts: bool = False              # Enable cosine restarts

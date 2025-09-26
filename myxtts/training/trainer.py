@@ -15,6 +15,7 @@ from tqdm import tqdm
 import wandb
 
 # Import Advanced GPU Stabilizer for consistent GPU utilization
+# GPU stabilizer availability is controlled by the main training script
 try:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
     from advanced_gpu_stabilizer import AdvancedGPUStabilizer, setup_advanced_gpu_optimization
@@ -39,6 +40,10 @@ from ..utils.commons import (
     get_device_context,
 )
 from .losses import XTTSLoss, create_stop_targets
+try:
+    from .simple_loss import SimpleXTTSEmergencyLoss
+except Exception:  # pragma: no cover - optional
+    SimpleXTTSEmergencyLoss = None
 
 # Import evaluation modules for automatic checkpoint quality assessment
 try:
@@ -60,7 +65,8 @@ class XTTSTrainer:
         self,
         config: XTTSConfig,
         model: Optional[XTTS] = None,
-        resume_checkpoint: Optional[str] = None
+        resume_checkpoint: Optional[str] = None,
+        gpu_stabilizer_enabled: bool = False
     ):
         """
         Initialize XTTS trainer.
@@ -68,6 +74,7 @@ class XTTSTrainer:
         Args:
             config: Training configuration
             model: Pre-initialized model (creates new if None)
+            gpu_stabilizer_enabled: Whether to enable GPU stabilizer
             resume_checkpoint: Path to checkpoint for resuming training
         """
         self.config = config
@@ -117,11 +124,25 @@ class XTTSTrainer:
         self.logger.info(f"Using strategy: {type(self.strategy).__name__}")
 
         if self.device == "GPU":
-            # Enable mixed precision for faster training
+            # For multi-GPU, prefer disabling XLA and GPU prefetch for stability
+            if getattr(config.training, 'multi_gpu', False):
+                try:
+                    if getattr(config.data, 'enable_xla', False):
+                        setattr(config.data, 'enable_xla', False)
+                        self.logger.debug("Disabled XLA under MirroredStrategy for stability")
+                    if getattr(config.data, 'prefetch_to_gpu', True):
+                        setattr(config.data, 'prefetch_to_gpu', False)
+                        self.logger.debug("Disabled dataset prefetch_to_gpu under MirroredStrategy")
+                except Exception:
+                    pass
+            # Enable/disable mixed precision explicitly
             if getattr(config.data, 'mixed_precision', True):
                 policy = tf.keras.mixed_precision.Policy('mixed_float16')
                 tf.keras.mixed_precision.set_global_policy(policy)
                 self.logger.debug("Mixed precision enabled")
+            else:
+                tf.keras.mixed_precision.set_global_policy('float32')
+                self.logger.debug("Mixed precision disabled (float32 policy)")
             # Control XLA compilation explicitly based on config
             if getattr(config.data, 'enable_xla', False):
                 tf.config.optimizer.set_jit(True)
@@ -143,8 +164,11 @@ class XTTSTrainer:
                 pass
 
         # Initialize Advanced GPU Stabilizer for consistent GPU utilization
+        # Controlled via command line arguments: --enable-gpu-stabilizer
         self.gpu_stabilizer = None
-        if GPU_STABILIZER_AVAILABLE and self.device == "GPU":
+        multi_gpu_active = bool(getattr(config.training, 'multi_gpu', False))
+        
+        if gpu_stabilizer_enabled and GPU_STABILIZER_AVAILABLE and self.device == "GPU" and not multi_gpu_active:
             try:
                 self.gpu_stabilizer = AdvancedGPUStabilizer(
                     max_prefetch_batches=32,
@@ -156,6 +180,15 @@ class XTTSTrainer:
                 self.logger.info("🚀 Advanced GPU Stabilizer initialized for consistent GPU utilization")
             except Exception as e:
                 self.logger.warning(f"Could not initialize GPU Stabilizer: {e}")
+        else:
+            if not gpu_stabilizer_enabled:
+                self.logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
+            elif multi_gpu_active:
+                self.logger.info("🔴 GPU Stabilizer disabled for multi-GPU training")
+            elif self.device != "GPU":
+                self.logger.info("🔴 GPU Stabilizer disabled (GPU not available)")
+            else:
+                self.logger.warning("🔴 GPU Stabilizer not available (module import failed)")
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
@@ -202,23 +235,44 @@ class XTTSTrainer:
             except Exception as e:
                 self.logger.debug(f"Could not wrap optimizer for mixed precision: {e}")
             
-            # Initialize enhanced loss function with stability features
-            self.criterion = XTTSLoss(
-                mel_loss_weight=config.training.mel_loss_weight,
-                stop_loss_weight=1.0,
-                attention_loss_weight=getattr(config.training, 'attention_loss_weight', 0.02),
-                duration_loss_weight=config.training.duration_loss_weight,
-                pitch_loss_weight=getattr(config.training, 'pitch_loss_weight', 0.1),
-                energy_loss_weight=getattr(config.training, 'energy_loss_weight', 0.1),
-                prosody_pitch_loss_weight=getattr(config.training, 'prosody_pitch_loss_weight', 0.05),
-                prosody_energy_loss_weight=getattr(config.training, 'prosody_energy_loss_weight', 0.05),
-                speaking_rate_loss_weight=getattr(config.training, 'speaking_rate_loss_weight', 0.05),
-                # Stability improvements
-                use_adaptive_weights=getattr(config.training, 'use_adaptive_loss_weights', True),
-                loss_smoothing_factor=getattr(config.training, 'loss_smoothing_factor', 0.1),
-                max_loss_spike_threshold=getattr(config.training, 'max_loss_spike_threshold', 2.0),
-                gradient_norm_threshold=getattr(config.training, 'gradient_norm_threshold', 5.0)
-            )
+            # Choose loss function (simple vs full) based on config/env
+            use_simple = bool(getattr(config.training, 'use_simple_loss', False))
+            if not use_simple:
+                import os
+                use_simple = os.environ.get('MYXTTS_SIMPLE_LOSS', '0') == '1'
+
+            if use_simple and SimpleXTTSEmergencyLoss is not None:
+                self.logger.info("Using SimpleXTTSEmergencyLoss for debugging")
+                self.criterion = SimpleXTTSEmergencyLoss(
+                    mel_loss_weight=getattr(config.training, 'mel_loss_weight', 1.0),
+                    stop_loss_weight=0.1,
+                )
+            else:
+                # Initialize enhanced loss function with stability features
+                self.criterion = XTTSLoss(
+                    mel_loss_weight=config.training.mel_loss_weight,
+                    stop_loss_weight=1.0,
+                    attention_loss_weight=getattr(config.training, 'attention_loss_weight', 0.02),
+                    duration_loss_weight=config.training.duration_loss_weight,
+                    pitch_loss_weight=getattr(config.training, 'pitch_loss_weight', 0.1),
+                    energy_loss_weight=getattr(config.training, 'energy_loss_weight', 0.1),
+                    prosody_pitch_loss_weight=getattr(config.training, 'prosody_pitch_loss_weight', 0.05),
+                    prosody_energy_loss_weight=getattr(config.training, 'prosody_energy_loss_weight', 0.05),
+                    speaking_rate_loss_weight=getattr(config.training, 'speaking_rate_loss_weight', 0.05),
+                    # Stability improvements
+                    use_adaptive_weights=getattr(config.training, 'use_adaptive_loss_weights', True),
+                    loss_smoothing_factor=getattr(config.training, 'loss_smoothing_factor', 0.1),
+                    max_loss_spike_threshold=getattr(config.training, 'max_loss_spike_threshold', 2.0),
+                    gradient_norm_threshold=getattr(config.training, 'gradient_norm_threshold', 5.0)
+                )
+                # Under MirroredStrategy, keep the loss path side-effect free and simple
+                try:
+                    if getattr(config.training, 'multi_gpu', False) and isinstance(self.strategy, tf.distribute.MirroredStrategy):
+                        setattr(self.criterion, 'use_adaptive_weights', False)
+                        setattr(self.criterion, 'loss_smoothing_factor', 0.0)
+                        self.logger.debug("Disabled adaptive weights and loss smoothing under MirroredStrategy")
+                except Exception:
+                    pass
         
         # Initialize learning rate scheduler
         self.lr_scheduler = self._create_lr_scheduler()
@@ -463,6 +517,7 @@ class XTTSTrainer:
                     use_cache_files = False
 
         # Convert to TensorFlow datasets with optimized settings
+        drop_remainder_flag = bool(getattr(self.config.training, 'multi_gpu', False))
         train_tf_dataset = train_ljs.create_tf_dataset(
             batch_size=self.config.data.batch_size,
             shuffle=True,
@@ -471,7 +526,8 @@ class XTTSTrainer:
             use_cache_files=use_cache_files,
             memory_cache=False,
             num_parallel_calls=self.config.data.num_workers,
-            buffer_size_multiplier=self.config.data.shuffle_buffer_multiplier
+            buffer_size_multiplier=self.config.data.shuffle_buffer_multiplier,
+            drop_remainder=drop_remainder_flag,
         )
         
         val_tf_dataset = val_ljs.create_tf_dataset(
@@ -482,7 +538,8 @@ class XTTSTrainer:
             use_cache_files=use_cache_files,
             memory_cache=True,
             num_parallel_calls=min(self.config.data.num_workers, 4),  # Fewer workers for validation
-            buffer_size_multiplier=2
+            buffer_size_multiplier=2,
+            drop_remainder=drop_remainder_flag,
         )
         
         # Optimize datasets, and only distribute when multi-GPU is enabled
@@ -520,7 +577,7 @@ class XTTSTrainer:
         
         return train_tf_dataset, val_tf_dataset
     
-    @tf.function
+    @tf.function(jit_compile=False, experimental_relax_shapes=True)
     def distributed_train_step(self, dist_inputs):
         """
         Distributed training step for multi-GPU training.
@@ -564,6 +621,7 @@ class XTTSTrainer:
             Dictionary with loss values
         """
         # CRITICAL FIX: Wrap entire training step in GPU device context
+        is_multi_strategy = isinstance(self.strategy, tf.distribute.MirroredStrategy)
         with get_device_context():
             # Memory optimization: cap text/mel lengths independently to avoid OOM
             max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
@@ -695,33 +753,17 @@ class XTTSTrainer:
                     # Compute loss
                     loss = self.criterion(y_true, y_pred)
                     raw_total_loss = self.criterion.get_raw_total_loss()
-                    raw_total_tensor = None
-                    if raw_total_loss is not None:
-                        try:
-                            raw_total_tensor = tf.convert_to_tensor(raw_total_loss, dtype=tf.float32)
-                        except Exception:
-                            raw_total_tensor = None
-
-                    finite_raw = False
-                    if raw_total_tensor is not None:
-                        try:
-                            finite_raw = bool(tf.reduce_all(tf.math.is_finite(raw_total_tensor)).numpy())
-                        except Exception:
-                            finite_raw = False
-
-                    if raw_total_tensor is None or not finite_raw:
-                        warn_dict = {}
-                        weighted_losses = self.criterion.get_weighted_losses()
-                        for key, value in weighted_losses.items():
-                            try:
-                                warn_dict[key] = float(value.numpy())
-                            except Exception:
-                                warn_dict[key] = None
-                        self.logger.warning(
-                            "Non-finite raw loss detected; falling back to smoothed loss. Contributions: %s",
-                            warn_dict,
-                        )
-                        raw_total_tensor = loss
+                    raw_total_tensor = tf.convert_to_tensor(
+                        raw_total_loss if raw_total_loss is not None else loss,
+                        dtype=tf.float32,
+                    )
+                    # Pure-TF finite check to be graph-safe under MirroredStrategy
+                    finite_raw = tf.reduce_all(tf.math.is_finite(raw_total_tensor))
+                    raw_total_tensor = tf.where(
+                        finite_raw, raw_total_tensor, tf.cast(loss, tf.float32)
+                    )
+                    # Avoid tf.cond side-effects inside @tf.function under distribution
+                    # Logging is skipped to keep the graph side-effect free
 
                     aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
                     aux_reg_value = 0.0
@@ -751,7 +793,7 @@ class XTTSTrainer:
                             loss += aux_reg_weight * aux_reg_value
                     
                     # Per-replica loss scaling (average across replicas)
-                    loss_for_grad = raw_total_tensor / self.strategy.num_replicas_in_sync
+                    loss_for_grad = raw_total_tensor / tf.cast(self.strategy.num_replicas_in_sync, tf.float32)
 
                     # Mixed precision handling (Keras 3 API)
                     is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
@@ -791,11 +833,15 @@ class XTTSTrainer:
                 aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
                 if aux_reg_weight > 0.0 and 'aux_reg_value' in locals() and aux_reg_value != 0.0:
                     individual_losses["aux_head_reg"] = aux_reg_weight * aux_reg_value
-                stability_metrics = self.criterion.get_stability_metrics()
-                weighted_losses = self.criterion.get_weighted_losses()
-                if weighted_losses:
-                    for key, value in weighted_losses.items():
-                        individual_losses[f"w_{key}"] = value
+                # Keep outputs minimal under multi-GPU to avoid control-flow side effects
+                if not is_multi_strategy:
+                    stability_metrics = self.criterion.get_stability_metrics()
+                    weighted_losses = self.criterion.get_weighted_losses()
+                    if weighted_losses:
+                        for key, value in weighted_losses.items():
+                            individual_losses[f"w_{key}"] = value
+                else:
+                    stability_metrics = {}
                 raw_total = self.criterion.get_raw_total_loss()
                 if raw_total is not None:
                     individual_losses["raw_total_loss"] = raw_total
@@ -807,8 +853,9 @@ class XTTSTrainer:
                     
                     # Note: Gradient norm logging removed for Graph mode compatibility
                 
-                # Add stability metrics to output
-                individual_losses.update(stability_metrics)
+                # Add stability metrics to output (if any)
+                if stability_metrics:
+                    individual_losses.update(stability_metrics)
 
                 # Log breakdown when loss spikes dramatically to help debugging
                 loss_alert_threshold = getattr(self.config.training, 'loss_alert_threshold', 500.0)
@@ -1151,33 +1198,15 @@ class XTTSTrainer:
 
                     loss = self.criterion(y_true, y_pred)
                     raw_total_loss = self.criterion.get_raw_total_loss()
-                    raw_total_tensor = None
-                    if raw_total_loss is not None:
-                        try:
-                            raw_total_tensor = tf.convert_to_tensor(raw_total_loss, dtype=tf.float32)
-                        except Exception:
-                            raw_total_tensor = None
-
-                    finite_raw = False
-                    if raw_total_tensor is not None:
-                        try:
-                            finite_raw = bool(tf.reduce_all(tf.math.is_finite(raw_total_tensor)).numpy())
-                        except Exception:
-                            finite_raw = False
-
-                    if raw_total_tensor is None or not finite_raw:
-                        warn_dict = {}
-                        weighted_losses = self.criterion.get_weighted_losses()
-                        for key, value in weighted_losses.items():
-                            try:
-                                warn_dict[key] = float(value.numpy())
-                            except Exception:
-                                warn_dict[key] = None
-                        self.logger.warning(
-                            "Non-finite raw loss detected during accumulation; using smoothed loss. Contributions: %s",
-                            warn_dict,
-                        )
-                        raw_total_tensor = loss
+                    raw_total_tensor = tf.convert_to_tensor(
+                        raw_total_loss if raw_total_loss is not None else loss,
+                        dtype=tf.float32,
+                    )
+                    finite_raw = tf.reduce_all(tf.math.is_finite(raw_total_tensor))
+                    raw_total_tensor = tf.where(
+                        finite_raw, raw_total_tensor, tf.cast(loss, tf.float32)
+                    )
+                    # Skip side-effect logging inside graph for distributed training
 
                     aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
                     aux_reg_value = 0.0
@@ -1327,7 +1356,7 @@ class XTTSTrainer:
             except Exception:
                 pass
     
-    @tf.function
+    @tf.function(jit_compile=False, experimental_relax_shapes=True)
     def distributed_validation_step(self, dist_inputs):
         """
         Distributed validation step for multi-GPU validation.
@@ -1444,103 +1473,143 @@ class XTTSTrainer:
         
         self.logger.info(f"Starting training for {epochs} epochs")
         self.logger.info(f"Current step: {self.current_step}")
-        
-        
-        # Determine steps per epoch if not provided
-        if steps_per_epoch is None:
-            steps_per_epoch = getattr(self, 'default_steps_per_epoch', None)
-        
-        # Training loop
-        for epoch in range(self.current_epoch, epochs):
-            self.current_epoch = epoch
-            epoch_start_time = time.time()
-            
-            self.logger.info(f"Starting Epoch {epoch + 1}/{epochs}")
-            
-            # Training phase
-            train_losses = self._train_epoch(train_dataset, steps_per_epoch)
-            epoch_duration = time.time() - epoch_start_time
-            
-            # Validation phase (fixed validation frequency logic)
-            val_losses = {}
-            val_freq = max(1, self.config.training.val_step // 1000)  # Convert steps to epochs
-            if epoch % val_freq == 0 or epoch == epochs - 1:  # Always validate on last epoch
-                self.logger.info("Running validation...")
-                val_losses = self._validate_epoch(val_dataset)
-                
-                # Early stopping check
-                if hasattr(self, 'early_stopping') and self.early_stopping(val_losses["total_loss"], self.model):
-                    self.logger.info("Early stopping triggered")
-                    break
-                
-                # Save best model
-                if val_losses["total_loss"] < self.best_val_loss:
-                    self.best_val_loss = val_losses["total_loss"]
-                    self._save_checkpoint(is_best=True)
-            
-            # Regular checkpointing (fixed frequency logic)
-            checkpoint_freq = max(1, self.config.training.save_step // 1000)  # Convert steps to epochs
-            if epoch % checkpoint_freq == 0 or epoch == epochs - 1:  # Always save on last epoch
-                self._save_checkpoint()
-            
-            # Enhanced logging with timing information
-            samples_per_sec = (self.config.data.batch_size * (steps_per_epoch or 1)) / epoch_duration
-            self.logger.info(f"Epoch {epoch + 1}/{epochs} completed in {epoch_duration:.1f}s")
-            self.logger.info(f"Train Loss: {train_losses['total_loss']:.4f}")
-            if val_losses:
-                self.logger.info(f"Val Loss: {val_losses['total_loss']:.4f}")
-            self.logger.info(f"Samples/sec: {samples_per_sec:.1f}")
-            
-            # Enhanced Wandb logging
-            if self.config.training.use_wandb:
-                log_data = {
-                    "epoch": epoch + 1,
-                    "step": self.current_step,
-                    "epoch_duration": epoch_duration,
-                    "samples_per_second": samples_per_sec,
-                    **{f"train_{k}": v for k, v in train_losses.items()},
-                }
-                if val_losses:
-                    log_data.update({f"val_{k}": v for k, v in val_losses.items()})
-                
-                try:
-                    lr_value = self.optimizer.learning_rate.numpy() if hasattr(self.optimizer.learning_rate, 'numpy') else self.optimizer.learning_rate
-                    log_data["learning_rate"] = float(lr_value)
-                except:
-                    pass
-                    
-                wandb.log(log_data)
-            
-            # Track loss convergence for better training insights
-            if not hasattr(self, 'loss_history'):
-                self.loss_history = []
-            self.loss_history.append(train_losses['total_loss'])
-            
-            # Check for loss convergence (last 5 epochs)
-            if len(self.loss_history) >= 5:
-                recent_losses = self.loss_history[-5:]
-                loss_std = np.std(recent_losses)
-                loss_mean = np.mean(recent_losses)
-                if loss_std < 0.001 and loss_mean < 1.0:  # Very stable and low loss
-                    self.logger.info(f"Loss converged (std: {loss_std:.6f}, mean: {loss_mean:.4f})")
-        
-        # Training completion with summary
-        final_gpu_memory = "N/A"
+
+        # Optional: one-time warmup for distributed initialization to avoid long first-step stall
         try:
-            if self.device == "GPU":
-                gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
-                final_gpu_memory = f"{gpu_memory['current'] / 1024**3:.1f}GB"
-        except Exception:
-            pass
-            
-        self.logger.info("Training completed successfully!")
-        self.logger.info(f"Final GPU Memory Usage: {final_gpu_memory}")
-        if hasattr(self, 'loss_history') and self.loss_history:
-            self.logger.info(f"Final Training Loss: {self.loss_history[-1]:.4f}")
-            if len(self.loss_history) > 1:
-                initial_loss = self.loss_history[0]
-                improvement = ((initial_loss - self.loss_history[-1]) / initial_loss) * 100
-                self.logger.info(f"Loss Improvement: {improvement:.1f}% (from {initial_loss:.4f} to {self.loss_history[-1]:.4f})")
+            is_multi = (
+                getattr(self.config.training, 'multi_gpu', False)
+                and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+            )
+            skip_warmup = os.environ.get("MYXTTS_SKIP_WARMUP", "0") == "1"
+            if skip_warmup:
+                self.logger.info("Skipping distributed warmup (MYXTTS_SKIP_WARMUP=1)")
+                self._did_dist_warmup = True
+            elif is_multi and not getattr(self, '_did_dist_warmup', False):
+                self.logger.info("Initializing distributed variables/optimizer (one-time warmup)...")
+                t0 = time.time()
+
+                def _make_dummy(_):
+                    per_replica_bs = max(1, self.config.data.batch_size // self.strategy.num_replicas_in_sync)
+                    text = tf.zeros([per_replica_bs, 8], dtype=tf.int32)
+                    mel = tf.zeros([per_replica_bs, 16, 80], dtype=tf.float32)
+                    text_len = tf.fill([per_replica_bs], 8)
+                    mel_len = tf.fill([per_replica_bs], 16)
+                    return text, mel, text_len, mel_len
+
+                dist_inputs = self.strategy.experimental_distribute_values_from_function(_make_dummy)
+
+                def _warmup_step(inputs):
+                    return self.train_step(*inputs)
+
+                self.strategy.run(_warmup_step, args=(dist_inputs,))
+                self._did_dist_warmup = True
+                self.logger.info("Distributed warmup completed in %.1fs", time.time() - t0)
+        except Exception as e:
+            self.logger.debug(f"Distributed warmup note: {e}")
+
+        try:
+            # Determine steps per epoch if not provided
+            if steps_per_epoch is None:
+                steps_per_epoch = getattr(self, 'default_steps_per_epoch', None)
+
+            # Training loop
+            for epoch in range(self.current_epoch, epochs):
+                self.current_epoch = epoch
+                epoch_start_time = time.time()
+
+                self.logger.info(f"Starting Epoch {epoch + 1}/{epochs}")
+
+                # Training phase
+                train_losses = self._train_epoch(train_dataset, steps_per_epoch)
+                epoch_duration = time.time() - epoch_start_time
+
+                # Validation phase (fixed validation frequency logic)
+                val_losses = {}
+                val_freq = max(1, self.config.training.val_step // 1000)  # Convert steps to epochs
+                if epoch % val_freq == 0 or epoch == epochs - 1:  # Always validate on last epoch
+                    self.logger.info("Running validation...")
+                    val_losses = self._validate_epoch(val_dataset)
+
+                    # Early stopping check
+                    if hasattr(self, 'early_stopping') and self.early_stopping(val_losses["total_loss"], self.model):
+                        self.logger.info("Early stopping triggered")
+                        break
+
+                    # Save best model
+                    if val_losses["total_loss"] < self.best_val_loss:
+                        self.best_val_loss = val_losses["total_loss"]
+                        self._save_checkpoint(is_best=True)
+
+                # Regular checkpointing (fixed frequency logic)
+                checkpoint_freq = max(1, self.config.training.save_step // 1000)  # Convert steps to epochs
+                if epoch % checkpoint_freq == 0 or epoch == epochs - 1:  # Always save on last epoch
+                    self._save_checkpoint()
+
+                # Enhanced logging with timing information
+                samples_per_sec = (self.config.data.batch_size * (steps_per_epoch or 1)) / epoch_duration
+                self.logger.info(f"Epoch {epoch + 1}/{epochs} completed in {epoch_duration:.1f}s")
+                self.logger.info(f"Train Loss: {train_losses['total_loss']:.4f}")
+                if val_losses:
+                    self.logger.info(f"Val Loss: {val_losses['total_loss']:.4f}")
+                self.logger.info(f"Samples/sec: {samples_per_sec:.1f}")
+
+                # Enhanced Wandb logging
+                if self.config.training.use_wandb:
+                    log_data = {
+                        "epoch": epoch + 1,
+                        "step": self.current_step,
+                        "epoch_duration": epoch_duration,
+                        "samples_per_second": samples_per_sec,
+                        **{f"train_{k}": v for k, v in train_losses.items()},
+                    }
+                    if val_losses:
+                        log_data.update({f"val_{k}": v for k, v in val_losses.items()})
+
+                    try:
+                        lr_value = self.optimizer.learning_rate.numpy() if hasattr(self.optimizer.learning_rate, 'numpy') else self.optimizer.learning_rate
+                        log_data["learning_rate"] = float(lr_value)
+                    except:
+                        pass
+
+                    wandb.log(log_data)
+
+                # Track loss convergence for better training insights
+                if not hasattr(self, 'loss_history'):
+                    self.loss_history = []
+                self.loss_history.append(train_losses['total_loss'])
+
+                # Check for loss convergence (last 5 epochs)
+                if len(self.loss_history) >= 5:
+                    recent_losses = self.loss_history[-5:]
+                    loss_std = np.std(recent_losses)
+                    loss_mean = np.mean(recent_losses)
+                    if loss_std < 0.001 and loss_mean < 1.0:  # Very stable and low loss
+                        self.logger.info(f"Loss converged (std: {loss_std:.6f}, mean: {loss_mean:.4f})")
+
+            # Training completion with summary
+            final_gpu_memory = "N/A"
+            try:
+                if self.device == "GPU":
+                    gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
+                    final_gpu_memory = f"{gpu_memory['current'] / 1024**3:.1f}GB"
+            except Exception:
+                pass
+
+            self.logger.info("Training completed successfully!")
+            self.logger.info(f"Final GPU Memory Usage: {final_gpu_memory}")
+            if hasattr(self, 'loss_history') and self.loss_history:
+                self.logger.info(f"Final Training Loss: {self.loss_history[-1]:.4f}")
+                if len(self.loss_history) > 1:
+                    initial_loss = self.loss_history[0]
+                    improvement = ((initial_loss - self.loss_history[-1]) / initial_loss) * 100
+                    self.logger.info(f"Loss Improvement: {improvement:.1f}% (from {initial_loss:.4f} to {self.loss_history[-1]:.4f})")
+        finally:
+            if self.gpu_stabilizer:
+                try:
+                    self.gpu_stabilizer.stop_optimization()
+                    self.logger.debug("Advanced GPU stabilizer stopped")
+                except Exception as e:
+                    self.logger.warning(f"GPU stabilizer cleanup warning: {e}")
     
     def _train_epoch(
         self,
@@ -1551,8 +1620,9 @@ class XTTSTrainer:
         train_losses = {}
         num_batches = 0
         
-        # Setup GPU-stabilized data loading if available
-        if self.gpu_stabilizer and hasattr(train_dataset, '__iter__'):
+        # Setup GPU-stabilized data loading if available (avoid with distributed datasets)
+        use_distributed = getattr(self.config.training, 'multi_gpu', False) and isinstance(self.strategy, tf.distribute.MirroredStrategy)
+        if self.gpu_stabilizer and hasattr(train_dataset, '__iter__') and not use_distributed:
             try:
                 # Create optimized DataLoader wrapper for TensorFlow dataset
                 self.logger.info("🔧 Setting up GPU-stabilized data loading...")
@@ -1607,32 +1677,35 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # ENHANCED: Ensure proper device placement for training steps
+                # ENHANCED: Ensure proper device placement and choose correct path
                 with get_device_context():
-                    # Ensure tensors are on correct device
-                    text_sequences = ensure_gpu_placement(text_sequences) if self.device == "GPU" else text_sequences
-                    mel_spectrograms = ensure_gpu_placement(mel_spectrograms) if self.device == "GPU" else mel_spectrograms
-                    text_lengths = ensure_gpu_placement(text_lengths) if self.device == "GPU" else text_lengths
-                    mel_lengths = ensure_gpu_placement(mel_lengths) if self.device == "GPU" else mel_lengths
-                    
-                    # Training step: prioritize distributed training for multi-GPU
-                    if (
+                    is_multi = (
                         getattr(self.config.training, 'multi_gpu', False)
                         and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-                    ):
-                        # Multi-GPU: use distributed training step (handles gradient accumulation internally)
+                    )
+
+                    if is_multi:
+                        # For distributed run, pass per-replica inputs directly; do not touch placement/casting here
                         step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
-                    elif self.gradient_accumulation_steps > 1:
-                        # Single-GPU: use gradient accumulation for memory efficiency
-                        step_losses = self.train_step_with_accumulation(
-                            (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
-                            accumulation_steps=self.gradient_accumulation_steps
-                        )
                     else:
-                        # Use regular training step
-                        step_losses = self.train_step(
-                            text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                        )
+                        # Single-GPU path: place tensors explicitly on GPU if available
+                        if self.device == "GPU":
+                            text_sequences = ensure_gpu_placement(text_sequences)
+                            mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
+                            text_lengths = ensure_gpu_placement(text_lengths)
+                            mel_lengths = ensure_gpu_placement(mel_lengths)
+
+                        if self.gradient_accumulation_steps > 1:
+                            # Use gradient accumulation for memory efficiency
+                            step_losses = self.train_step_with_accumulation(
+                                (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
+                                accumulation_steps=self.gradient_accumulation_steps
+                            )
+                        else:
+                            # Regular step
+                            step_losses = self.train_step(
+                                text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                            )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time

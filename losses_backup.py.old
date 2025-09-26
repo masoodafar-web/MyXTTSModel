@@ -8,8 +8,6 @@ including mel spectrogram loss, stop token loss, and combined losses.
 import tensorflow as tf
 from typing import Dict, Optional, Tuple
 
-__all__ = ['XTTSLoss', 'create_stop_targets', 'mel_loss', 'stop_token_loss']
-
 
 def mel_loss(
     y_true: tf.Tensor,
@@ -511,23 +509,20 @@ class XTTSLoss(tf.keras.losses.Loss):
             tensor = tf.cast(value, tf.float32)
             finite_mask = tf.math.is_finite(tensor)
 
-            try:
-                all_finite = bool(tf.reduce_all(finite_mask).numpy())
-            except Exception:
-                all_finite = False
-
-            if not all_finite:
-                try:
-                    non_finite_mask = tf.logical_not(finite_mask)
-                    if non_finite_mask.shape.ndims == 0:
-                        problematic = tensor
-                    else:
-                        problematic = tf.boolean_mask(tensor, non_finite_mask)
-                except Exception:
-                    problematic = tensor
-                tf.print("WARNING:", name, "contains non-finite values:", problematic, summarize=-1)
-
-            return tf.where(finite_mask, tensor, tf.zeros_like(tensor))
+            # TensorFlow graph-compatible finite check
+            all_finite_tensor = tf.reduce_all(finite_mask)
+            
+            # Use tf.cond instead of Python conditional for graph compatibility
+            def handle_non_finite():
+                non_finite_mask = tf.logical_not(finite_mask)
+                tf.print("WARNING:", name, "contains non-finite values")
+                return tf.where(finite_mask, tensor, tf.zeros_like(tensor))
+                
+            def handle_finite():
+                return tensor
+            
+            # Use tf.cond for TensorFlow graph compatibility
+            return tf.cond(all_finite_tensor, handle_finite, handle_non_finite)
 
         # Mel spectrogram loss
         if "mel_target" in y_true and "mel_output" in y_pred:
@@ -679,13 +674,12 @@ class XTTSLoss(tf.keras.losses.Loss):
         total_loss += gradient_reg_loss
         weighted_contrib["gradient_participation_loss"] = _safe("w_gradient_participation_loss", gradient_reg_loss)
 
-        # Apply loss smoothing and spike detection (optional)
+        # Apply loss smoothing and spike detection
         raw_total_loss = total_loss
         self._raw_total_loss_tensor = raw_total_loss
         weighted_contrib["raw_total_loss"] = _safe("w_raw_total_loss", raw_total_loss)
         self._weighted_losses = {k: _safe(k, v) for k, v in weighted_contrib.items()}
-        if self.loss_smoothing_factor > 0.0:
-            total_loss = self._apply_loss_smoothing(total_loss)
+        total_loss = self._apply_loss_smoothing(total_loss)
 
         # Store individual losses for monitoring
         self.losses = {k: _safe(k, v) for k, v in losses.items()}
@@ -782,40 +776,46 @@ class XTTSLoss(tf.keras.losses.Loss):
         )
         self.running_total_loss.assign(running_total)
 
-        # Compute both candidates without control flow to keep the graph simple
-        recent_avg = tf.reduce_mean(recent_losses)
-        recent_avg_safe = tf.where(
-            tf.math.is_finite(recent_avg),
-            recent_avg,
-            current_loss
-        )
-        denominator = recent_avg_safe + 1e-8
-        spike_ratio = current_loss / denominator
-        spike_ratio = tf.where(
-            tf.math.is_finite(spike_ratio),
-            spike_ratio,
-            tf.ones_like(spike_ratio)
-        )
+        def _spike_branch():
+            recent_avg = tf.reduce_mean(recent_losses)
+            recent_avg_safe = tf.where(
+                tf.math.is_finite(recent_avg),
+                recent_avg,
+                current_loss
+            )
+            denominator = recent_avg_safe + 1e-8
+            spike_ratio = current_loss / denominator
+            spike_ratio = tf.where(
+                tf.math.is_finite(spike_ratio),
+                spike_ratio,
+                tf.ones_like(spike_ratio)
+            )
 
-        max_spike = tf.cast(self.max_loss_spike_threshold, tf.float32)
-        safe_ratio = tf.where(spike_ratio <= 0.0, tf.ones_like(spike_ratio), spike_ratio)
-        dampening_factor = tf.minimum(max_spike / safe_ratio, 1.0)
-        dampening_factor = tf.where(
-            tf.math.is_finite(dampening_factor),
-            dampening_factor,
-            tf.ones_like(dampening_factor)
-        )
+            max_spike = tf.cast(self.max_loss_spike_threshold, tf.float32)
+            safe_ratio = tf.where(spike_ratio <= 0.0, tf.ones_like(spike_ratio), spike_ratio)
+            dampening_factor = tf.minimum(max_spike / safe_ratio, 1.0)
+            dampening_factor = tf.where(
+                tf.math.is_finite(dampening_factor),
+                dampening_factor,
+                tf.ones_like(dampening_factor)
+            )
 
-        spike_candidate = tf.where(
-            spike_ratio > max_spike,
-            current_loss * dampening_factor,
-            (1.0 - self.loss_smoothing_factor) * current_loss +
-            self.loss_smoothing_factor * running_total
-        )
+            return tf.where(
+                spike_ratio > max_spike,
+                current_loss * dampening_factor,
+                (1.0 - self.loss_smoothing_factor) * current_loss +
+                self.loss_smoothing_factor * running_total
+            )
 
-        no_spike_candidate = current_loss
-        use_spike = tf.greater(tf.cast(self.step_count, tf.int32), 10)
-        smoothed_loss = tf.where(use_spike, spike_candidate, no_spike_candidate)
+        def _no_spike_branch():
+            return current_loss
+
+        step_count_int = tf.cast(self.step_count, tf.int32)
+        smoothed_loss = tf.cond(
+            step_count_int > 10,
+            _spike_branch,
+            _no_spike_branch
+        )
 
         smoothed_loss = tf.where(
             tf.math.is_finite(smoothed_loss),
@@ -895,21 +895,29 @@ class XTTSLoss(tf.keras.losses.Loss):
         """
         metrics = {}
 
-        step_f = tf.cast(self.step_count, tf.float32)
-        has_steps = tf.greater(self.step_count, 0)
-        running_mel = tf.where(has_steps, tf.cast(self.running_mel_loss, tf.float32), tf.zeros([], tf.float32))
-        running_total = tf.where(has_steps, tf.cast(self.running_total_loss, tf.float32), tf.zeros([], tf.float32))
-        recent_losses = self.loss_history
-        loss_mean = tf.reduce_mean(recent_losses)
-        loss_variance = tf.reduce_mean(tf.square(recent_losses - loss_mean))
-        variance_when_valid = tf.where(tf.greater(self.step_count, 10), loss_variance, tf.zeros([], tf.float32))
-        stability_score = tf.where(tf.greater(self.step_count, 10), tf.exp(-loss_variance), tf.ones([], tf.float32))
+        if self.step_count > 0:
+            metrics["running_mel_loss"] = self.running_mel_loss
+            metrics["running_total_loss"] = self.running_total_loss
 
-        metrics["running_mel_loss"] = running_mel
-        metrics["running_total_loss"] = running_total
-        metrics["loss_variance"] = variance_when_valid
-        metrics["loss_stability_score"] = stability_score
-        metrics["step_count"] = step_f
+            recent_losses = self.loss_history
+            loss_mean = tf.reduce_mean(recent_losses)
+            loss_variance = tf.reduce_mean(tf.square(recent_losses - loss_mean))
+
+            if self.step_count > 10:
+                metrics["loss_variance"] = loss_variance
+                metrics["loss_stability_score"] = tf.exp(-loss_variance)
+            else:
+                metrics["loss_variance"] = tf.zeros([], dtype=tf.float32)
+                metrics["loss_stability_score"] = tf.ones([], dtype=tf.float32)
+
+            metrics["step_count"] = tf.cast(self.step_count, tf.float32)
+        else:
+            zero = tf.zeros([], dtype=tf.float32)
+            metrics["running_mel_loss"] = zero
+            metrics["running_total_loss"] = zero
+            metrics["loss_variance"] = zero
+            metrics["loss_stability_score"] = tf.ones([], dtype=tf.float32)
+            metrics["step_count"] = tf.cast(self.step_count, tf.float32)
 
         return metrics
 

@@ -108,7 +108,8 @@ class TextEncoder(tf.keras.layers.Layer):
         """
         # Token embedding
         x = self.token_embedding(inputs)
-        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        scale = tf.math.sqrt(tf.cast(self.d_model, x.dtype))
+        x = tf.cast(x, scale.dtype) * scale
         
         # Positional encoding
         x = self.positional_encoding(x)
