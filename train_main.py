@@ -84,16 +84,162 @@ VOICE CLONING CAPABILITIES:
 
 USAGE:
 ======
-Basic (recommended):
-  python3 train_main.py --train-data ../dataset/dataset_train --val-data ../dataset/dataset_eval
 
-With optimization levels:
-  python3 train_main.py --optimization-level enhanced --train-data ../dataset/dataset_train
-  python3 train_main.py --optimization-level experimental --apply-fast-convergence
-  python3 train_main.py --model-size tiny --optimization-level enhanced
-  python3 train_main.py --model-size tiny --optimization-level enhanced --disable-gpu-stabilizer
-Legacy compatibility:
-  python3 train_main.py --optimization-level basic --train-data ../dataset/dataset_train
+BASIC TRAINING:
+---------------
+# Standard training with default settings (recommended for beginners)
+python3 train_main.py --train-data ../dataset/dataset_train --val-data ../dataset/dataset_eval
+
+# Quick test with minimal resources
+python3 train_main.py --model-size tiny --batch-size 4 --epochs 10
+
+OPTIMIZATION LEVELS:
+--------------------
+# Enhanced optimization (recommended for production)
+python3 train_main.py --optimization-level enhanced --train-data ../dataset/dataset_train
+
+# Basic optimization (stable, conservative settings)
+python3 train_main.py --optimization-level basic --batch-size 16 --lr 1e-5
+
+# Experimental optimization (bleeding-edge features)
+python3 train_main.py --optimization-level experimental --apply-fast-convergence
+
+# Plateau breaker (when loss gets stuck around 2.5)
+python3 train_main.py --optimization-level plateau_breaker --batch-size 24
+
+MODEL SIZE PRESETS:
+-------------------
+# Tiny model (fast training, lower quality)
+python3 train_main.py --model-size tiny --batch-size 8 --optimization-level enhanced
+
+# Small model (balanced quality vs speed)
+python3 train_main.py --model-size small --batch-size 16 --optimization-level enhanced
+
+# Normal model (high quality, default)
+python3 train_main.py --model-size normal --batch-size 32 --optimization-level enhanced
+
+# Big model (maximum quality, requires high-end GPU)
+python3 train_main.py --model-size big --batch-size 8 --optimization-level enhanced
+
+GPU STABILIZER CONTROL:
+-----------------------
+# Enable GPU Stabilizer for consistent utilization (shows optimization logs)
+python3 train_main.py --enable-gpu-stabilizer --batch-size 32
+
+# Disable GPU Stabilizer for clean training (default, no extra logs)
+python3 train_main.py --disable-gpu-stabilizer --batch-size 32
+
+# Use control script for easy management
+bash train_control.sh --enable-gpu-stabilizer --batch-size 32
+bash breakthrough_training.sh  # For plateau breaking
+
+ADVANCED VOICE CLONING:
+-----------------------
+# Enable Global Style Tokens for prosody control
+python3 train_main.py --enable-gst --gst-num-style-tokens 10 --gst-style-loss-weight 1.0
+
+# Advanced voice cloning with custom parameters
+python3 train_main.py --enable-gst --gst-num-style-tokens 15 --gst-style-token-dim 512
+
+# Disable GST for simpler training
+python3 train_main.py --enable-gst false --optimization-level basic
+
+DECODER & VOCODER OPTIONS:
+--------------------------
+# Autoregressive decoder (default, high quality)
+python3 train_main.py --decoder-strategy autoregressive --vocoder-type griffin_lim
+
+# Non-autoregressive decoder (faster inference)
+python3 train_main.py --decoder-strategy non_autoregressive --vocoder-type hifigan
+
+# Neural vocoder backends
+python3 train_main.py --vocoder-type hifigan --optimization-level enhanced
+python3 train_main.py --vocoder-type bigvgan --model-size big
+
+TRAINING PARAMETERS:
+--------------------
+# Custom learning rate and batch size
+python3 train_main.py --lr 5e-5 --batch-size 48 --grad-accum 2
+
+# Extended training with custom epochs
+python3 train_main.py --epochs 1000 --optimization-level enhanced
+
+# Custom checkpoint directory
+python3 train_main.py --checkpoint-dir ./my_checkpoints --epochs 100
+
+# Multi-worker data loading
+python3 train_main.py --num-workers 16 --batch-size 64
+
+EVALUATION & OPTIMIZATION:
+--------------------------
+# Enable automatic evaluation during training
+python3 train_main.py --enable-evaluation --evaluation-interval 25
+
+# Create optimized model for deployment
+python3 train_main.py --create-optimized-model --compression-target 2.0
+
+# Use lightweight configuration
+python3 train_main.py --lightweight-config ./config/lightweight.json
+
+DEBUGGING & DIAGNOSTICS:
+------------------------
+# Simple loss function for debugging training issues
+python3 train_main.py --simple-loss --optimization-level basic
+
+# Reset training from scratch (ignore checkpoints)
+python3 train_main.py --reset-training --optimization-level enhanced
+
+PRODUCTION WORKFLOWS:
+---------------------
+# High-quality voice cloning training
+python3 train_main.py \
+    --model-size normal \
+    --optimization-level enhanced \
+    --enable-gst \
+    --gst-num-style-tokens 12 \
+    --batch-size 32 \
+    --epochs 500 \
+    --enable-gpu-stabilizer \
+    --enable-evaluation \
+    --evaluation-interval 50
+
+# Fast convergence training
+python3 train_main.py \
+    --optimization-level experimental \
+    --apply-fast-convergence \
+    --model-size small \
+    --batch-size 48 \
+    --lr 6e-5 \
+    --enable-gpu-stabilizer
+
+# Production deployment preparation
+python3 train_main.py \
+    --model-size big \
+    --optimization-level enhanced \
+    --epochs 800 \
+    --create-optimized-model \
+    --compression-target 1.5 \
+    --enable-evaluation
+
+# Plateau breakthrough (when loss is stuck)
+python3 train_main.py \
+    --optimization-level plateau_breaker \
+    --batch-size 24 \
+    --lr 1.5e-5 \
+    --enable-gpu-stabilizer \
+    --epochs 100
+
+CONVENIENCE SCRIPTS:
+--------------------
+# Use pre-configured scripts for common scenarios
+bash train_control.sh --enable-gpu-stabilizer --batch-size 32
+bash breakthrough_training.sh  # Automatic plateau breaking
+python3 loss_breakthrough_config.py  # Configuration helper
+
+LEGACY COMPATIBILITY:
+---------------------
+# Original stable settings (for backward compatibility)
+python3 train_main.py --optimization-level basic --train-data ../dataset/dataset_train
 """
 
 import os
@@ -111,8 +257,77 @@ from myxtts.config.config import XTTSConfig, ModelConfig, DataConfig, TrainingCo
 from myxtts.models.xtts import XTTS
 from myxtts.training.trainer import XTTSTrainer
 from myxtts.utils.commons import setup_logging, find_latest_checkpoint
-from memory_optimizer import get_gpu_memory_info, get_recommended_settings
-from gpu_utilization_optimizer import GPUUtilizationOptimizer, create_gpu_optimizer
+
+# Try to import optimization utilities, provide fallbacks if not available
+try:
+    from utilities.memory_optimizer import get_gpu_memory_info, get_recommended_settings
+except ImportError:
+    try:
+        from memory_optimizer import get_gpu_memory_info, get_recommended_settings
+    except ImportError:
+        # Fallback functions if memory_optimizer is not available
+        def get_gpu_memory_info():
+            try:
+                import GPUtil
+                gpus = GPUtil.getGPUs()
+                if gpus:
+                    return {'total_memory': gpus[0].memoryTotal}
+            except:
+                pass
+            return None
+        
+        def get_recommended_settings(total_memory):
+            # Simple fallback recommendations based on memory
+            if total_memory and total_memory > 20:  # 20GB+
+                return {
+                    'batch_size': 48,
+                    'num_workers': 16,
+                    'max_memory_fraction': 0.9,
+                    'prefetch_buffer_size': 32,
+                    'shuffle_buffer_multiplier': 50,
+                    'text_encoder_dim': 512,
+                    'decoder_dim': 1536,
+                    'max_attention_sequence_length': 512,
+                    'enable_gradient_checkpointing': False,
+                    'description': 'High-end GPU (20GB+)'
+                }
+            elif total_memory and total_memory > 10:  # 10-20GB
+                return {
+                    'batch_size': 24,
+                    'num_workers': 12,
+                    'max_memory_fraction': 0.85,
+                    'prefetch_buffer_size': 16,
+                    'shuffle_buffer_multiplier': 30,
+                    'text_encoder_dim': 384,
+                    'decoder_dim': 1024,
+                    'max_attention_sequence_length': 384,
+                    'enable_gradient_checkpointing': True,
+                    'description': 'Mid-range GPU (10-20GB)'
+                }
+            else:  # <10GB
+                return {
+                    'batch_size': 8,
+                    'num_workers': 8,
+                    'max_memory_fraction': 0.8,
+                    'prefetch_buffer_size': 8,
+                    'shuffle_buffer_multiplier': 20,
+                    'text_encoder_dim': 256,
+                    'decoder_dim': 768,
+                    'max_attention_sequence_length': 256,
+                    'enable_gradient_checkpointing': True,
+                    'description': 'Entry-level GPU (<10GB)'
+                }
+
+try:
+    from optimization.gpu_utilization_optimizer import GPUUtilizationOptimizer, create_gpu_optimizer
+except ImportError:
+    try:
+        from gpu_utilization_optimizer import GPUUtilizationOptimizer, create_gpu_optimizer
+    except ImportError:
+        # Fallback: no GPU optimizer available
+        GPUUtilizationOptimizer = None
+        def create_gpu_optimizer(*args, **kwargs):
+            return None
 
 
 # Presets to quickly scale the architecture while keeping components balanced
@@ -193,13 +408,33 @@ MODEL_SIZE_PRESETS = {
 
 # Import optimization modules for model improvements
 try:
-    from fast_convergence_config import create_optimized_config
-    from enhanced_loss_config import FastConvergenceOptimizer
-    from enhanced_training_monitor import EnhancedTrainingMonitor
+    from optimization.fast_convergence_config import create_optimized_config
+    from optimization.enhanced_loss_config import FastConvergenceOptimizer
+    from optimization.enhanced_training_monitor import EnhancedTrainingMonitor
     OPTIMIZATION_MODULES_AVAILABLE = True
-except ImportError as e:
-    OPTIMIZATION_MODULES_AVAILABLE = False
-    print(f"Warning: Optimization modules not available: {e}")
+except ImportError:
+    try:
+        from fast_convergence_config import create_optimized_config
+        from enhanced_loss_config import FastConvergenceOptimizer
+        from enhanced_training_monitor import EnhancedTrainingMonitor
+        OPTIMIZATION_MODULES_AVAILABLE = True
+    except ImportError as e:
+        OPTIMIZATION_MODULES_AVAILABLE = False
+        print(f"Warning: Optimization modules not available: {e}")
+        
+        # Create fallback classes
+        class FastConvergenceOptimizer:
+            def create_enhanced_training_config(self):
+                return {}
+        
+        class EnhancedTrainingMonitor:
+            def __init__(self, *args, **kwargs):
+                pass
+            def generate_training_report(self, *args, **kwargs):
+                pass
+        
+        def create_optimized_config():
+            return {'training': {}}
 
 # Import new evaluation and optimization features
 try:
@@ -261,6 +496,44 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
         logger.info(f"   • Adaptive loss weights: {config.training.use_adaptive_loss_weights}")
         logger.info(f"   • Label smoothing: {config.training.use_label_smoothing}")
         logger.info(f"   • Huber loss: {config.training.use_huber_loss}")
+        return config
+    
+    elif level == "plateau_breaker":
+        # SPECIAL CONFIGURATION FOR BREAKING LOSS PLATEAU
+        logger.info("🚀 Applying PLATEAU BREAKER optimization (for stuck loss)")
+        
+        # 1. Reduce learning rate for better convergence
+        config.training.learning_rate = 1.5e-5  # Reduced from 8e-5
+        
+        # 2. More aggressive scheduler settings
+        config.training.scheduler = "cosine"
+        config.training.cosine_restarts = True
+        config.training.scheduler_params = {
+            "min_learning_rate": 5e-7,  # Lower for fine-tuning
+            "restart_period": 100,      # More frequent restarts
+            "restart_mult": 1.2         # Gradual period increase
+        }
+        
+        # 3. Rebalance loss components
+        config.training.mel_loss_weight = 2.0      # Reduced from 2.5
+        config.training.kl_loss_weight = 1.2       # Reduced from 1.8
+        
+        # 4. Tighter gradient control
+        config.training.gradient_clip_norm = 0.3   # Stricter clipping
+        config.training.weight_decay = 2e-7        # Reduced regularization
+        
+        # 5. Enable advanced features
+        config.training.use_adaptive_loss_weights = True
+        config.training.use_label_smoothing = True
+        config.training.use_huber_loss = True
+        
+        logger.info("🔧 PLATEAU BREAKER settings applied:")
+        logger.info(f"   • Learning rate: {config.training.learning_rate} (reduced)")
+        logger.info(f"   • Mel loss weight: {config.training.mel_loss_weight} (rebalanced)")
+        logger.info(f"   • KL loss weight: {config.training.kl_loss_weight} (rebalanced)")
+        logger.info(f"   • Gradient clip: {config.training.gradient_clip_norm} (stricter)")
+        logger.info(f"   • Scheduler restarts: every {config.training.scheduler_params['restart_period']} epochs")
+        logger.info("   • Expected: Loss should break below 2.5 within 10-20 epochs")
         return config
     
     elif level == "experimental" and OPTIMIZATION_MODULES_AVAILABLE:
@@ -704,9 +977,9 @@ def main():
     )
     parser.add_argument(
         "--optimization-level",
-        choices=["basic", "enhanced", "experimental"],
+        choices=["basic", "enhanced", "experimental", "plateau_breaker"],
         default="enhanced",
-        help="Optimization level: basic (original), enhanced (recommended), experimental (bleeding edge)"
+        help="Optimization level: basic (original), enhanced (recommended), experimental (bleeding edge), plateau_breaker (for stuck loss)"
     )
     parser.add_argument(
         "--apply-fast-convergence",
@@ -1020,7 +1293,7 @@ def main():
     if gpu_stabilizer_enabled and torch.cuda.is_available() and not multi_gpu_active:
         logger.info("🚀 Initializing Advanced GPU Stabilizer...")
         try:
-            from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
+            from optimization.advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
             gpu_optimizer = create_advanced_gpu_stabilizer(
                 max_prefetch_batches=32,
                 num_prefetch_threads=12,
@@ -1031,16 +1304,27 @@ def main():
             logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
         except ImportError:
             try:
-                from gpu_utilization_optimizer import create_gpu_optimizer
-                gpu_optimizer = create_gpu_optimizer(
-                    device=device,
-                    max_prefetch_batches=16,
-                    enable_async_loading=True,
-                    memory_fraction=0.85
+                from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
+                gpu_optimizer = create_advanced_gpu_stabilizer(
+                    max_prefetch_batches=32,
+                    num_prefetch_threads=12,
+                    memory_fraction=0.9,
+                    enable_memory_pinning=True,
+                    aggressive_mode=True
                 )
-                logger.info("✅ Basic GPU Optimizer ready (fallback)")
-            except ImportError as e:
-                logger.warning(f"Could not initialize GPU optimizers: {e}")
+                logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
+            except ImportError:
+                try:
+                    gpu_optimizer = create_gpu_optimizer(
+                        device=device,
+                        max_prefetch_batches=16,
+                        enable_async_loading=True,
+                        memory_fraction=0.85
+                    )
+                    logger.info("✅ Basic GPU Optimizer ready (fallback)")
+                except Exception as e:
+                    logger.warning(f"Could not initialize GPU optimizers: {e}")
+                    gpu_optimizer = None
     else:
         if not gpu_stabilizer_enabled:
             logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
@@ -1097,7 +1381,8 @@ def main():
         # Force optimizer recreation to match current model variables
         if hasattr(trainer, 'optimizer') and trainer.optimizer is not None:
             logger.info("🔧 Recreating optimizer to match model variables...")
-            trainer._setup_optimizer()  # Recreate optimizer
+            # Use the existing _create_optimizer method
+            trainer.optimizer = trainer._create_optimizer()
             logger.info("✅ Optimizer recreated successfully")
     except Exception as e:
         logger.warning(f"Could not recreate optimizer: {e}")

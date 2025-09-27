@@ -8,10 +8,10 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="myxtts",
-    version="0.1.0",
+    version="1.0.0",
     author="MyXTTS Development Team",
     author_email="contact@myxtts.com",
-    description="A TensorFlow-based XTTS model implementation for multilingual text-to-speech with voice cloning",
+    description="Advanced Text-to-Speech Training Framework with Voice Cloning, GPU Optimization, and Plateau Breakthrough",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/masoodafar-web/MyXTTSModel",
