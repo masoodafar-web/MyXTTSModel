@@ -38,10 +38,6 @@ data:
 
 model:
   # NLLB optimization for memory efficiency
-  use_optimized_nllb_vocab: true
-  optimized_vocab_size: 32000  # Reduced from 256,256
-  enable_weight_tying: true
-  vocab_optimization_method: "frequency"
 """
     print(config_example)
 
@@ -150,7 +146,6 @@ python inference_main.py \\
     --speaker-id "p002" \\
     --reference-audio target_voice.wav \\
     --clone-voice \\
-    --voice-conditioning-strength 1.2 \\
     --output output_hybrid_voice.wav
 """
     print(inference_examples)
@@ -176,11 +171,6 @@ def example_5_memory_optimization():
 # Configuration for memory optimization:
 model:
   text_vocab_size: 32000  # vs 256,256 original
-  use_optimized_nllb_vocab: true
-  optimized_vocab_size: 32000
-  enable_weight_tying: true
-  shared_embedding_languages: ["en", "es", "fr", "de", "it", "pt"]  # Latin script
-  vocab_optimization_method: "frequency"  # Use most frequent tokens
 
 # Memory savings calculation:
 # Original: 256,256 × 512 dims × 4 bytes = 524MB

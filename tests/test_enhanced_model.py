@@ -36,12 +36,9 @@ def test_enhanced_model_config():
         # Validate voice cloning features
         print("\n🎭 Voice Cloning Features:")
         print(f"   • Speaker embedding dim: {config.model.speaker_embedding_dim} (enhanced from 256 to 512)")
-        print(f"   • Voice conditioning: {config.model.use_voice_conditioning}")
-        print(f"   • Voice conditioning layers: {config.model.voice_conditioning_layers}")
-        print(f"   • Voice similarity threshold: {config.model.voice_similarity_threshold}")
-        print(f"   • Voice adaptation: {config.model.enable_voice_adaptation}")
-        print(f"   • Speaker interpolation: {config.model.enable_speaker_interpolation}")
-        print(f"   • Voice denoising: {config.model.enable_voice_denoising}")
+        print(f"   • Voice conditioning enabled: {config.model.use_voice_conditioning}")
+        print(f"   • Pretrained speaker encoder: {config.model.use_pretrained_speaker_encoder}")
+        print(f"   • GST enabled: {config.model.use_gst}")
         
         # Validate voice cloning loss components
         print("\n🎯 Voice Cloning Loss Components:")
@@ -54,7 +51,6 @@ def test_enhanced_model_config():
         # Validate memory optimizations
         print("\n💾 Memory Optimizations:")
         print(f"   • Gradient checkpointing: {config.model.enable_gradient_checkpointing}")
-        print(f"   • Memory efficient attention: {config.model.use_memory_efficient_attention}")
         print(f"   • Max attention sequence length: {config.model.max_attention_sequence_length}")
         
         # Calculate approximate model size
@@ -94,18 +90,9 @@ def test_voice_cloning_parameters():
         
         # Test all new voice cloning parameters exist
         voice_cloning_params = [
-            'voice_conditioning_layers',
-            'voice_similarity_threshold', 
-            'enable_voice_adaptation',
-            'voice_encoder_dropout',
-            'enable_speaker_interpolation',
-            'voice_cloning_temperature',
-            'voice_conditioning_strength',
-            'max_reference_audio_length',
-            'min_reference_audio_length',
-            'voice_feature_dim',
-            'enable_voice_denoising',
-            'voice_cloning_loss_weight'
+            'speaker_embedding_dim',
+            'use_voice_conditioning',
+            'use_pretrained_speaker_encoder'
         ]
         
         for param in voice_cloning_params:

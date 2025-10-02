@@ -211,9 +211,9 @@ python3 train_main.py --optimization-level basic --use-huber-loss
 **Symptoms**: Generated voice doesn't match reference
 **Solution**:
 ```bash
-python3 train_main.py --enable-gst --gst-num-style-tokens 15 --voice-similarity-loss-weight 3.0
+python3 train_main.py --enable-gst --gst-num-style-tokens 15 --use-pretrained-speaker-encoder --speaker-encoder-type ecapa_tdnn
 ```
-**Why**: Insufficient voice conditioning, weak similarity loss
+**Why**: Insufficient voice conditioning; pretrained encoder strengthens voice matching
 
 ---
 

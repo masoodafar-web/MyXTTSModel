@@ -19,7 +19,6 @@ model:
   # Memory optimizations
   enable_gradient_checkpointing: true
   max_attention_sequence_length: 256
-  use_memory_efficient_attention: true
 
 training:
   # STABLE LEARNING RATE (key fix)

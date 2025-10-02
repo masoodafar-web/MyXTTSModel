@@ -371,7 +371,6 @@ def create_lightweight_config(base_config) -> Dict:
         'speaker_embedding_dim': 256, # Reduced from 512
         
         # Optimization settings
-        'use_memory_efficient_attention': True,
         'enable_gradient_checkpointing': True,
         'max_attention_sequence_length': 256,  # Reduced from 512
         

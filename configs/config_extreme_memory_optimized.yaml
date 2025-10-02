@@ -23,7 +23,6 @@ model:
   # Memory optimization settings
   enable_gradient_checkpointing: true    # Enable gradient checkpointing
   max_attention_sequence_length: 256     # Heavily limit attention sequence length
-  use_memory_efficient_attention: true   # Use memory-efficient attention
 
 data:
   # Extreme memory-optimized data settings

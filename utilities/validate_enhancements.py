@@ -31,14 +31,9 @@ def test_config_import():
         print(f"   • Speaker embedding dim: {model_config.speaker_embedding_dim}")
         
         print("\n🎭 Voice Cloning Features:")
-        print(f"   • Voice conditioning: {model_config.use_voice_conditioning}")
-        print(f"   • Voice conditioning layers: {model_config.voice_conditioning_layers}")
-        print(f"   • Voice similarity threshold: {model_config.voice_similarity_threshold}")
-        print(f"   • Voice adaptation: {model_config.enable_voice_adaptation}")
-        print(f"   • Speaker interpolation: {model_config.enable_speaker_interpolation}")
-        print(f"   • Voice denoising: {model_config.enable_voice_denoising}")
-        print(f"   • Voice cloning temperature: {model_config.voice_cloning_temperature}")
-        print(f"   • Voice conditioning strength: {model_config.voice_conditioning_strength}")
+        print(f"   • Voice conditioning enabled: {model_config.use_voice_conditioning}")
+        print(f"   • Pretrained speaker encoder: {model_config.use_pretrained_speaker_encoder}")
+        print(f"   • GST enabled: {model_config.use_gst}")
         
         # Test TrainingConfig enhancements
         training_config = TrainingConfig()

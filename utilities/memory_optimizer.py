@@ -182,7 +182,6 @@ def auto_optimize_config(config_path: str, output_path: Optional[str] = None) ->
     # Apply model settings
     config['model']['enable_gradient_checkpointing'] = recommended['enable_gradient_checkpointing']
     config['model']['max_attention_sequence_length'] = recommended['max_attention_sequence_length']
-    config['model']['use_memory_efficient_attention'] = True
     config['model']['text_encoder_dim'] = recommended['text_encoder_dim']
     config['model']['decoder_dim'] = recommended['decoder_dim']
     

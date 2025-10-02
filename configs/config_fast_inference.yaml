@@ -37,15 +37,10 @@ model:
   # Voice conditioning - Streamlined
   speaker_embedding_dim: 256
   use_voice_conditioning: true
-  voice_conditioning_layers: 2
-  voice_similarity_threshold: 0.7
-  enable_voice_adaptation: true
-  voice_encoder_dropout: 0.1
   
   # Advanced features - Optimized for speed
   enable_gradient_checkpointing: true
   max_attention_sequence_length: 512
-  use_memory_efficient_attention: true
 
 training:
   # Two-stage training configuration

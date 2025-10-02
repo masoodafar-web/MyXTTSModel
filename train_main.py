@@ -30,11 +30,8 @@ LATEST IMPROVEMENTS APPLIED:
 
 2. ADVANCED VOICE CLONING CAPABILITIES:
    - Speaker embedding: 256 → 512 dimensions (better voice representation)
-   - Voice conditioning layers: 4 (dedicated voice processing)
-   - Voice similarity threshold: 0.75 (quality control)
-   - Voice adaptation: Enabled (adaptive conditioning)
-   - Speaker interpolation: Enabled (voice blending)
-   - Voice denoising: Enabled (cleaner reference audio)
+   - Optional pretrained speaker encoder support
+   - Global Style Tokens for prosody control
    - Voice cloning loss components: 5 specialized losses
 
 3. ENHANCED LOSS FUNCTIONS FOR VOICE CLONING:
@@ -76,11 +73,10 @@ EXPECTED BENEFITS:
 VOICE CLONING CAPABILITIES:
 ===========================
 - High-fidelity voice replication from reference audio
-- Voice adaptation and interpolation
+- Optional pretrained encoder for stronger conditioning
 - Speaker identity preservation
 - Prosody and intonation matching
-- Spectral consistency maintenance
-- Voice denoising for cleaner input
+- Specialized losses for spectral consistency
 
 USAGE:
 ======
@@ -136,13 +132,13 @@ bash breakthrough_training.sh  # For plateau breaking
 ADVANCED VOICE CLONING:
 -----------------------
 # Enable Global Style Tokens for prosody control
-python3 train_main.py --enable-gst --gst-num-style-tokens 10 --gst-style-loss-weight 1.0
+python3 train_main.py --enable-gst --gst-num-style-tokens 10
 
-# Advanced voice cloning with custom parameters
-python3 train_main.py --enable-gst --gst-num-style-tokens 15 --gst-style-token-dim 512
-
-# Disable GST for simpler training
-python3 train_main.py --enable-gst false --optimization-level basic
+# Advanced voice cloning with pretrained speaker encoder
+python3 train_main.py \
+    --use-pretrained-speaker-encoder \
+    --speaker-encoder-type ecapa_tdnn \
+    --speaker-encoder-path ./pretrained_speaker_encoder.ckpt
 
 DECODER & VOCODER OPTIONS:
 --------------------------
@@ -353,8 +349,6 @@ MODEL_SIZE_PRESETS = {
         "decoder_layers": 8,
         "decoder_head_dim": 64,
         "speaker_embedding_dim": 256,
-        "voice_conditioning_layers": 2,
-        "voice_feature_dim": 128,
         "max_attention_len": 256,
         "max_text_length": 320,
         "enable_gradient_checkpointing": True,
@@ -371,8 +365,6 @@ MODEL_SIZE_PRESETS = {
         "decoder_layers": 12,
         "decoder_head_dim": 64,
         "speaker_embedding_dim": 320,
-        "voice_conditioning_layers": 3,
-        "voice_feature_dim": 192,
         "max_attention_len": 384,
         "max_text_length": 420,
         "enable_gradient_checkpointing": True,
@@ -389,8 +381,6 @@ MODEL_SIZE_PRESETS = {
         "decoder_layers": 16,
         "decoder_head_dim": 64,
         "speaker_embedding_dim": 512,
-        "voice_conditioning_layers": 4,
-        "voice_feature_dim": 256,
         "max_attention_len": 512,
         "max_text_length": 500,
         "enable_gradient_checkpointing": True,
@@ -407,8 +397,6 @@ MODEL_SIZE_PRESETS = {
         "decoder_layers": 20,
         "decoder_head_dim": 64,
         "speaker_embedding_dim": 640,
-        "voice_conditioning_layers": 5,
-        "voice_feature_dim": 320,
         "max_attention_len": 768,
         "max_text_length": 600,
         "enable_gradient_checkpointing": True,
@@ -637,15 +625,12 @@ def build_config(
     pretrained_speaker_encoder_path: Optional[str] = None,
     freeze_speaker_encoder: Optional[bool] = None,
     speaker_encoder_type: Optional[str] = None,
-    contrastive_loss_temperature: Optional[float] = None,
-    contrastive_loss_margin: Optional[float] = None,
     # GST parameters for prosody controllability
     enable_gst: bool = True,
     gst_num_style_tokens: int = 10,
     gst_style_token_dim: int = 256,
     gst_style_embedding_dim: int = 256,
     gst_num_heads: int = 4,
-    gst_style_loss_weight: float = 1.0,
     # Evaluation parameters for automatic checkpoint quality monitoring
     enable_automatic_evaluation: bool = False,
     evaluation_interval: int = 10,
@@ -688,14 +673,10 @@ def build_config(
         enable_grad_checkpointing = enable_grad_checkpointing_override
 
     speaker_embedding_dim = preset["speaker_embedding_dim"]
-    voice_conditioning_layers = preset["voice_conditioning_layers"]
-    voice_feature_dim = preset["voice_feature_dim"]
 
     use_pretrained_flag = use_pretrained_speaker_encoder if use_pretrained_speaker_encoder is not None else False
     freeze_speaker_flag = freeze_speaker_encoder if freeze_speaker_encoder is not None else True
     speaker_encoder_type_value = speaker_encoder_type or "ecapa_tdnn"
-    contrastive_temperature_value = contrastive_loss_temperature if contrastive_loss_temperature is not None else 0.1
-    contrastive_margin_value = contrastive_loss_margin if contrastive_loss_margin is not None else 0.2
 
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
@@ -724,20 +705,6 @@ def build_config(
         # Enhanced voice conditioning for superior voice cloning
         speaker_embedding_dim=speaker_embedding_dim,
         use_voice_conditioning=True,
-        voice_conditioning_layers=voice_conditioning_layers,
-        voice_similarity_threshold=0.75,
-        enable_voice_adaptation=True,
-        voice_encoder_dropout=0.1,
-        
-        # Advanced voice cloning features
-        enable_speaker_interpolation=True,
-        voice_cloning_temperature=0.7,
-        voice_conditioning_strength=1.0,
-        max_reference_audio_length=10,
-        min_reference_audio_length=2.0,
-        voice_feature_dim=voice_feature_dim,
-        enable_voice_denoising=True,
-        voice_cloning_loss_weight=2.0,  # Actual loss weight used in training
 
         # Enhanced voice conditioning with pre-trained speaker encoders
         # NOTE: Set use_pretrained_speaker_encoder=True to enable enhanced voice conditioning
@@ -746,8 +713,6 @@ def build_config(
         pretrained_speaker_encoder_path=pretrained_speaker_encoder_path,
         freeze_speaker_encoder=freeze_speaker_flag,
         speaker_encoder_type=speaker_encoder_type_value,
-        contrastive_loss_temperature=contrastive_temperature_value,
-        contrastive_loss_margin=contrastive_margin_value,
 
         # Global Style Tokens (GST) for prosody controllability
         use_gst=enable_gst,
@@ -756,9 +721,6 @@ def build_config(
         gst_style_embedding_dim=gst_style_embedding_dim,
         gst_num_heads=gst_num_heads,
         gst_reference_encoder_dim=128,  # Fixed reference encoder dimension
-        gst_enable_emotion_control=True,
-        gst_enable_speaking_rate_control=True,
-        gst_style_loss_weight=gst_style_loss_weight,
 
         # Decoder / vocoder strategy controls
         decoder_strategy=decoder_strategy,
@@ -775,17 +737,10 @@ def build_config(
         max_text_length=max_text_length,
         tokenizer_type="nllb",
         tokenizer_model="facebook/nllb-200-distilled-600M",
-        
-        # NLLB Embedding Optimization (NEW) - Reduce memory usage
-        use_optimized_nllb_vocab=True,
-        optimized_vocab_size=32000,  # Much smaller than 256,256 full NLLB vocab
-        enable_weight_tying=True,  # Share embeddings between similar languages
-        vocab_optimization_method="frequency",  # Use most frequent tokens
 
         # Memory optimizations for larger model
         enable_gradient_checkpointing=enable_grad_checkpointing,
         max_attention_sequence_length=max_attention_len,
-        use_memory_efficient_attention=True,
     )
 
     # Training configuration (optimized parameters for fast convergence)
@@ -970,7 +925,7 @@ def main():
         default=2,
         help="Gradient accumulation steps (optimized for larger effective batch size)"
     )
-    parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers")
+    parser.add_argument("--num-workers", type=int, default=16, help="Data loader workers")
     parser.add_argument("--lr", type=float, default=8e-5, help="Learning rate (optimized for better convergence)")
     parser.add_argument(
         "--prefetch-buffer-size",
@@ -1104,19 +1059,6 @@ def main():
         help="Allow finetuning speaker encoder"
     )
     parser.set_defaults(freeze_speaker_encoder=None)
-    parser.add_argument(
-        "--contrastive-loss-temperature",
-        type=float,
-        default=None,
-        help="Override contrastive loss temperature"
-    )
-    parser.add_argument(
-        "--contrastive-loss-margin",
-        type=float,
-        default=None,
-        help="Override contrastive loss margin"
-    )
-
     # Global Style Tokens (GST) options for prosody controllability
     parser.add_argument(
         "--enable-gst",
@@ -1147,12 +1089,6 @@ def main():
         type=int,
         default=4,
         help="Number of attention heads for style selection (default: 4)"
-    )
-    parser.add_argument(
-        "--gst-style-loss-weight",
-        type=float,
-        default=1.0,
-        help="Weight for style consistency loss (default: 1.0)"
     )
     # Emergency simple loss to validate the training loop
     parser.add_argument(
@@ -1318,8 +1254,6 @@ def main():
     freeze_speaker_override = args.freeze_speaker_encoder
     speaker_encoder_path = args.speaker_encoder_path
     speaker_encoder_type = args.speaker_encoder_type
-    contrastive_temp_override = args.contrastive_loss_temperature
-    contrastive_margin_override = args.contrastive_loss_margin
 
     if speaker_encoder_path and use_pretrained_override is None:
         logger.info("Speaker encoder path provided; enabling pretrained speaker encoder")
@@ -1356,15 +1290,12 @@ def main():
         pretrained_speaker_encoder_path=speaker_encoder_path,
         freeze_speaker_encoder=freeze_speaker_override,
         speaker_encoder_type=speaker_encoder_type,
-        contrastive_loss_temperature=contrastive_temp_override,
-        contrastive_loss_margin=contrastive_margin_override,
         # GST parameters
         enable_gst=args.enable_gst,
         gst_num_style_tokens=args.gst_num_style_tokens,
         gst_style_token_dim=args.gst_style_token_dim,
         gst_style_embedding_dim=args.gst_style_embedding_dim,
         gst_num_heads=args.gst_num_heads,
-        gst_style_loss_weight=args.gst_style_loss_weight,
         # Evaluation parameters
         enable_automatic_evaluation=args.enable_evaluation,
         evaluation_interval=args.evaluation_interval,

@@ -32,15 +32,10 @@ model:
   # Voice conditioning - Standard
   speaker_embedding_dim: 256
   use_voice_conditioning: true
-  voice_conditioning_layers: 2
-  voice_similarity_threshold: 0.75
-  enable_voice_adaptation: true
-  voice_encoder_dropout: 0.1
   
   # Advanced features
   enable_gradient_checkpointing: false
   max_attention_sequence_length: 512
-  use_memory_efficient_attention: true
 
 training:
   # Standard single-stage training

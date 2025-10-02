@@ -19,12 +19,12 @@ def test_basic_imports():
         assert hasattr(config, 'supported_languages')
         print("✅ New DataConfig fields present")
         
-        # Test new ModelConfig fields
+        # Test representative ModelConfig fields
         model = ModelConfig()
-        assert hasattr(model, 'use_optimized_nllb_vocab')
-        assert hasattr(model, 'optimized_vocab_size')
-        assert hasattr(model, 'enable_weight_tying')
-        print("✅ New ModelConfig fields present")
+        assert hasattr(model, 'use_gst')
+        assert hasattr(model, 'use_pretrained_speaker_encoder')
+        assert hasattr(model, 'enable_gradient_checkpointing')
+        print("✅ ModelConfig core fields present")
         
         return True
     except Exception as e:
@@ -91,13 +91,13 @@ def test_config_serialization():
         
         # Test ModelConfig serialization
         model_config = ModelConfig(
-            use_optimized_nllb_vocab=True,
-            optimized_vocab_size=20000
+            use_gst=False,
+            enable_gradient_checkpointing=True
         )
-        
+
         model_dict = model_config.__dict__
-        assert 'use_optimized_nllb_vocab' in model_dict
-        assert 'optimized_vocab_size' in model_dict
+        assert 'use_gst' in model_dict
+        assert 'enable_gradient_checkpointing' in model_dict
         print("✅ ModelConfig serialization works")
         
         return True

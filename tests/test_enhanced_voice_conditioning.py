@@ -29,15 +29,11 @@ def test_imports():
         # Test new configuration parameters
         assert hasattr(config, 'use_pretrained_speaker_encoder'), "Missing use_pretrained_speaker_encoder"
         assert hasattr(config, 'speaker_encoder_type'), "Missing speaker_encoder_type"
-        assert hasattr(config, 'contrastive_loss_temperature'), "Missing contrastive_loss_temperature"
-        assert hasattr(config, 'contrastive_loss_margin'), "Missing contrastive_loss_margin"
         print("✅ New configuration parameters are present")
         
         # Test default values
         assert config.use_pretrained_speaker_encoder == False, "Wrong default for use_pretrained_speaker_encoder"
         assert config.speaker_encoder_type == "ecapa_tdnn", "Wrong default for speaker_encoder_type"
-        assert config.contrastive_loss_temperature == 0.1, "Wrong default for contrastive_loss_temperature"
-        assert config.contrastive_loss_margin == 0.2, "Wrong default for contrastive_loss_margin"
         print("✅ Configuration defaults are correct")
         
         print("✅ All imports and configurations tested successfully!")
@@ -94,8 +90,6 @@ def test_configuration_consistency():
         required_in_train = [
             'use_pretrained_speaker_encoder',
             'speaker_encoder_type',
-            'contrastive_loss_temperature',
-            'contrastive_loss_margin',
             'voice_similarity_loss_weight'
         ]
         
@@ -112,9 +106,7 @@ def test_configuration_consistency():
         
         required_in_inference = [
             '--use-pretrained-speaker-encoder',
-            '--speaker-encoder-type',
-            '--voice-conditioning-strength',
-            '--voice-cloning-temperature'
+            '--speaker-encoder-type'
         ]
         
         for arg in required_in_inference:

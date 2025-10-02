@@ -74,7 +74,6 @@ model:
   text_vocab_size: 256256
   tokenizer_model: facebook/nllb-200-distilled-600M
   tokenizer_type: nllb
-  use_memory_efficient_attention: true
   use_voice_conditioning: true
   win_length: 1024
 training:

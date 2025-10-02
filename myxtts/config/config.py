@@ -12,121 +12,84 @@ from typing import List, Dict, Any, Optional
 
 @dataclass
 class ModelConfig:
-    """Model architecture configuration."""
-    
-    # Text encoder settings - Enhanced for better text understanding
+    """Core model architecture configuration."""
+
+    # Transformer architecture
     text_encoder_dim: int = 512
-    text_encoder_layers: int = 8  # Increased from 6 for better text representation
+    text_encoder_layers: int = 8
     text_encoder_heads: int = 8
-    text_vocab_size: int = 256_256  # Updated for NLLB-200 tokenizer
-    
-    # Audio encoder settings (for voice conditioning) - Enhanced for better voice cloning
-    audio_encoder_dim: int = 768  # Increased from 512 for better audio representation
-    audio_encoder_layers: int = 8  # Increased from 6 for deeper audio understanding
-    audio_encoder_heads: int = 12  # Increased from 8 for better attention
-    
-    # Decoder settings - Significantly enhanced for higher quality output
-    decoder_dim: int = 1536  # Increased from 1024 for higher quality synthesis
-    decoder_layers: int = 16  # Increased from 12 for more complex modeling
-    decoder_heads: int = 24  # Increased from 16 for better attention patterns
-    
-    # Mel spectrogram settings
+    text_vocab_size: int = 256_256
+
+    audio_encoder_dim: int = 768
+    audio_encoder_layers: int = 8
+    audio_encoder_heads: int = 12
+
+    decoder_dim: int = 1536
+    decoder_layers: int = 16
+    decoder_heads: int = 24
+
+    # Acoustic front-end
     n_mels: int = 80
     n_fft: int = 1024
     hop_length: int = 256
     win_length: int = 1024
     sample_rate: int = 22050
-    
-    # Voice conditioning - Enhanced for superior voice cloning
-    speaker_embedding_dim: int = 512  # Increased from 256 for better voice representation
+
+    # Voice conditioning
+    speaker_embedding_dim: int = 512
     use_voice_conditioning: bool = True
-    voice_conditioning_layers: int = 4  # New: dedicated voice conditioning layers
-    voice_similarity_threshold: float = 0.75  # New: minimum similarity for voice cloning
-    enable_voice_adaptation: bool = True  # New: adaptive voice conditioning
-    voice_encoder_dropout: float = 0.1  # New: regularization for voice encoder
-    
-    # Modern decoding strategies
-    decoder_strategy: str = "autoregressive"  # "autoregressive", "non_autoregressive", "diffusion"
-    
-    # Duration prediction (set to False to disable and avoid gradient warnings)
-    use_duration_predictor: bool = True  # Enable duration prediction for alignment
-    
-    # Diffusion decoder settings (when decoder_strategy = "diffusion")
-    diffusion_timesteps: int = 50  # Number of diffusion timesteps
-    diffusion_beta_schedule: str = "cosine"  # "linear" or "cosine"
-    enable_diffusion_inference: bool = True  # Enable diffusion during inference
-    
-    # Neural vocoder settings
-    vocoder_type: str = "hifigan"  # "hifigan", "bigvgan", "griffin_lim" (fallback)
-    vocoder_upsample_rates: List[int] = None  # Will be set in __post_init__
-    vocoder_upsample_kernel_sizes: List[int] = None  # Will be set in __post_init__
-    vocoder_resblock_kernel_sizes: List[int] = None  # Will be set in __post_init__
-    vocoder_resblock_dilation_sizes: List[List[int]] = None  # Will be set in __post_init__
+
+    decoder_strategy: str = "autoregressive"
+    use_duration_predictor: bool = True
+
+    # Vocoder settings
+    vocoder_type: str = "hifigan"
+    vocoder_upsample_rates: List[int] = None
+    vocoder_upsample_kernel_sizes: List[int] = None
+    vocoder_resblock_kernel_sizes: List[int] = None
+    vocoder_resblock_dilation_sizes: List[List[int]] = None
     vocoder_initial_channel: int = 512
-    
-    # Language support
+
+    # Tokenization / language support
     languages: List[str] = None
     max_text_length: int = 500
-    
-    # Tokenizer settings
-    tokenizer_type: str = "nllb"  # "custom" or "nllb"
+    tokenizer_type: str = "nllb"
     tokenizer_model: str = "facebook/nllb-200-distilled-600M"
-    
-    # NLLB Embedding Optimization (NEW) - Reduce memory usage from 256,256 vocab
-    use_optimized_nllb_vocab: bool = True  # Use smaller, optimized NLLB vocabulary
-    optimized_vocab_size: int = 32000  # Reduced vocabulary size (vs 256,256 full NLLB)
-    enable_weight_tying: bool = True  # Enable weight tying between languages
-    shared_embedding_languages: List[str] = None  # Languages to share embeddings (None = auto-group by script)
-    vocab_optimization_method: str = "frequency"  # "frequency", "cross_lingual", or "manual"
-    
-    # Advanced Voice Cloning Features - NEW for better voice cloning capability
-    enable_speaker_interpolation: bool = True  # Allow blending multiple voices
-    voice_cloning_temperature: float = 0.7  # Default temperature for voice cloning
-    voice_conditioning_strength: float = 1.0  # Strength of voice conditioning
-    max_reference_audio_length: int = 10  # Maximum reference audio length in seconds
-    min_reference_audio_length: float = 2.0  # Minimum reference audio length in seconds
-    voice_feature_dim: int = 256  # Dimension for voice feature extraction
-    enable_voice_denoising: bool = True  # Denoise reference audio for better cloning
-    voice_cloning_loss_weight: float = 2.0  # Weight for voice similarity loss
-    
-    # Pre-trained Speaker Encoder Settings - NEW for enhanced voice conditioning
-    use_pretrained_speaker_encoder: bool = False  # Use pre-trained speaker encoder (disabled by default)
-    pretrained_speaker_encoder_path: Optional[str] = None  # Path to pre-trained weights
-    freeze_speaker_encoder: bool = True  # Freeze pre-trained speaker encoder weights
-    speaker_encoder_type: str = "ecapa_tdnn"  # Type of speaker encoder ("ecapa_tdnn", "resemblyzer")
-    contrastive_loss_temperature: float = 0.1  # Temperature for contrastive speaker loss
-    contrastive_loss_margin: float = 0.2  # Margin for contrastive speaker loss
-    
-    # Global Style Tokens (GST) Settings - NEW for prosody controllability
-    use_gst: bool = True  # Enable Global Style Tokens for prosody control
-    gst_num_style_tokens: int = 10  # Number of learnable style tokens
-    gst_style_token_dim: int = 256  # Dimension of each style token
-    gst_style_embedding_dim: int = 256  # Output style embedding dimension
-    gst_num_heads: int = 4  # Number of attention heads for style selection
-    gst_reference_encoder_dim: int = 128  # Reference encoder output dimension
-    gst_enable_emotion_control: bool = True  # Enable emotion-based style control
-    gst_enable_speaking_rate_control: bool = True  # Enable speaking rate control
-    gst_style_loss_weight: float = 1.0  # Weight for style consistency loss
-    
-    # Memory optimization settings
+
+    # Optional pre-trained speaker encoder
+    use_pretrained_speaker_encoder: bool = False
+    pretrained_speaker_encoder_path: Optional[str] = None
+    freeze_speaker_encoder: bool = True
+    speaker_encoder_type: str = "ecapa_tdnn"
+
+    # Global Style Tokens
+    use_gst: bool = True
+    gst_num_style_tokens: int = 10
+    gst_style_token_dim: int = 256
+    gst_style_embedding_dim: int = 256
+    gst_num_heads: int = 4
+    gst_reference_encoder_dim: int = 128
+
+    # Memory optimisation
     enable_gradient_checkpointing: bool = False
-    max_attention_sequence_length: int = 512  # Text length limit - increase for longer sentences
-    use_memory_efficient_attention: bool = True
-    
+    max_attention_sequence_length: int = 512
+
     def __post_init__(self):
         if self.languages is None:
-            self.languages = ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]
-        
-        # Set default vocoder configurations if not provided
+            self.languages = [
+                "en", "es", "fr", "de", "it", "pt", "pl", "tr",
+                "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko",
+            ]
+
         if self.vocoder_upsample_rates is None:
             self.vocoder_upsample_rates = [8, 8, 2, 2]
-        
+
         if self.vocoder_upsample_kernel_sizes is None:
             self.vocoder_upsample_kernel_sizes = [16, 16, 4, 4]
-        
+
         if self.vocoder_resblock_kernel_sizes is None:
             self.vocoder_resblock_kernel_sizes = [3, 7, 11]
-        
+
         if self.vocoder_resblock_dilation_sizes is None:
             self.vocoder_resblock_dilation_sizes = [[1, 3, 5], [1, 3, 5], [1, 3, 5]]
 

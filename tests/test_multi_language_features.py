@@ -35,14 +35,13 @@ def test_config_new_features():
         
         # Test ModelConfig with NLLB optimization
         model_config = ModelConfig(
-            use_optimized_nllb_vocab=True,
-            optimized_vocab_size=16000,
-            enable_weight_tying=True,
-            vocab_optimization_method="frequency"
+            use_gst=False,
+            enable_gradient_checkpointing=True,
+            max_attention_sequence_length=384
         )
         
-        print(f"✅ ModelConfig with optimized NLLB vocab size: {model_config.optimized_vocab_size}")
-        print(f"✅ Weight tying enabled: {model_config.enable_weight_tying}")
+        print(f"✅ ModelConfig max attention length: {model_config.max_attention_sequence_length}")
+        print(f"✅ GST enabled: {model_config.use_gst}")
         
         # Test complete config
         config = XTTSConfig(data=data_config, model=model_config)
@@ -119,9 +118,9 @@ def test_train_main_config():
         # Test that build_config works with new features
         config = build_config()
         
-        print(f"✅ Config built with NLLB vocab size: {config.model.text_vocab_size}")
+        print(f"✅ Config built with vocab size: {config.model.text_vocab_size}")
         print(f"✅ Multilingual support: {config.data.enable_multilingual}")
-        print(f"✅ NLLB optimization: {config.model.use_optimized_nllb_vocab}")
+        print(f"✅ Gradient checkpointing: {config.model.enable_gradient_checkpointing}")
         
         return True
         

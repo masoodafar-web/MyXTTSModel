@@ -6,8 +6,6 @@ This document describes the enhanced voice conditioning implementation that repl
 
 The original audio encoder (myxtts/models/xtts.py:184) consisted of simple convolutional layers and Transformer blocks. This implementation replaces it with pre-trained speaker encoders (Resemblyzer, ECAPA-TDNN, or Coqui models) with frozen weights, bringing voice similarity stability to Coqui-level performance.
 
-The voice cloning loss weight (voice_cloning_loss_weight) in myxtts/config/config.py:63 was previously just a parameter but unused in training. This implementation provides a real contrastive/GE2E loss.
-
 ## Key Components
 
 ### 1. PretrainedSpeakerEncoder
@@ -31,8 +29,6 @@ New configuration parameters in `ModelConfig`:
 - `use_pretrained_speaker_encoder`: Enable enhanced voice conditioning
 - `speaker_encoder_type`: Choose encoder architecture
 - `freeze_speaker_encoder`: Freeze pre-trained weights
-- `contrastive_loss_temperature`: Temperature for contrastive loss
-- `contrastive_loss_margin`: Margin for contrastive loss
 
 ## Usage
 
@@ -45,8 +41,6 @@ Enable enhanced voice conditioning in `train_main.py`:
 use_pretrained_speaker_encoder=True,  # Enable enhanced voice conditioning
 speaker_encoder_type="ecapa_tdnn",    # Choose: "ecapa_tdnn", "resemblyzer", "coqui"
 freeze_speaker_encoder=True,          # Keep pre-trained weights frozen
-contrastive_loss_temperature=0.1,     # Contrastive loss temperature
-contrastive_loss_margin=0.2,          # Contrastive loss margin
 ```
 
 Then run training as usual:
@@ -71,9 +65,7 @@ python inference_main.py \
     --text "Hello world" \
     --reference-audio speaker.wav \
     --use-pretrained-speaker-encoder \
-    --speaker-encoder-type ecapa_tdnn \
-    --voice-conditioning-strength 1.2 \
-    --voice-cloning-temperature 0.6
+    --speaker-encoder-type ecapa_tdnn
 ```
 
 ## Speaker Encoder Types

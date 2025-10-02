@@ -38,7 +38,7 @@ Basic voice cloning:
   python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --reference-audio speaker.wav --clone-voice --model-size tiny
 
 Advanced voice cloning with custom parameters:
-  python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --reference-audio speaker.wav --clone-voice --voice-cloning-temperature 0.6 --voice-conditioning-strength 1.2
+  python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --reference-audio speaker.wav --clone-voice --temperature 0.6
 
 Multiple reference audios for voice blending:
   python3 inference_main.py --text "Hello world, this is a test of voice cloning with more text to generate longer audio." --multiple-reference-audios speaker1.wav speaker2.wav --clone-voice
@@ -111,29 +111,6 @@ def parse_args() -> argparse.Namespace:
     )
     
     # Advanced Voice Cloning Parameters
-    parser.add_argument(
-        "--voice-cloning-temperature",
-        type=float,
-        default=0.7,
-        help="Temperature specifically for voice cloning (default: 0.7, lower for more consistent voice).",
-    )
-    parser.add_argument(
-        "--voice-conditioning-strength",
-        type=float,
-        default=1.0,
-        help="Strength of voice conditioning (0.0-2.0, default: 1.0).",
-    )
-    parser.add_argument(
-        "--enable-voice-interpolation",
-        action="store_true",
-        help="Enable voice interpolation for smoother voice cloning.",
-    )
-    parser.add_argument(
-        "--voice-similarity-threshold",
-        type=float,
-        default=0.75,
-        help="Minimum voice similarity threshold for voice cloning (default: 0.75).",
-    )
     parser.add_argument(
         "--multiple-reference-audios",
         nargs="+",
@@ -388,11 +365,8 @@ def log_voice_cloning_setup(args, logger) -> None:
     """Log voice cloning setup information."""
     logger.info("🎭 Voice Cloning Setup:")
     logger.info(f"   • Mode: {'Advanced' if args.clone_voice else 'Standard'}")
-    logger.info(f"   • Temperature: {args.voice_cloning_temperature}")
-    logger.info(f"   • Conditioning strength: {args.voice_conditioning_strength}")
-    logger.info(f"   • Similarity threshold: {args.voice_similarity_threshold}")
-    logger.info(f"   • Voice interpolation: {'Enabled' if args.enable_voice_interpolation else 'Disabled'}")
-    
+    logger.info(f"   • Sampling temperature: {args.temperature}")
+
     if args.multiple_reference_audios:
         logger.info(f"   • Multiple reference audios: {len(args.multiple_reference_audios)} files")
         for i, ref_audio in enumerate(args.multiple_reference_audios):
@@ -559,38 +533,13 @@ def main():
     args = parse_args()
     logger = setup_logging()
 
-    # Sanity checks for critical voice cloning knobs
-    if args.voice_conditioning_strength < 0.0 or args.voice_conditioning_strength > 2.0:
-        clamped_strength = float(np.clip(args.voice_conditioning_strength, 0.0, 2.0))
-        logger.warning(
-            "Voice conditioning strength %.3f out of range [0.0, 2.0]; clamping to %.3f",
-            args.voice_conditioning_strength,
-            clamped_strength,
-        )
-        args.voice_conditioning_strength = clamped_strength
-
-    if args.voice_cloning_temperature <= 0.0:
-        logger.warning(
-            "Voice cloning temperature %.3f must be positive; using 0.1",
-            args.voice_cloning_temperature,
-        )
-        args.voice_cloning_temperature = 0.1
-
+    # Sanity checks for sampling temperature
     if args.temperature <= 0.0:
         logger.warning(
             "Sampling temperature %.3f must be positive; using 0.7",
             args.temperature,
         )
         args.temperature = 0.7
-
-    if not 0.0 < args.voice_similarity_threshold <= 1.0:
-        clamped_threshold = float(np.clip(args.voice_similarity_threshold, 1e-3, 1.0))
-        logger.warning(
-            "Voice similarity threshold %.3f outside (0, 1]; clamping to %.3f",
-            args.voice_similarity_threshold,
-            clamped_threshold,
-        )
-        args.voice_similarity_threshold = clamped_threshold
 
     # Log accelerator availability (useful for debugging inference speed)
     gpus = tf.config.list_physical_devices("GPU")
@@ -613,16 +562,6 @@ def main():
         config.model.use_pretrained_speaker_encoder = True
         config.model.speaker_encoder_type = args.speaker_encoder_type
         logger.info(f"🎯 Enhanced voice conditioning enabled with {args.speaker_encoder_type} encoder")
-    
-    # Voice cloning parameters
-    if hasattr(config.model, "voice_cloning_temperature"):
-        config.model.voice_cloning_temperature = args.voice_cloning_temperature
-    if hasattr(config.model, "voice_conditioning_strength"):
-        config.model.voice_conditioning_strength = args.voice_conditioning_strength
-    if hasattr(config.model, "voice_similarity_threshold"):
-        config.model.voice_similarity_threshold = args.voice_similarity_threshold
-    if hasattr(config.model, "enable_speaker_interpolation"):
-        config.model.enable_speaker_interpolation = args.enable_voice_interpolation
     
     # Global Style Tokens (GST) parameters
     prosody_reference = None
@@ -779,12 +718,9 @@ def main():
             style_weights=style_weights,
             language=args.language,
             max_length=args.max_length,
-            temperature=args.voice_cloning_temperature,  # Use specialized voice cloning temperature
+            temperature=args.temperature,
         )
-        
-        logger.info(f"Voice cloning completed with temperature: {args.voice_cloning_temperature}")
-        logger.info(f"Voice conditioning strength: {args.voice_conditioning_strength}")
-        
+
     else:
         # Standard synthesis
         result = inference_engine.synthesize(
@@ -815,13 +751,9 @@ def main():
     # Log voice cloning specific information
     if args.clone_voice or args.multiple_reference_audios:
         logger.info("🎭 Voice cloning information:")
-        logger.info(f"   • Voice cloning temperature: {args.voice_cloning_temperature}")
-        logger.info(f"   • Voice conditioning strength: {args.voice_conditioning_strength}")
-        logger.info(f"   • Voice similarity threshold: {args.voice_similarity_threshold}")
+        logger.info(f"   • Sampling temperature: {args.temperature}")
         if args.multiple_reference_audios:
             logger.info(f"   • Reference audio files: {len(args.multiple_reference_audios)}")
-        if args.enable_voice_interpolation:
-            logger.info("   • Voice interpolation: Enabled")
     
     logger.info(f"✅ Audio saved to: {args.output}")
     if args.save_mel:

@@ -176,7 +176,6 @@ model:
   # Memory optimizations
   enable_gradient_checkpointing: true
   max_attention_sequence_length: 256
-  use_memory_efficient_attention: true
 
 training:
   # STABLE LEARNING RATE (key fix)
@@ -309,11 +308,9 @@ def create_stable_config(model_size: str = "tiny") -> XTTSConfig:
         
         speaker_embedding_dim=256,
         use_voice_conditioning=True,
-        voice_conditioning_layers=2,
         
         enable_gradient_checkpointing=True,
         max_attention_sequence_length=256,
-        use_memory_efficient_attention=True,
         
         languages=["en", "es", "fr", "de", "it", "pt"],
         max_text_length=320,

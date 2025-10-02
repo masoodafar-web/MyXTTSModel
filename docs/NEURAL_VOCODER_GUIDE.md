@@ -189,7 +189,6 @@ config.vocoder_type = "griffin_lim"
 ```python
 config = ModelConfig()
 config.enable_gradient_checkpointing = True
-config.use_memory_efficient_attention = True
 config.enable_mixed_precision = True  # In training config
 ```
 

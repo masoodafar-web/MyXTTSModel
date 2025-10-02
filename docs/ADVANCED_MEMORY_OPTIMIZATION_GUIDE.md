@@ -17,13 +17,12 @@ The attention computation in transformer layers creates attention matrices of si
 
 ## Comprehensive Solution Implemented
 
-### 1. Memory-Efficient Attention ✅
+### 1. Attention Length Guards ✅
 
 **File Modified**: `myxtts/models/layers.py`
 
 - **Sequence Length Limiting**: Automatically truncates sequences over 512 tokens
-- **Modern TF Attention**: Uses `tf.nn.scaled_dot_product_attention` when available (TF 2.11+)
-- **Memory-Safe Computation**: Prevents allocation of oversized attention matrices
+- **Memory-Safe Computation**: Prevents allocation of oversized attention matrices without extra feature flags
 
 ```python
 # Limit sequence length to prevent memory explosion
@@ -55,7 +54,6 @@ model:
 New memory optimization parameters:
 - `enable_gradient_checkpointing`: Enable/disable gradient checkpointing
 - `max_attention_sequence_length`: Limit attention computation sequence length
-- `use_memory_efficient_attention`: Use optimized attention implementation
 
 ### 4. Intelligent Batch Size Management ✅
 
@@ -144,7 +142,6 @@ model:
   # Enable memory optimizations
   enable_gradient_checkpointing: true
   max_attention_sequence_length: 512
-  use_memory_efficient_attention: true
 
 data:
   batch_size: 2             # Small batch size
