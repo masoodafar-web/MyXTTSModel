@@ -216,7 +216,7 @@ class TwoStageTrainer:
             self.logger.info(f"Epoch {epoch + 1}/{self.two_stage_config.stage2_epochs}")
             
             # Training
-            train_loss.reset_states()
+            train_loss.reset_state()
             for batch_idx, (mel_batch, audio_batch) in enumerate(train_dataset):
                 loss = self._train_vocoder_step(mel_batch, audio_batch)
                 train_loss.update_state(loss)
@@ -226,7 +226,7 @@ class TwoStageTrainer:
             
             # Validation
             if val_dataset:
-                val_loss.reset_states()
+                val_loss.reset_state()
                 for mel_batch, audio_batch in val_dataset:
                     loss = self._val_vocoder_step(mel_batch, audio_batch)
                     val_loss.update_state(loss)

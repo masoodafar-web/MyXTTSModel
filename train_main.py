@@ -250,6 +250,16 @@ from typing import Optional
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
 
+_DEFAULT_TMP_DIR = os.path.join(os.path.dirname(__file__), "tmp_runtime")
+try:
+    os.makedirs(_DEFAULT_TMP_DIR, exist_ok=True)
+except OSError:
+    _DEFAULT_TMP_DIR = os.getcwd()
+for _tmp_env in ("TMPDIR", "TEMP", "TMP"):
+    if not os.environ.get(_tmp_env):
+        os.environ[_tmp_env] = _DEFAULT_TMP_DIR
+
+import numpy as np
 import tensorflow as tf
 import torch
 
@@ -617,10 +627,18 @@ def build_config(
     enable_grad_checkpointing_override: Optional[bool] = None,
     max_memory_fraction: float = 0.9,
     prefetch_buffer_size: int = 12,
+    prefetch_to_gpu: Optional[bool] = None,
     shuffle_buffer_multiplier: int = 30,
+    preprocessing_mode: str = "runtime",
     decoder_strategy: str = "autoregressive",
     vocoder_type: str = "griffin_lim",
     model_size: str = "normal",
+    use_pretrained_speaker_encoder: Optional[bool] = None,
+    pretrained_speaker_encoder_path: Optional[str] = None,
+    freeze_speaker_encoder: Optional[bool] = None,
+    speaker_encoder_type: Optional[str] = None,
+    contrastive_loss_temperature: Optional[float] = None,
+    contrastive_loss_margin: Optional[float] = None,
     # GST parameters for prosody controllability
     enable_gst: bool = True,
     gst_num_style_tokens: int = 10,
@@ -633,6 +651,7 @@ def build_config(
     evaluation_interval: int = 10,
     # Debugging / diagnostics
     use_simple_loss: bool = False,
+    tensorboard_log_dir: Optional[str] = None,
     ) -> XTTSConfig:
     preset_key = model_size.lower() if model_size else "normal"
     preset = MODEL_SIZE_PRESETS.get(preset_key, MODEL_SIZE_PRESETS["normal"])
@@ -671,6 +690,12 @@ def build_config(
     speaker_embedding_dim = preset["speaker_embedding_dim"]
     voice_conditioning_layers = preset["voice_conditioning_layers"]
     voice_feature_dim = preset["voice_feature_dim"]
+
+    use_pretrained_flag = use_pretrained_speaker_encoder if use_pretrained_speaker_encoder is not None else False
+    freeze_speaker_flag = freeze_speaker_encoder if freeze_speaker_encoder is not None else True
+    speaker_encoder_type_value = speaker_encoder_type or "ecapa_tdnn"
+    contrastive_temperature_value = contrastive_loss_temperature if contrastive_loss_temperature is not None else 0.1
+    contrastive_margin_value = contrastive_loss_margin if contrastive_loss_margin is not None else 0.2
 
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
@@ -717,12 +742,12 @@ def build_config(
         # Enhanced voice conditioning with pre-trained speaker encoders
         # NOTE: Set use_pretrained_speaker_encoder=True to enable enhanced voice conditioning
         # This replaces the simple conv+transformer audio encoder with powerful pre-trained models
-        use_pretrained_speaker_encoder=False,  # Enable for enhanced voice conditioning
-        pretrained_speaker_encoder_path=None,  # Path to pre-trained weights if available
-        freeze_speaker_encoder=True,           # Keep pre-trained weights frozen
-        speaker_encoder_type="ecapa_tdnn",     # Options: "ecapa_tdnn", "resemblyzer", "coqui"
-        contrastive_loss_temperature=0.1,      # Temperature for contrastive speaker loss
-        contrastive_loss_margin=0.2,           # Margin for contrastive speaker loss
+        use_pretrained_speaker_encoder=use_pretrained_flag,
+        pretrained_speaker_encoder_path=pretrained_speaker_encoder_path,
+        freeze_speaker_encoder=freeze_speaker_flag,
+        speaker_encoder_type=speaker_encoder_type_value,
+        contrastive_loss_temperature=contrastive_temperature_value,
+        contrastive_loss_margin=contrastive_margin_value,
 
         # Global Style Tokens (GST) for prosody controllability
         use_gst=enable_gst,
@@ -889,11 +914,11 @@ def build_config(
         # Batching/workers and pipeline performance (OPTIMIZED FOR GPU UTILIZATION)
         batch_size=batch_size,
         num_workers=num_workers,
-        prefetch_buffer_size=max(prefetch_buffer_size, 16),  # Increased for better GPU utilization
-        shuffle_buffer_multiplier=max(shuffle_buffer_multiplier, 50),  # Increased for better shuffling
+        prefetch_buffer_size=max(prefetch_buffer_size, 1),
+        shuffle_buffer_multiplier=max(shuffle_buffer_multiplier, 1),
         enable_memory_mapping=True,
         cache_verification=True,
-        prefetch_to_gpu=True,
+        prefetch_to_gpu=True if prefetch_to_gpu is None else prefetch_to_gpu,
         max_mel_frames=max_attention_len,
         enable_xla=True,
         enable_tensorrt=False,
@@ -906,7 +931,7 @@ def build_config(
         # prefetch_factor=6,  # Handled by DataLoader
 
         # Preprocessing/caching
-        preprocessing_mode="precompute",
+        preprocessing_mode=preprocessing_mode,
         use_tf_native_loading=True,
         enhanced_gpu_prefetch=True,
         optimize_cpu_gpu_overlap=True,
@@ -947,6 +972,31 @@ def main():
     )
     parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers")
     parser.add_argument("--lr", type=float, default=8e-5, help="Learning rate (optimized for better convergence)")
+    parser.add_argument(
+        "--prefetch-buffer-size",
+        type=int,
+        default=None,
+        help="Override tf.data prefetch buffer size"
+    )
+    parser.add_argument(
+        "--prefetch-to-gpu",
+        dest="prefetch_to_gpu",
+        action="store_true",
+        help="Enable direct prefetch to GPU"
+    )
+    parser.add_argument(
+        "--no-prefetch-to-gpu",
+        dest="prefetch_to_gpu",
+        action="store_false",
+        help="Disable prefetching data onto GPU"
+    )
+    parser.set_defaults(prefetch_to_gpu=None)
+    parser.add_argument(
+        "--preprocessing-mode",
+        choices=["auto", "precompute", "runtime"],
+        default="runtime",
+        help="Dataset preprocessing mode (default: runtime for on-the-fly processing)",
+    )
     parser.add_argument(
         "--model-size",
         choices=sorted(MODEL_SIZE_PRESETS.keys()),
@@ -1014,7 +1064,59 @@ def main():
         default=2.0,
         help="Target compression ratio for model optimization (default: 2.0x)"
     )
-    
+
+    # Speaker encoder overrides
+    parser.add_argument(
+        "--use-pretrained-speaker-encoder",
+        dest="use_pretrained_speaker_encoder",
+        action="store_true",
+        help="Enable pretrained speaker encoder for voice conditioning"
+    )
+    parser.add_argument(
+        "--disable-pretrained-speaker-encoder",
+        dest="use_pretrained_speaker_encoder",
+        action="store_false",
+        help="Disable pretrained speaker encoder"
+    )
+    parser.set_defaults(use_pretrained_speaker_encoder=None)
+    parser.add_argument(
+        "--speaker-encoder-path",
+        type=str,
+        default=None,
+        help="Path to pretrained speaker encoder weights"
+    )
+    parser.add_argument(
+        "--speaker-encoder-type",
+        choices=["ecapa_tdnn", "resemblyzer", "coqui"],
+        default=None,
+        help="Pretrained speaker encoder architecture"
+    )
+    parser.add_argument(
+        "--freeze-speaker-encoder",
+        dest="freeze_speaker_encoder",
+        action="store_true",
+        help="Freeze speaker encoder weights (default)"
+    )
+    parser.add_argument(
+        "--unfreeze-speaker-encoder",
+        dest="freeze_speaker_encoder",
+        action="store_false",
+        help="Allow finetuning speaker encoder"
+    )
+    parser.set_defaults(freeze_speaker_encoder=None)
+    parser.add_argument(
+        "--contrastive-loss-temperature",
+        type=float,
+        default=None,
+        help="Override contrastive loss temperature"
+    )
+    parser.add_argument(
+        "--contrastive-loss-margin",
+        type=float,
+        default=None,
+        help="Override contrastive loss margin"
+    )
+
     # Global Style Tokens (GST) options for prosody controllability
     parser.add_argument(
         "--enable-gst",
@@ -1070,7 +1172,31 @@ def main():
         action="store_true",
         help="Explicitly disable GPU Stabilizer (default behavior)"
     )
-    
+
+    # Distributed / logging controls
+    parser.add_argument(
+        "--multi-gpu",
+        action="store_true",
+        help="Enable mirrored strategy for multi-GPU training"
+    )
+    parser.add_argument(
+        "--visible-gpus",
+        type=str,
+        default=None,
+        help="Comma separated GPU indices to expose (e.g. 0,1)"
+    )
+    parser.add_argument(
+        "--tensorboard-log-dir",
+        type=str,
+        default=None,
+        help="Custom directory for TensorBoard summaries"
+    )
+    parser.add_argument(
+        "--enable-eager-debug",
+        action="store_true",
+        help="Run TensorFlow functions eagerly for debugging"
+    )
+
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -1148,6 +1274,7 @@ def main():
     enable_grad_ckpt_override = None
     max_memory_fraction = recommended['max_memory_fraction'] if recommended else 0.9
     prefetch_buffer_size = recommended['prefetch_buffer_size'] if recommended else 12
+    prefetch_to_gpu_override = recommended['prefetch_to_gpu'] if recommended and 'prefetch_to_gpu' in recommended else None
     shuffle_buffer_multiplier = recommended['shuffle_buffer_multiplier'] if recommended else 30
 
     if recommended:
@@ -1181,6 +1308,31 @@ def main():
     if max_attention_len_override is None:
         max_attention_len_override = size_preset['max_attention_len']
 
+    if args.prefetch_buffer_size is not None:
+        prefetch_buffer_size = max(1, args.prefetch_buffer_size)
+
+    if args.prefetch_to_gpu is not None:
+        prefetch_to_gpu_override = args.prefetch_to_gpu
+
+    use_pretrained_override = args.use_pretrained_speaker_encoder
+    freeze_speaker_override = args.freeze_speaker_encoder
+    speaker_encoder_path = args.speaker_encoder_path
+    speaker_encoder_type = args.speaker_encoder_type
+    contrastive_temp_override = args.contrastive_loss_temperature
+    contrastive_margin_override = args.contrastive_loss_margin
+
+    if speaker_encoder_path and use_pretrained_override is None:
+        logger.info("Speaker encoder path provided; enabling pretrained speaker encoder")
+        use_pretrained_override = True
+
+    if use_pretrained_override:
+        if not speaker_encoder_path:
+            logger.warning("Pretrained speaker encoder enabled but no --speaker-encoder-path provided")
+        elif not os.path.exists(speaker_encoder_path):
+            logger.warning(f"Speaker encoder path not found: {speaker_encoder_path}")
+
+    tensorboard_log_dir = args.tensorboard_log_dir
+
     config = build_config(
         batch_size=args.batch_size,
         grad_accum=args.grad_accum,
@@ -1194,10 +1346,18 @@ def main():
         enable_grad_checkpointing_override=enable_grad_ckpt_override,
         max_memory_fraction=max_memory_fraction,
         prefetch_buffer_size=prefetch_buffer_size,
+        prefetch_to_gpu=prefetch_to_gpu_override,
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
+        preprocessing_mode=args.preprocessing_mode,
         decoder_strategy=args.decoder_strategy,
         vocoder_type=args.vocoder_type,
         model_size=args.model_size,
+        use_pretrained_speaker_encoder=use_pretrained_override,
+        pretrained_speaker_encoder_path=speaker_encoder_path,
+        freeze_speaker_encoder=freeze_speaker_override,
+        speaker_encoder_type=speaker_encoder_type,
+        contrastive_loss_temperature=contrastive_temp_override,
+        contrastive_loss_margin=contrastive_margin_override,
         # GST parameters
         enable_gst=args.enable_gst,
         gst_num_style_tokens=args.gst_num_style_tokens,
@@ -1210,15 +1370,26 @@ def main():
         evaluation_interval=args.evaluation_interval,
         # Debugging
         use_simple_loss=args.simple_loss,
+        tensorboard_log_dir=tensorboard_log_dir,
     )
 
     # Apply optimization level
     config = apply_optimization_level(config, args.optimization_level, args)
-    
+    config.data.preprocessing_mode = args.preprocessing_mode
+
     # Apply fast convergence config if requested
     if args.apply_fast_convergence:
         config = apply_fast_convergence_config(config)
-    
+
+    if args.tensorboard_log_dir:
+        setattr(config.training, 'tensorboard_log_dir', args.tensorboard_log_dir)
+    if args.multi_gpu:
+        config.training.multi_gpu = True
+    if args.visible_gpus:
+        config.training.visible_gpus = args.visible_gpus
+    if args.enable_eager_debug:
+        setattr(config.training, 'enable_eager_debug', True)
+
     # Log final configuration summary
     logger.info("=== Final Training Configuration ===")
     logger.info(f"Optimization level: {args.optimization_level}")

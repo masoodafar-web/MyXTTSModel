@@ -8,13 +8,23 @@ and other shared utilities across the MyXTTS system.
 import os
 import json
 import pickle
+from datetime import datetime
+from pathlib import Path
 import tensorflow as tf
 from contextlib import nullcontext
 from typing import Dict, Any, Optional, List
 import logging
+from logging.handlers import RotatingFileHandler
 
 
-def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = True, memory_limit: Optional[int] = None) -> None:
+def configure_gpus(
+    visible_gpus: Optional[str] = None,
+    memory_growth: bool = True,
+    memory_limit: Optional[int] = None,
+    enable_mixed_precision: Optional[bool] = None,
+    enable_xla: Optional[bool] = None,
+    enable_eager_debug: bool = False
+) -> None:
     """Configure which GPUs are visible and set memory growth.
 
     Call this before any other TensorFlow GPU operations.
@@ -67,20 +77,43 @@ def configure_gpus(visible_gpus: Optional[str] = None, memory_growth: bool = Tru
                 
             # Set additional memory optimization settings
             try:
-                # Enable mixed precision for memory efficiency
-                policy = tf.keras.mixed_precision.Policy('mixed_float16')
-                tf.keras.mixed_precision.set_global_policy(policy)
-                logger.debug("Mixed precision policy enabled")
-                
-                # Enable XLA for better GPU utilization
-                tf.config.optimizer.set_jit(True)
-                logger.debug("XLA JIT compilation enabled")
-                
-                # Force eager execution for better debugging (can disable in production)
-                if not tf.executing_eagerly():
-                    tf.config.run_functions_eagerly(True)
+                if enable_mixed_precision is None:
+                    env_flag = os.getenv('MYXTTS_ENABLE_MIXED_PRECISION')
+                    enable_mixed_precision = (env_flag.lower() not in {"0", "false"}) if env_flag else True
+
+                if enable_xla is None:
+                    env_flag = os.getenv('MYXTTS_ENABLE_XLA')
+                    enable_xla = (env_flag.lower() not in {"0", "false"}) if env_flag else True
+
+                if enable_mixed_precision:
+                    desired_policy = tf.keras.mixed_precision.Policy('mixed_float16')
+                    if tf.keras.mixed_precision.global_policy().name != desired_policy.name:
+                        tf.keras.mixed_precision.set_global_policy(desired_policy)
+                        logger.debug("Mixed precision policy enabled")
+                else:
+                    if tf.keras.mixed_precision.global_policy().name != 'float32':
+                        tf.keras.mixed_precision.set_global_policy('float32')
+                        logger.debug("Mixed precision policy disabled (float32)")
+
+                if enable_xla:
+                    tf.config.optimizer.set_jit(True)
+                    logger.debug("XLA JIT compilation enabled")
+                else:
+                    try:
+                        tf.config.optimizer.set_jit(False)
+                    except Exception:
+                        pass
+                    logger.debug("XLA JIT compilation disabled")
+
+                if enable_eager_debug:
+                    if not tf.config.functions_run_eagerly():
+                        tf.config.run_functions_eagerly(True)
                     logger.debug("Eager execution enabled for debugging")
-                    
+                else:
+                    if tf.config.functions_run_eagerly() and os.getenv('MYXTTS_FORCE_EAGER', '').lower() not in {"1", "true"}:
+                        tf.config.run_functions_eagerly(False)
+                        logger.debug("Eager execution disabled for performance")
+
             except Exception as e:
                 logger.debug(f"Advanced GPU optimization note: {e}")
         else:
@@ -617,15 +650,37 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
     Returns:
         Logger instance
     """
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.StreamHandler(),
-        ]
-    )
-    
-    return logging.getLogger("MyXTTS")
+    logger = logging.getLogger("MyXTTS")
+    if logger.handlers:
+        return logger
+
+    level = getattr(logging, log_level.upper(), logging.INFO)
+    logger.setLevel(level)
+    logger.propagate = False
+
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    log_dir = Path(os.environ.get("MYXTTS_LOG_DIR", Path.cwd() / "logs"))
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        log_dir = Path.cwd()
+
+    run_name = os.environ.get("MYXTTS_RUN_NAME") or datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    log_file = log_dir / f"{run_name}.log"
+
+    file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=5)
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    os.environ["MYXTTS_LOG_FILE"] = str(log_file)
+    logger.info(f"Logging to {log_file}")
+
+    return logger
 
 
 def count_parameters(model: tf.keras.Model) -> int:

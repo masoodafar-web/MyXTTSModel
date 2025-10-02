@@ -8,6 +8,7 @@ data loading, model training, validation, and checkpointing.
 import os
 import time
 import sys
+from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 import numpy as np
 import tensorflow as tf
@@ -18,11 +19,15 @@ import wandb
 # GPU stabilizer availability is controlled by the main training script
 try:
     sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
-    from advanced_gpu_stabilizer import AdvancedGPUStabilizer, setup_advanced_gpu_optimization
+    from optimization.advanced_gpu_stabilizer import AdvancedGPUStabilizer, setup_advanced_gpu_optimization
     GPU_STABILIZER_AVAILABLE = True
 except ImportError as e:
-    GPU_STABILIZER_AVAILABLE = False
-    print(f"Warning: Advanced GPU Stabilizer not available: {e}")
+    try:
+        from advanced_gpu_stabilizer import AdvancedGPUStabilizer, setup_advanced_gpu_optimization
+        GPU_STABILIZER_AVAILABLE = True
+    except ImportError as e2:
+        GPU_STABILIZER_AVAILABLE = False
+        print(f"Warning: Advanced GPU Stabilizer not available: {e2}")
 
 from ..models.xtts import XTTS
 from ..data.ljspeech import LJSpeechDataset
@@ -79,6 +84,17 @@ class XTTSTrainer:
         """
         self.config = config
         self.logger = setup_logging()
+
+        self.summary_writer = None
+        try:
+            tb_dir = getattr(config.training, 'tensorboard_log_dir', None)
+            tb_path = Path(tb_dir) if tb_dir else Path(config.training.checkpoint_dir) / "tensorboard"
+            tb_path.mkdir(parents=True, exist_ok=True)
+            self.summary_writer = tf.summary.create_file_writer(str(tb_path))
+            self.logger.info(f"TensorBoard summaries: {tb_path}")
+        except Exception as e:
+            self.logger.warning(f"TensorBoard disabled: {e}")
+            self.summary_writer = None
         
         # Configure GPUs before any TensorFlow device queries
         try:
@@ -94,7 +110,14 @@ class XTTSTrainer:
                     estimated_memory = 24000  # MB
                     memory_limit = int(estimated_memory * memory_fraction)
             
-            configure_gpus(vis, memory_growth=True, memory_limit=memory_limit)
+            configure_gpus(
+                vis,
+                memory_growth=True,
+                memory_limit=memory_limit,
+                enable_mixed_precision=getattr(config.data, 'mixed_precision', True),
+                enable_xla=getattr(config.data, 'enable_xla', False),
+                enable_eager_debug=getattr(config.training, 'enable_eager_debug', False)
+            )
         except Exception as e:
             # Silence GPU config noise
             self.logger.debug(f"GPU visibility configuration note: {e}")
@@ -190,6 +213,8 @@ class XTTSTrainer:
             else:
                 self.logger.warning("🔴 GPU Stabilizer not available (module import failed)")
 
+        self._tb_train_step = 0
+
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
             # CRITICAL FIX: Ensure model is created with strategy-managed placement
@@ -273,6 +298,13 @@ class XTTSTrainer:
                         self.logger.debug("Disabled adaptive weights and loss smoothing under MirroredStrategy")
                 except Exception:
                     pass
+
+            self.loss_weight_snapshot = self._collect_loss_weights()
+            if self.loss_weight_snapshot:
+                formatted = ", ".join(
+                    f"{k}={v:.3f}" for k, v in sorted(self.loss_weight_snapshot.items())
+                )
+                self.logger.info(f"Configured loss weights: {formatted}")
         
         # Initialize learning rate scheduler
         self.lr_scheduler = self._create_lr_scheduler()
@@ -323,7 +355,84 @@ class XTTSTrainer:
         # Resume from checkpoint if specified
         if resume_checkpoint:
             self._load_checkpoint(resume_checkpoint)
-    
+
+    def _collect_loss_weights(self) -> Dict[str, float]:
+        """Collect configured loss weights for logging/monitoring."""
+        weights: Dict[str, float] = {}
+
+        criterion_attrs = [
+            "mel_loss_weight",
+            "stop_loss_weight",
+            "attention_loss_weight",
+            "duration_loss_weight",
+            "pitch_loss_weight",
+            "energy_loss_weight",
+            "prosody_pitch_loss_weight",
+            "prosody_energy_loss_weight",
+            "speaking_rate_loss_weight",
+            "voice_similarity_loss_weight",
+            "diffusion_loss_weight",
+        ]
+
+        if hasattr(self, "criterion"):
+            for attr in criterion_attrs:
+                if hasattr(self.criterion, attr):
+                    value = getattr(self.criterion, attr)
+                    try:
+                        weights[attr] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+
+        training_attrs = [
+            "voice_similarity_loss_weight",
+            "speaker_classification_loss_weight",
+            "voice_reconstruction_loss_weight",
+            "prosody_matching_loss_weight",
+            "spectral_consistency_loss_weight",
+        ]
+
+        for attr in training_attrs:
+            if hasattr(self.config.training, attr):
+                value = getattr(self.config.training, attr)
+                if value is not None:
+                    try:
+                        weights[attr] = float(value)
+                    except (TypeError, ValueError):
+                        continue
+
+        return weights
+
+    def _log_loss_breakdown(self, stage: str, losses: Dict[str, float]) -> None:
+        """Log a concise breakdown of key loss components and their weighted counterparts."""
+        component_keys = [
+            "mel_loss",
+            "stop_loss",
+            "voice_similarity_loss",
+            "pitch_loss",
+            "energy_loss",
+            "prosody_pitch_loss",
+            "prosody_energy_loss",
+        ]
+        weighted_keys = [
+            "w_mel_loss",
+            "w_stop_loss",
+            "w_voice_similarity_loss",
+            "w_pitch_loss",
+            "w_energy_loss",
+            "w_prosody_pitch_loss",
+            "w_prosody_energy_loss",
+        ]
+
+        tracked = {k: float(losses[k]) for k in component_keys if k in losses}
+        weighted = {k: float(losses[k]) for k in weighted_keys if k in losses}
+
+        if tracked:
+            summary = ", ".join(f"{k}={v:.4f}" for k, v in tracked.items())
+            self.logger.info(f"{stage} loss components: {summary}")
+        if weighted:
+            summary_w = ", ".join(f"{k}={v:.4f}" for k, v in weighted.items())
+            self.logger.debug(f"{stage} weighted loss contributions: {summary_w}")
+
     def _create_optimizer(self) -> tf.keras.optimizers.Optimizer:
         """Create optimizer based on configuration."""
         config = self.config.training
@@ -830,18 +939,26 @@ class XTTSTrainer:
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
+                weighted_losses = {}
                 aux_reg_weight = getattr(self.config.training, 'auxiliary_head_regularization', 0.0)
                 if aux_reg_weight > 0.0 and 'aux_reg_value' in locals() and aux_reg_value != 0.0:
                     individual_losses["aux_head_reg"] = aux_reg_weight * aux_reg_value
                 # Keep outputs minimal under multi-GPU to avoid control-flow side effects
-                if not is_multi_strategy:
-                    stability_metrics = self.criterion.get_stability_metrics()
+                stability_metrics = {}
+                try:
                     weighted_losses = self.criterion.get_weighted_losses()
-                    if weighted_losses:
-                        for key, value in weighted_losses.items():
-                            individual_losses[f"w_{key}"] = value
-                else:
-                    stability_metrics = {}
+                except Exception:
+                    weighted_losses = {}
+
+                if not is_multi_strategy:
+                    try:
+                        stability_metrics = self.criterion.get_stability_metrics()
+                    except Exception:
+                        stability_metrics = {}
+
+                if weighted_losses:
+                    for key, value in weighted_losses.items():
+                        individual_losses[f"w_{key}"] = value
                 raw_total = self.criterion.get_raw_total_loss()
                 if raw_total is not None:
                     individual_losses["raw_total_loss"] = raw_total
@@ -1552,6 +1669,9 @@ class XTTSTrainer:
                 if val_losses:
                     self.logger.info(f"Val Loss: {val_losses['total_loss']:.4f}")
                 self.logger.info(f"Samples/sec: {samples_per_sec:.1f}")
+                self._log_loss_breakdown("Train", train_losses)
+                if val_losses:
+                    self._log_loss_breakdown("Val", val_losses)
 
                 # Enhanced Wandb logging
                 if self.config.training.use_wandb:
@@ -1610,7 +1730,29 @@ class XTTSTrainer:
                     self.logger.debug("Advanced GPU stabilizer stopped")
                 except Exception as e:
                     self.logger.warning(f"GPU stabilizer cleanup warning: {e}")
-    
+            if self.summary_writer:
+                try:
+                    self.summary_writer.flush()
+                except Exception as e:
+                    self.logger.debug(f"TensorBoard flush failed: {e}")
+
+    def _log_tensorboard(self, prefix: str, values: Dict[str, Any], step: int) -> None:
+        if not self.summary_writer:
+            return
+        try:
+            with self.summary_writer.as_default():
+                for key, value in values.items():
+                    if isinstance(value, tf.Tensor):
+                        value = value.numpy()
+                    try:
+                        scalar = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    tf.summary.scalar(f"{prefix}/{key}", scalar, step=step)
+                self.summary_writer.flush()
+        except Exception as err:
+            self.logger.debug(f"TensorBoard logging skipped for {prefix}: {err}")
+
     def _train_epoch(
         self,
         train_dataset: tf.data.Dataset,
@@ -1709,7 +1851,7 @@ class XTTSTrainer:
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
-                
+
                 # Accumulate losses
                 for key, value in step_losses.items():
                     if key not in train_losses:
@@ -1724,8 +1866,10 @@ class XTTSTrainer:
                 # Memory cleanup after each batch if enabled
                 if self.enable_memory_cleanup and num_batches % 10 == 0:
                     self.cleanup_gpu_memory()
-                
+
                 # Update progress bar with detailed losses and timing info
+                self._tb_train_step += 1
+                tb_step = self._tb_train_step
                 postfix = {
                     "loss": f"{float(step_losses['total_loss']):.4f}",
                     "step": self.current_step,
@@ -1736,6 +1880,8 @@ class XTTSTrainer:
                     postfix["mel"] = f"{float(step_losses['mel_loss']):.2f}"
                 if 'stop_loss' in step_losses:
                     postfix["stop"] = f"{float(step_losses['stop_loss']):.3f}"
+                if 'voice_similarity_loss' in step_losses:
+                    postfix["voice"] = f"{float(step_losses['voice_similarity_loss']):.3f}"
                 pbar.set_postfix(postfix)
                 
                 # Log step results
@@ -1747,7 +1893,8 @@ class XTTSTrainer:
                         "samples_per_second": self.config.data.batch_size / (data_loading_time + compute_time)
                     })
                     self.logger.debug(f"Step {self.current_step}: {step_log}")
-                    
+                    self._log_tensorboard("train_step", step_log, tb_step)
+
                     if self.config.training.use_wandb:
                         wandb.log({f"step_{k}": v for k, v in step_log.items()})
         
@@ -1758,7 +1905,8 @@ class XTTSTrainer:
         # Average losses
         if num_batches > 0:
             train_losses = {k: v / num_batches for k, v in train_losses.items()}
-        
+            self._log_tensorboard("train_epoch", train_losses, getattr(self, 'current_epoch', 0))
+
         return train_losses
     
     def _validate_epoch(self, val_dataset: tf.data.Dataset) -> Dict[str, float]:
@@ -1791,9 +1939,10 @@ class XTTSTrainer:
         # Average losses
         if num_batches > 0:
             val_losses = {k: v / num_batches for k, v in val_losses.items()}
-            
+
             self.logger.info(f"Validation: {val_losses}")
-            
+            self._log_tensorboard("val_epoch", val_losses, getattr(self, 'current_epoch', 0))
+
             if self.config.training.use_wandb:
                 wandb.log({f"val_{k}": v for k, v in val_losses.items()})
         

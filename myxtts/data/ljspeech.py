@@ -11,6 +11,7 @@ import json
 import tarfile
 import urllib.request
 import mmap
+from contextlib import nullcontext
 from pathlib import Path
 from typing import List, Tuple, Dict, Optional, Union
 import numpy as np
@@ -23,6 +24,22 @@ import threading
 from ..utils.audio import AudioProcessor
 from ..utils.text import TextProcessor
 from ..config.config import DataConfig
+
+
+class _NullProfiler:
+    """No-op profiler used when no external profiler is supplied."""
+
+    def record_cache_hit(self) -> None:
+        pass
+
+    def record_cache_miss(self) -> None:
+        pass
+
+    def record_cache_error(self) -> None:
+        pass
+
+    def profile_operation(self, _name: str):
+        return nullcontext()
 
 
 class LJSpeechDataset:
@@ -91,7 +108,7 @@ class LJSpeechDataset:
             target_loudness_lufs=getattr(config, 'target_loudness_lufs', -23.0),
             enable_vad=getattr(config, 'enable_vad', True)
         )
-        
+
         self.text_processor = TextProcessor(
             language=config.language,
             cleaner_names=config.text_cleaners,
@@ -99,7 +116,17 @@ class LJSpeechDataset:
             # Disable phonemizer by default to reduce CPU overhead during tokenization
             use_phonemes=False
         )
-        
+
+        profiler = getattr(config, 'profiler', None)
+        if profiler is None or not hasattr(profiler, 'profile_operation'):
+            profiler = _NullProfiler()
+        # Fail-safe to ensure required profiler hooks exist even if a partial implementation is passed in.
+        for hook in ("record_cache_hit", "record_cache_miss", "record_cache_error"):
+            if not hasattr(profiler, hook):
+                profiler = _NullProfiler()
+                break
+        self.profiler = profiler
+
         # Dataset paths
         self.dataset_dir = self.data_path
         #/ "LJSpeech-1.1"
