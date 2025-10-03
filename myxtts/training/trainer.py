@@ -14,6 +14,10 @@ import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
 import wandb
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend for server environments
+import matplotlib.pyplot as plt
+import io
 
 # Import Advanced GPU Stabilizer for consistent GPU utilization
 # GPU stabilizer availability is controlled by the main training script
@@ -1916,6 +1920,99 @@ class XTTSTrainer:
         mel_norm = np.expand_dims(mel_norm, axis=0)
         return tf.convert_to_tensor(mel_norm)
 
+    @staticmethod
+    def _create_spectrogram_comparison_image(
+        target_mel: np.ndarray,
+        pred_mel: np.ndarray,
+        title: str = "Spectrogram Comparison"
+    ) -> tf.Tensor:
+        """
+        Create a side-by-side comparison image of target and predicted spectrograms using matplotlib.
+        
+        Args:
+            target_mel: Target mel spectrogram [frames, n_mels]
+            pred_mel: Predicted mel spectrogram [frames, n_mels]
+            title: Title for the comparison plot
+            
+        Returns:
+            TensorFlow tensor containing the comparison image [1, H, W, 3]
+        """
+        # Clean input data
+        target_mel = np.asarray(target_mel, dtype=np.float32)
+        pred_mel = np.asarray(pred_mel, dtype=np.float32)
+        
+        # Handle dimension mismatches
+        if target_mel.ndim != 2 or pred_mel.ndim != 2:
+            raise ValueError(f"Expected 2D spectrograms, got target: {target_mel.shape}, pred: {pred_mel.shape}")
+        
+        # Ensure same number of frames by padding/truncating
+        target_frames, target_mels = target_mel.shape
+        pred_frames, pred_mels = pred_mel.shape
+        
+        max_frames = max(target_frames, pred_frames)
+        if target_frames < max_frames:
+            pad = max_frames - target_frames
+            target_mel = np.pad(target_mel, ((0, pad), (0, 0)), mode='edge')
+        elif target_frames > max_frames:
+            target_mel = target_mel[:max_frames, :]
+            
+        if pred_frames < max_frames:
+            pad = max_frames - pred_frames
+            pred_mel = np.pad(pred_mel, ((0, pad), (0, 0)), mode='edge')
+        elif pred_frames > max_frames:
+            pred_mel = pred_mel[:max_frames, :]
+        
+        # Create figure with 3 subplots: target, prediction, difference
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+        
+        # Plot target spectrogram
+        im0 = axes[0].imshow(target_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
+        axes[0].set_title('Target Spectrogram')
+        axes[0].set_xlabel('Frames')
+        axes[0].set_ylabel('Mel Bins')
+        plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
+        
+        # Plot predicted spectrogram
+        im1 = axes[1].imshow(pred_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
+        axes[1].set_title('Predicted Spectrogram')
+        axes[1].set_xlabel('Frames')
+        axes[1].set_ylabel('Mel Bins')
+        plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+        
+        # Plot absolute difference
+        diff_mel = np.abs(target_mel - pred_mel)
+        im2 = axes[2].imshow(diff_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='hot')
+        axes[2].set_title('Absolute Difference')
+        axes[2].set_xlabel('Frames')
+        axes[2].set_ylabel('Mel Bins')
+        plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+        
+        # Add overall title
+        fig.suptitle(title, fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # Convert matplotlib figure to image tensor
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        plt.close(fig)  # Important: close figure to free memory
+        buf.seek(0)
+        
+        # Read image from buffer and convert to tensor
+        from PIL import Image
+        img = Image.open(buf)
+        img_array = np.array(img)
+        buf.close()
+        
+        # Ensure RGB format (remove alpha channel if present)
+        if img_array.ndim == 3 and img_array.shape[2] == 4:
+            img_array = img_array[:, :, :3]
+        elif img_array.ndim == 2:
+            img_array = np.stack([img_array, img_array, img_array], axis=-1)
+        
+        # Add batch dimension and convert to tensor
+        img_array = np.expand_dims(img_array, axis=0)
+        return tf.convert_to_tensor(img_array, dtype=tf.uint8)
+
     def _log_spectrogram_from_batch(
         self,
         batch_tensors: Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor],
@@ -2026,7 +2123,7 @@ class XTTSTrainer:
             self.logger.debug(f"Spectrogram prediction conversion failed at step {step}: {err}")
             return
 
-        image_triplets = []
+        comparison_images = []
         for local_idx, source_idx in enumerate(indices):
             mel_len = int(mel_len_sel_np[local_idx]) if mel_len_sel_np.ndim > 0 else mel_sel_np.shape[1]
             mel_len = max(1, min(mel_len, mel_sel_np.shape[1]))
@@ -2044,23 +2141,33 @@ class XTTSTrainer:
             else:
                 pred_slice = np.zeros_like(target_slice)
 
-            diff_slice = np.abs(target_slice - pred_slice)
+            # Create matplotlib-based comparison image
             try:
-                target_img = self._spectrogram_to_image(target_slice)
-                pred_img = self._spectrogram_to_image(pred_slice)
-                diff_img = self._spectrogram_to_image(diff_slice)
+                # Determine title for the comparison
+                if using_reference and reference_sample is not None:
+                    ref_id = reference_sample.get('id')
+                    if ref_id is not None:
+                        title = f"Sample: {ref_id} (Step {step})"
+                    else:
+                        title = f"Sample {source_idx} (Step {step})"
+                else:
+                    title = f"Sample {local_idx} (Step {step})"
+                
+                comparison_img = self._create_spectrogram_comparison_image(
+                    target_slice, pred_slice, title=title
+                )
+                frame_count = target_slice.shape[0]
+                comparison_images.append((local_idx, source_idx, comparison_img, frame_count))
             except Exception as err:
-                self.logger.debug(f"Spectrogram image conversion failed at step {step}: {err}")
+                self.logger.debug(f"Spectrogram comparison image creation failed at step {step}: {err}")
                 continue
-            frame_count = target_slice.shape[0]
-            image_triplets.append((local_idx, source_idx, target_img, pred_img, diff_img, frame_count))
 
-        if not image_triplets:
+        if not comparison_images:
             return
 
         try:
             with self.summary_writer.as_default():
-                for local_idx, source_idx, target_img, pred_img, diff_img, frame_count in image_triplets:
+                for local_idx, source_idx, comparison_img, frame_count in comparison_images:
                     if using_reference and reference_sample is not None:
                         ref_id = reference_sample.get('id')
                         if ref_id is not None:
@@ -2070,9 +2177,7 @@ class XTTSTrainer:
                     else:
                         suffix = str(local_idx)
                     sample_tag = f"{prefix}/spectrogram_{suffix}"
-                    tf.summary.image(f"{sample_tag}/target", target_img, step=step)
-                    tf.summary.image(f"{sample_tag}/prediction", pred_img, step=step)
-                    tf.summary.image(f"{sample_tag}/abs_diff", diff_img, step=step)
+                    tf.summary.image(f"{sample_tag}/comparison", comparison_img, step=step)
                     tf.summary.scalar(f"{sample_tag}/frames", float(frame_count), step=step)
                 self.summary_writer.flush()
         except Exception as err:
