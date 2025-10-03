@@ -31,7 +31,7 @@ class TestConfig(unittest.TestCase):
         
         self.assertEqual(config.sample_rate, 22050)
         self.assertEqual(config.language, "en")
-        self.assertEqual(config.batch_size, 32)
+        self.assertEqual(config.batch_size, 56)  # Updated to match optimized GPU utilization config
         self.assertTrue(config.normalize_audio)
         self.assertIsInstance(config.text_cleaners, list)
         

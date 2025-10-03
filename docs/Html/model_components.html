@@ -190,7 +190,7 @@
         <div class="data-flow">
           <strong>ورودی:</strong> Token IDs [batch, seq_len]<br>
           <strong>خروجی:</strong> Text features [batch, seq_len, d_model]<br>
-          <strong>ابعاد:</strong> d_model = 512, layers = 6, heads = 8
+          <strong>ابعاد:</strong> d_model = 512, layers = 8, heads = 8
         </div>
         <div class="example">
           <strong>مثال:</strong><br>
@@ -211,12 +211,12 @@
         <div class="data-flow">
           <strong>ورودی:</strong> Mel spectrogram [batch, time, 80]<br>
           <strong>خروجی:</strong> Speaker embedding [batch, speaker_dim] + Audio features<br>
-          <strong>ابعاد:</strong> speaker_dim = 256, audio_features = 512
+          <strong>ابعاد:</strong> audio_encoder_dim = 768, layers = 8, heads = 12, speaker_dim = 512
         </div>
         <div class="example">
           <strong>مثال:</strong><br>
           ورودی: مل‌اسپکتروگرام 3 ثانیه صوت مرجع<br>
-          خروجی: بردار شناسایی گوینده + ویژگی‌های صوتی برای conditioning
+          خروجی: بردار شناسایی گوینده (512 بعدی) + ویژگی‌های صوتی برای conditioning
         </div>
       </div>
 
@@ -252,11 +252,11 @@
         <div class="data-flow">
           <strong>ورودی:</strong> Text features + Speaker embedding + Previous mel frames<br>
           <strong>خروجی:</strong> Mel frames [batch, time, 80] + Stop tokens [batch, time, 1]<br>
-          <strong>معماری:</strong> 12 لایه decoder با 16 attention head
+          <strong>معماری:</strong> decoder_dim = 1536, layers = 16, heads = 24
         </div>
         <div class="example">
           <strong>مثال:</strong><br>
-          در هر گام: ویژگی‌های متن + embedding گوینده + فریم‌های قبلی → فریم بعدی مل + احتمال پایان
+          در هر گام: ویژگی‌های متن + embedding گوینده (512 بعدی) + فریم‌های قبلی → فریم بعدی مل + احتمال پایان
         </div>
       </div>
 
