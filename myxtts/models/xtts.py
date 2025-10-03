@@ -883,8 +883,13 @@ class XTTS(tf.keras.Model):
             # Calculate minimum frames based on text length
             # Assume roughly 10-15 mel frames per character for reasonable speech
             text_len = tf.shape(text_inputs)[1]
-            min_frames = tf.maximum(20, text_len * 10)  # At least 20 frames, or 10x text length
-            min_frames = int(min_frames.numpy()) if hasattr(min_frames, 'numpy') else int(min_frames)
+            min_frames_tensor = tf.maximum(20, text_len * 10)  # At least 20 frames, or 10x text length
+            # Convert to Python int for range() - safe in eager mode
+            try:
+                min_frames = int(min_frames_tensor.numpy())
+            except (AttributeError, RuntimeError):
+                # Fallback for graph mode - use a reasonable default
+                min_frames = 50
             
             for step in range(max_length):
                 # Decode current step
