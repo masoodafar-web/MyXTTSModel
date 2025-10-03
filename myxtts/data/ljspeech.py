@@ -109,15 +109,6 @@ class LJSpeechDataset:
             enable_vad=getattr(config, 'enable_vad', True)
         )
 
-        self.text_processor = TextProcessor(
-            language=config.language,
-            cleaner_names=config.text_cleaners,
-            add_blank=config.add_blank,
-            # Respect configuration so training matches inference tokenization
-            use_phonemes=getattr(config, 'use_phonemes', False),
-            phoneme_language=getattr(config, 'phoneme_language', None)
-        )
-
         profiler = getattr(config, 'profiler', None)
         if profiler is None or not hasattr(profiler, 'profile_operation'):
             profiler = _NullProfiler()
@@ -148,17 +139,49 @@ class LJSpeechDataset:
         self.splits_file = self.processed_dir / "splits.json"
         # Mel cache directory (depends on audio settings to avoid mismatch)
         self.mel_cache_dir = self.processed_dir / f"mels_sr{self.config.sample_rate}_n{self.audio_processor.n_mels}_hop{self.audio_processor.hop_length}"
-        # Token cache directory (depends on text processing settings)
-        tokenizer_tag = getattr(self.text_processor, 'tokenizer_type', 'custom')
-        phon_tag = 'ph' if getattr(self.text_processor, 'use_phonemes', False) and tokenizer_tag == 'custom' else 'noph'
-        blank_tag = 'blank' if getattr(self.text_processor, 'add_blank', False) and tokenizer_tag == 'custom' else 'noblank'
-        lang_tag = getattr(self.text_processor, 'language', 'xx')
+        tokenizer_tag = 'custom'
+        phon_tag = 'ph' if getattr(config, 'use_phonemes', False) else 'noph'
+        blank_tag = 'blank' if getattr(config, 'add_blank', True) else 'noblank'
+        lang_tag = getattr(config, 'language', 'xx')
         self.tokens_cache_dir = self.processed_dir / f"tokens_{tokenizer_tag}_{phon_tag}_{blank_tag}_{lang_tag}"
-        
+        self.symbol_map_path = self.tokens_cache_dir / "symbols.json"
+
         # Load dataset
         self._prepare_dataset()
         self.metadata = self._load_metadata()
-        
+
+        # Determine symbol map before instantiating text processor
+        custom_symbols = None
+        allow_symbol_growth = True
+        if self.symbol_map_path.exists():
+            try:
+                with open(self.symbol_map_path, "r", encoding="utf-8") as f:
+                    custom_symbols = json.load(f)
+                allow_symbol_growth = False
+            except Exception as exc:
+                print(f"Warning: Failed to load symbol map {self.symbol_map_path}: {exc}. Regenerating.")
+                custom_symbols = None
+
+        if custom_symbols is None and getattr(config, 'use_phonemes', False):
+            if subset.lower() == 'train':
+                custom_symbols = self._build_symbol_map()
+                allow_symbol_growth = False
+            else:
+                print(
+                    f"Warning: Symbol map not found at {self.symbol_map_path} for subset '{subset}'. "
+                    "Using dynamic symbol growth; regenerate symbol map from training data for consistency."
+                )
+
+        self.text_processor = TextProcessor(
+            language=config.language,
+            cleaner_names=config.text_cleaners,
+            add_blank=config.add_blank,
+            use_phonemes=getattr(config, 'use_phonemes', False),
+            phoneme_language=getattr(config, 'phoneme_language', None),
+            custom_symbols=custom_symbols,
+            allow_symbol_growth=allow_symbol_growth
+        )
+
         # Handle splits differently based on whether custom metadata files are used
         if self.use_custom_metadata:
             # When using custom metadata files, each subset uses its own metadata file directly
@@ -278,6 +301,31 @@ class LJSpeechDataset:
         else:
             return None
         return self.tokens_cache_dir.parent / alt_name
+
+    def _build_symbol_map(self) -> List[str]:
+        """Generate a deterministic phoneme symbol map and persist it."""
+        temp_processor = TextProcessor(
+            language=self.config.language,
+            cleaner_names=self.config.text_cleaners,
+            add_blank=self.config.add_blank,
+            use_phonemes=getattr(self.config, 'use_phonemes', False),
+            phoneme_language=getattr(self.config, 'phoneme_language', None)
+        )
+
+        normalized_texts = list(self.metadata['normalized_transcription'])
+        for text in normalized_texts:
+            temp_processor.text_to_sequence(text)
+
+        symbols = list(temp_processor.symbols)
+
+        try:
+            self.tokens_cache_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.symbol_map_path, 'w', encoding='utf-8') as f:
+                json.dump(symbols, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            print(f"Warning: Failed to save symbol map to {self.symbol_map_path}: {exc}")
+
+        return symbols
 
     def _ensure_cache_alignment(self) -> None:
         """Validate caches for the current configuration and refresh when requested."""

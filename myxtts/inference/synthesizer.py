@@ -6,6 +6,8 @@ including text-to-speech synthesis and voice cloning.
 """
 
 import os
+import json
+from pathlib import Path
 import numpy as np
 import tensorflow as tf
 from typing import Dict, List, Optional, Union, Tuple
@@ -55,12 +57,33 @@ class XTTSInference:
             trim_silence=config.data.trim_silence
         )
         
+        symbol_map = None
+        allow_symbol_growth = True
+        dataset_path = getattr(config.data, 'dataset_path', None)
+        if dataset_path:
+            processed_dir = Path(dataset_path) / "processed"
+            tokenizer_tag = 'custom'
+            phon_tag = 'ph' if getattr(config.data, 'use_phonemes', False) else 'noph'
+            blank_tag = 'blank' if getattr(config.data, 'add_blank', True) else 'noblank'
+            lang_tag = getattr(config.data, 'language', 'xx')
+            tokens_cache_dir = processed_dir / f"tokens_{tokenizer_tag}_{phon_tag}_{blank_tag}_{lang_tag}"
+            symbol_map_path = tokens_cache_dir / "symbols.json"
+            if symbol_map_path.exists():
+                try:
+                    with open(symbol_map_path, 'r', encoding='utf-8') as f:
+                        symbol_map = json.load(f)
+                    allow_symbol_growth = False
+                except Exception as exc:
+                    self.logger.warning(f"Failed to load symbol map from {symbol_map_path}: {exc}")
+
         self.text_processor = TextProcessor(
             language=config.data.language,
             cleaner_names=config.data.text_cleaners,
             add_blank=config.data.add_blank,
             use_phonemes=getattr(config.data, 'use_phonemes', True),
-            phoneme_language=getattr(config.data, 'phoneme_language', None)
+            phoneme_language=getattr(config.data, 'phoneme_language', None),
+            custom_symbols=symbol_map,
+            allow_symbol_growth=allow_symbol_growth
         )
         
         # Initialize model

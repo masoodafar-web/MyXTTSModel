@@ -228,6 +228,10 @@ def parse_args() -> argparse.Namespace:
         "--save-mel",
         help="Optional path to save the generated mel spectrogram as .npy.",
     )
+    parser.add_argument(
+        "--dataset-path",
+        help="Path to the dataset root used during training (for tokenizer symbol map).",
+    )
     
     # Enhanced voice conditioning options
     parser.add_argument(
@@ -805,6 +809,8 @@ def main():
 
     text = load_text(args)
     config = load_config(args.config_path, args.checkpoint_dir, args.model_size, logger)
+    if args.dataset_path:
+        config.data.dataset_path = args.dataset_path
     
     # Update configuration with command line arguments
     if args.decoder_strategy:

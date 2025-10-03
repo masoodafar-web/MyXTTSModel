@@ -192,7 +192,8 @@ class TextProcessor:
         phoneme_language: Optional[str] = None,
         custom_symbols: Optional[List[str]] = None,
         tokenizer_type: str = "custom",
-        tokenizer_model: str = "facebook/nllb-200-distilled-600M"
+        tokenizer_model: str = "facebook/nllb-200-distilled-600M",
+        allow_symbol_growth: bool = True
     ):
         """
         Initialize TextProcessor.
@@ -213,6 +214,7 @@ class TextProcessor:
         self.tokenizer_type = tokenizer_type
         self.tokenizer_model = tokenizer_model
         self.phoneme_language_override = phoneme_language
+        self.allow_symbol_growth = allow_symbol_growth or custom_symbols is None
 
         if self.tokenizer_type == "nllb":
             # Initialize NLLB tokenizer
@@ -317,15 +319,19 @@ class TextProcessor:
         normalized = language.replace('_', '-').lower()
         return _ESPEAK_LANGUAGE_FALLBACKS.get(normalized, normalized)
 
-    def _ensure_symbol(self, symbol: str) -> None:
+    def _ensure_symbol(self, symbol: str) -> bool:
         """Ensure a symbol exists in the custom tokenizer vocabulary."""
         if symbol in self.symbol_to_id:
-            return
+            return True
+
+        if not self.allow_symbol_growth:
+            return False
 
         idx = len(self.symbols)
         self.symbols.append(symbol)
         self.symbol_to_id[symbol] = idx
         self.id_to_symbol[idx] = symbol
+        return True
     
     def text_to_sequence(
         self, 
@@ -364,7 +370,9 @@ class TextProcessor:
             for char in text:
                 if char not in self.symbol_to_id:
                     if self.tokenizer_type == "custom" and self.use_phonemes:
-                        self._ensure_symbol(char)
+                        if not self._ensure_symbol(char):
+                            print(f"Warning: Unknown character '{char}' (ord: {ord(char)}) discarded (symbol map fixed)")
+                            continue
                     else:
                         print(f"Warning: Unknown character '{char}' (ord: {ord(char)})")
                         continue

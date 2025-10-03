@@ -95,6 +95,14 @@ class XTTSTrainer:
         except Exception as e:
             self.logger.warning(f"TensorBoard disabled: {e}")
             self.summary_writer = None
+
+        training_cfg = getattr(config, 'training', None)
+        self.spectrogram_log_interval = max(0, getattr(training_cfg, 'spectrogram_log_interval', 0)) if training_cfg else 0
+        self.spectrogram_log_num_examples = max(1, getattr(training_cfg, 'spectrogram_log_num_examples', 1)) if training_cfg else 1
+        self.spectrogram_log_example_index = getattr(training_cfg, 'spectrogram_log_example_index', None) if training_cfg else None
+        self._last_spectrogram_log_step: Dict[str, int] = {}
+        self._spectrogram_example_offset: Dict[str, int] = {}
+        self._spectrogram_logging_disabled_warned = False
         
         # Configure GPUs before any TensorFlow device queries
         try:
@@ -1753,6 +1761,194 @@ class XTTSTrainer:
         except Exception as err:
             self.logger.debug(f"TensorBoard logging skipped for {prefix}: {err}")
 
+    def _should_log_spectrogram(self, step: int, prefix: str) -> bool:
+        if not self.summary_writer or self.spectrogram_log_interval <= 0:
+            return False
+        if step <= 0:
+            return False
+        if step % self.spectrogram_log_interval != 0:
+            return False
+        last = self._last_spectrogram_log_step.get(prefix)
+        if last == step:
+            return False
+        return True
+
+    @staticmethod
+    def _spectrogram_to_image(mel: np.ndarray) -> tf.Tensor:
+        mel = np.asarray(mel, dtype=np.float32)
+        if mel.ndim == 0:
+            mel = mel.reshape(1, 1)
+        if mel.ndim == 1:
+            mel = np.expand_dims(mel, axis=0)
+        if mel.ndim == 3:
+            mel = np.squeeze(mel, axis=-1)
+        if mel.ndim != 2:
+            raise ValueError(f"Expected 2D spectrogram, got shape {mel.shape}")
+        mel = np.nan_to_num(mel, nan=0.0, posinf=0.0, neginf=0.0)
+        mel = mel.T  # [n_mels, frames]
+
+        finite_mask = np.isfinite(mel)
+        if not np.any(finite_mask):
+            mel_norm = np.zeros_like(mel, dtype=np.float32)
+        else:
+            finite_vals = mel[finite_mask]
+            lo = np.percentile(finite_vals, 2.0)
+            hi = np.percentile(finite_vals, 98.0)
+            if not np.isfinite(lo):
+                lo = float(np.min(finite_vals))
+            if not np.isfinite(hi):
+                hi = float(np.max(finite_vals))
+            if hi <= lo:
+                hi = lo + 1e-3
+            mel_norm = (mel - lo) / (hi - lo)
+            mel_norm = np.clip(mel_norm, 0.0, 1.0)
+
+        mel_norm = mel_norm.astype(np.float32)
+        mel_norm = np.stack([mel_norm, mel_norm, mel_norm], axis=-1)  # RGB for better visibility
+        mel_norm = np.expand_dims(mel_norm, axis=0)
+        return tf.convert_to_tensor(mel_norm)
+
+    def _log_spectrogram_from_batch(
+        self,
+        batch_tensors: Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor],
+        step: int,
+        prefix: str = "train"
+    ) -> None:
+        if not self._should_log_spectrogram(step, prefix):
+            return
+
+        if not batch_tensors or len(batch_tensors) != 4:
+            return
+
+        text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_tensors
+
+        try:
+            text_sequences = self._maybe_merge_distributed(text_sequences)
+            mel_spectrograms = self._maybe_merge_distributed(mel_spectrograms)
+            text_lengths = self._maybe_merge_distributed(text_lengths)
+            mel_lengths = self._maybe_merge_distributed(mel_lengths)
+        except Exception as err:
+            self.logger.debug(f"Spectrogram merge failed at step {step}: {err}")
+            return
+
+        try:
+            text_sequences_np = text_sequences.numpy()
+            mel_spectrograms_np = mel_spectrograms.numpy()
+            text_lengths_np = text_lengths.numpy()
+            mel_lengths_np = mel_lengths.numpy()
+        except Exception as err:
+            self.logger.debug(f"Spectrogram numpy conversion failed at step {step}: {err}")
+            return
+
+        if mel_spectrograms_np.size == 0 or mel_spectrograms_np.shape[0] == 0:
+            return
+
+        batch_size = mel_spectrograms_np.shape[0]
+        if self.spectrogram_log_example_index is not None:
+            idx = int(np.clip(self.spectrogram_log_example_index, 0, batch_size - 1))
+            indices = [idx]
+        else:
+            num_examples = min(self.spectrogram_log_num_examples, batch_size)
+            start = self._spectrogram_example_offset.get(prefix, 0) % batch_size
+            indices = [(start + i) % batch_size for i in range(num_examples)]
+            self._spectrogram_example_offset[prefix] = start + num_examples
+
+        text_sel_np = text_sequences_np[indices]
+        mel_sel_np = mel_spectrograms_np[indices]
+        text_len_sel_np = text_lengths_np[indices]
+        mel_len_sel_np = mel_lengths_np[indices]
+
+        try:
+            text_sel = tf.convert_to_tensor(text_sel_np)
+            mel_sel = tf.convert_to_tensor(mel_sel_np)
+            text_len_sel = tf.convert_to_tensor(text_len_sel_np)
+            mel_len_sel = tf.convert_to_tensor(mel_len_sel_np)
+        except Exception as err:
+            self.logger.debug(f"Spectrogram tensor conversion failed at step {step}: {err}")
+            return
+
+        max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
+        if max_text_len:
+            text_sel = text_sel[:, :max_text_len]
+            text_len_sel = tf.minimum(text_len_sel, tf.cast(max_text_len, text_len_sel.dtype))
+
+        max_mel_len = getattr(self.config.data, 'max_mel_frames', None)
+        if max_mel_len:
+            mel_sel = mel_sel[:, :max_mel_len, :]
+            mel_len_sel = tf.minimum(mel_len_sel, tf.cast(max_mel_len, mel_len_sel.dtype))
+
+        try:
+            with get_device_context():
+                inference_outputs = self.model(
+                    text_inputs=text_sel,
+                    mel_inputs=mel_sel,
+                    text_lengths=text_len_sel,
+                    mel_lengths=mel_len_sel,
+                    training=False
+                )
+        except Exception as err:
+            if not self._spectrogram_logging_disabled_warned:
+                self.logger.debug(f"Spectrogram inference skipped at step {step}: {err}")
+                self._spectrogram_logging_disabled_warned = True
+            return
+
+        mel_pred = inference_outputs.get("mel_output")
+        if mel_pred is None:
+            return
+
+        try:
+            mel_pred_np = mel_pred.numpy().astype(np.float32)
+        except Exception as err:
+            self.logger.debug(f"Spectrogram prediction conversion failed at step {step}: {err}")
+            return
+
+        image_triplets = []
+        for local_idx, source_idx in enumerate(indices):
+            mel_len = int(mel_len_sel_np[local_idx]) if mel_len_sel_np.ndim > 0 else mel_sel_np.shape[1]
+            mel_len = max(1, min(mel_len, mel_sel_np.shape[1]))
+            target_slice = mel_sel_np[local_idx, :mel_len, :]
+
+            pred_slice = mel_pred_np[local_idx]
+            if pred_slice.ndim == 2:
+                pred_frames = pred_slice.shape[0]
+                if pred_frames < mel_len:
+                    pad = mel_len - pred_frames
+                    if pad > 0:
+                        pad_values = np.expand_dims(pred_slice[-1], axis=0) if pred_frames > 0 else np.zeros((1, pred_slice.shape[1]), dtype=pred_slice.dtype)
+                        pred_slice = np.concatenate([pred_slice, np.repeat(pad_values, pad, axis=0)], axis=0)
+                pred_slice = pred_slice[:mel_len, :]
+            else:
+                pred_slice = np.zeros_like(target_slice)
+
+            diff_slice = np.abs(target_slice - pred_slice)
+            try:
+                target_img = self._spectrogram_to_image(target_slice)
+                pred_img = self._spectrogram_to_image(pred_slice)
+                diff_img = self._spectrogram_to_image(diff_slice)
+            except Exception as err:
+                self.logger.debug(f"Spectrogram image conversion failed at step {step}: {err}")
+                continue
+            frame_count = target_slice.shape[0]
+            image_triplets.append((local_idx, source_idx, target_img, pred_img, diff_img, frame_count))
+
+        if not image_triplets:
+            return
+
+        try:
+            with self.summary_writer.as_default():
+                for local_idx, source_idx, target_img, pred_img, diff_img, frame_count in image_triplets:
+                    sample_tag = f"{prefix}/spectrogram_{local_idx}"
+                    tf.summary.image(f"{sample_tag}/target", target_img, step=step)
+                    tf.summary.image(f"{sample_tag}/prediction", pred_img, step=step)
+                    tf.summary.image(f"{sample_tag}/abs_diff", diff_img, step=step)
+                    tf.summary.scalar(f"{sample_tag}/frames", float(frame_count), step=step)
+                self.summary_writer.flush()
+        except Exception as err:
+            self.logger.debug(f"TensorBoard spectrogram logging failed at step {step}: {err}")
+            return
+
+        self._last_spectrogram_log_step[prefix] = step
+
     def _train_epoch(
         self,
         train_dataset: tf.data.Dataset,
@@ -1867,6 +2063,12 @@ class XTTSTrainer:
                 if self.enable_memory_cleanup and num_batches % 10 == 0:
                     self.cleanup_gpu_memory()
 
+                self._log_spectrogram_from_batch(
+                    (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
+                    step=self.current_step,
+                    prefix="train"
+                )
+
                 # Update progress bar with detailed losses and timing info
                 self._tb_train_step += 1
                 tb_step = self._tb_train_step
@@ -1927,7 +2129,16 @@ class XTTSTrainer:
                 step_losses = self.validation_step(
                     text_sequences, mel_spectrograms, text_lengths, mel_lengths
                 )
-            
+
+            val_step_index = self.current_step if self.current_step > 0 else getattr(self, '_tb_train_step', 0)
+            if val_step_index <= 0:
+                val_step_index = num_batches + 1
+            self._log_spectrogram_from_batch(
+                (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
+                step=val_step_index,
+                prefix="val"
+            )
+
             # Accumulate losses
             for key, value in step_losses.items():
                 if key not in val_losses:
