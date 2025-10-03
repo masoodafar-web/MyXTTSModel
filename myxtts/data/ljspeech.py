@@ -113,8 +113,9 @@ class LJSpeechDataset:
             language=config.language,
             cleaner_names=config.text_cleaners,
             add_blank=config.add_blank,
-            # Disable phonemizer by default to reduce CPU overhead during tokenization
-            use_phonemes=False
+            # Respect configuration so training matches inference tokenization
+            use_phonemes=getattr(config, 'use_phonemes', False),
+            phoneme_language=getattr(config, 'phoneme_language', None)
         )
 
         profiler = getattr(config, 'profiler', None)
@@ -172,13 +173,13 @@ class LJSpeechDataset:
             self.splits = self._load_splits()
             self.items = self.splits[self.subset]
         
+        # Ensure caches reflect current text/audio configuration
+        self._ensure_cache_alignment()
+
         print(f"Loaded {len(self.items)} items for {subset} subset")
 
     def _save_npy_atomic(self, path: Path, array: np.ndarray) -> None:
-        """Safely save numpy array atomically to avoid partial files.
-
-        Writes to a temporary file and then atomically replaces the target.
-        """
+        """Safely save numpy array atomically to avoid partial files."""
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = Path(str(path) + ".tmp")
@@ -187,17 +188,11 @@ class LJSpeechDataset:
         except Exception:
             # Fall back to direct save if atomic replace fails
             np.save(path, array)
-        """
-        Load mel spectrogram using memory mapping for faster I/O.
-        
-        Args:
-            cache_path: Path to cached mel spectrogram
-            
-        Returns:
-            Mel spectrogram array or None if loading fails
-        """
+
+    def _load_mel_with_mmap(self, cache_path: Path) -> Optional[np.ndarray]:
+        """Load mel spectrogram using memory mapping for faster I/O."""
         cache_key = str(cache_path)
-        
+
         with self._cache_lock:
             # Check if already in memory-mapped cache
             if cache_key in self._mel_mmap_cache:
@@ -207,7 +202,7 @@ class LJSpeechDataset:
                 except (ValueError, OSError):
                     # Memory map might be invalid, remove from cache
                     del self._mel_mmap_cache[cache_key]
-            
+
             # Try to create new memory map
             try:
                 if cache_path.exists() and os.path.getsize(cache_path) > 0:
@@ -272,18 +267,57 @@ class LJSpeechDataset:
                 pass  # Non-critical if save fails
             
             return text_sequence
-        """Safely save numpy array atomically to avoid partial files.
 
-        Writes to a temporary file and then atomically replaces the target.
-        """
+    def _alternate_token_cache_dir(self) -> Optional[Path]:
+        """Return the counterpart cache directory for phoneme/non-phoneme tokens."""
+        name = self.tokens_cache_dir.name
+        if "_ph_" in name:
+            alt_name = name.replace("_ph_", "_noph_", 1)
+        elif "_noph_" in name:
+            alt_name = name.replace("_noph_", "_ph_", 1)
+        else:
+            return None
+        return self.tokens_cache_dir.parent / alt_name
+
+    def _ensure_cache_alignment(self) -> None:
+        """Validate caches for the current configuration and refresh when requested."""
+        # Allow pure runtime loading when requested
+        preprocessing_mode = getattr(self.config, 'preprocessing_mode', 'precompute')
+        if preprocessing_mode == 'runtime':
+            return
+
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = Path(str(path) + ".tmp")
-            np.save(tmp_path, array)
-            os.replace(tmp_path, path)
+            self.tokens_cache_dir.mkdir(parents=True, exist_ok=True)
+            self.mel_cache_dir.mkdir(parents=True, exist_ok=True)
         except Exception:
-            # Fall back to direct save if atomic replace fails
-            np.save(path, array)
+            pass
+
+        token_cache_files = next(self.tokens_cache_dir.glob("*.npy"), None)
+        if token_cache_files is None:
+            alt_dir = self._alternate_token_cache_dir()
+            if alt_dir and alt_dir.exists() and next(alt_dir.glob("*.npy"), None) is not None:
+                print(
+                    f"[Cache Notice] Token cache '{self.tokens_cache_dir.name}' is empty while '{alt_dir.name}' has files. "
+                    "use_phonemes probably changed; rebuilding tokens for the new setting."
+                )
+            if getattr(self.config, 'auto_rebuild_token_cache', True):
+                self.precompute_tokens(overwrite=False)
+            else:
+                print(
+                    f"[Cache Notice] Token cache '{self.tokens_cache_dir}' is empty. "
+                    "Run dataset.precompute_tokens() or remove stale caches to avoid on-the-fly recomputation."
+                )
+
+        mel_cache_files = next(self.mel_cache_dir.glob("*.npy"), None)
+        if mel_cache_files is None:
+            if getattr(self.config, 'auto_rebuild_mel_cache', False):
+                print(f"[Cache Notice] Mel cache '{self.mel_cache_dir}' is empty; rebuilding now.")
+                self.precompute_mels(overwrite=False)
+            else:
+                print(
+                    f"[Cache Notice] Mel cache '{self.mel_cache_dir}' is empty. "
+                    "Use dataset.precompute_mels() to avoid runtime cache misses."
+                )
 
     def precompute_mels(self, num_workers: int = 1, overwrite: bool = False) -> None:
         """Precompute and cache mel spectrograms to disk to remove CPU bottleneck.

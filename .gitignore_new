@@ -1,0 +1,100 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch
+*.pth
+*.pt
+
+# TensorFlow
+*.h5
+*.pb
+checkpoint
+events.out.tfevents.*
+
+# Training outputs
+checkpoints*/
+!checkpoints/.gitkeep
+logs/
+runs/
+monitoring/
+tensorboard/
+
+# Audio files (except samples)
+*.wav
+*.mp3
+*.flac
+*.ogg
+!speaker.wav
+!assets/*.wav
+!outputs/audio_samples/.gitkeep
+
+# Data files
+*.npy
+*.json
+!configs/*.json
+!configs/*.yaml
+*.pkl
+*.cache
+
+# Analysis results
+*.png
+*.pdf
+*.svg
+!assets/*.png
+
+# Temporary files
+tmp*/
+temp*/
+*.tmp
+*.temp
+nohup.out
+training_output.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+benchmark_*.log
+gpu_sweep_*
+mel_*.json
+loss_contradiction_analysis.*
+
+# Archive (development files)
+archive/debug_scripts/
+archive/old_solutions/
+archive/summaries/

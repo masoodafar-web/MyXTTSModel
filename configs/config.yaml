@@ -22,7 +22,7 @@ training:
   scheduler: noam
   
   # Fixed loss weights for proper convergence (addresses Persian issue: "لاس سه رقمیه")
-  mel_loss_weight: 2.5         # Fixed from 35.0 - was causing loss values in hundreds
+  mel_loss_weight: 10.0        # Increased to emphasize mel learning and fix spectral quality
   kl_loss_weight: 1.0
   
   # Training stability improvements  

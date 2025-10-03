@@ -1,0 +1,111 @@
+# Simple training config for mel spectrogram recovery
+# بازگرداندن صحیح mel spectrogram
+
+model:
+  # کاهش پیچیدگی مدل برای یادگیری بهتر
+  n_mel_channels: 80
+  n_speakers: 1
+  sample_rate: 22050
+  
+  # تنظیمات encoder متن (ساده‌تر)
+  text_encoder_depth: 6  # کاهش از 8
+  text_encoder_dim: 384  # کاهش از 512
+  text_encoder_heads: 6
+  text_encoder_conv_kernel_size: 3
+  text_encoder_dropout: 0.1
+  
+  # تنظیمات encoder صوت (ساده‌تر)
+  audio_encoder_depth: 6  # کاهش از 8 
+  audio_encoder_dim: 512  # کاهش از 768
+  audio_encoder_heads: 8
+  audio_encoder_dropout: 0.1
+  
+  # تنظیمات decoder (ساده‌تر)
+  decoder_depth: 12  # کاهش از 16
+  decoder_dim: 1024  # کاهش از 1536
+  decoder_heads: 8   # کاهش از 12
+  decoder_dropout: 0.1
+  decoder_cross_attention: true
+  
+  # تنظیمات attention
+  attention_dim: 256
+  attention_location_n_filters: 32
+  use_attention_prenet: true
+  
+  # تنظیمات prenet
+  mel_input_dim: 80
+  prenet_dim: 256
+  prenet_dropout: 0.2
+  
+  # تنظیمات postnet
+  postnet_dim: 512
+  postnet_kernel_size: 5
+  postnet_n_convolutions: 5
+  postnet_dropout: 0.1
+  
+  # معماری باقی
+  use_gst: false  # غیرفعال کردن GST برای سادگی
+  use_speaker_embedding: false
+  
+  # تنظیمات vocoder
+  vocoder_type: "griffin_lim"  # ساده‌ترین vocoder
+
+training:
+  # تنظیمات optimizer ساده
+  learning_rate: 0.0001  # کاهش نرخ یادگیری
+  lr_schedule: "constant"  # بدون تغییر نرخ یادگیری
+  warmup_steps: 1000
+  
+  # batch size کوچک‌تر
+  batch_size: 8  # کاهش از 16
+  accumulate_grad_batches: 2
+  
+  # تنظیمات loss ساده
+  mel_loss_weight: 1.0
+  stop_loss_weight: 0.5  # کاهش وزن stop loss
+  attention_loss_weight: 0.1  # کاهش وزن attention loss
+  
+  # حذف regularization اضافی
+  label_smoothing: 0.0  # حذف label smoothing
+  dropout_rate: 0.1
+  weight_decay: 0.0001
+  
+  # ساده‌ترین تنظیمات loss
+  use_huber_loss: false  # استفاده از L1 ساده
+  mel_loss_type: "l1"
+  
+  # تنظیمات monitoring
+  log_interval: 100
+  save_interval: 1000
+  max_epochs: 20
+  
+  # Teacher forcing با احتمال بالا
+  teacher_forcing_ratio: 1.0  # همیشه teacher forcing
+  
+  # کاهش gradient clipping
+  gradient_clip_val: 1.0
+
+data:
+  language: "en"
+  sample_rate: 22050
+  n_mels: 80
+  n_fft: 2048
+  hop_length: 256
+  win_length: 1024
+  fmin: 0
+  fmax: 8000  # کاهش fmax برای تمرکز روی فرکانس‌های مهم گفتار
+  
+  # mel spectrogram normalization
+  # توجه: اینها باید با آمار واقعی داده‌ها تطبیق داشته باشد
+  mel_mean: -5.0  # تقریبی بر اساس تست teacher forcing
+  mel_std: 2.2
+  
+  # تنظیمات داده
+  max_wav_length: 16.0  # ثانیه
+  min_wav_length: 1.0   # ثانیه
+
+# تنظیمات سایر
+debug: true
+use_tensorboard: true
+checkpoint_interval: 1000
+num_workers: 4

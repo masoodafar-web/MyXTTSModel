@@ -49,6 +49,32 @@ SPECIAL_TOKENS = [PAD, BOS, EOS]
 ALL_SYMBOLS = SPECIAL_TOKENS + list(SYMBOLS)
 
 
+_ESPEAK_LANGUAGE_FALLBACKS: Dict[str, str] = {
+    "en": "en-us",
+    "en-us": "en-us",
+    "en-gb": "en-gb",
+    "zh": "zh",
+    "zh-cn": "zh",
+    "zh-hans": "zh",
+    "pt": "pt",
+    "pt-br": "pt-br",
+    "pt-pt": "pt-pt",
+    "es": "es",
+    "fr": "fr",
+    "de": "de",
+    "it": "it",
+    "pl": "pl",
+    "tr": "tr",
+    "ru": "ru",
+    "nl": "nl",
+    "cs": "cs",
+    "ar": "ar",
+    "ja": "ja",
+    "hu": "hu",
+    "ko": "ko",
+}
+
+
 def expand_abbreviations(text: str) -> str:
     """Expand common abbreviations in text."""
     abbreviations = {
@@ -163,6 +189,7 @@ class TextProcessor:
         cleaner_names: List[str] = None,
         add_blank: bool = True,
         use_phonemes: bool = True,
+        phoneme_language: Optional[str] = None,
         custom_symbols: Optional[List[str]] = None,
         tokenizer_type: str = "custom",
         tokenizer_model: str = "facebook/nllb-200-distilled-600M"
@@ -185,7 +212,8 @@ class TextProcessor:
         self.use_phonemes = use_phonemes
         self.tokenizer_type = tokenizer_type
         self.tokenizer_model = tokenizer_model
-        
+        self.phoneme_language_override = phoneme_language
+
         if self.tokenizer_type == "nllb":
             # Initialize NLLB tokenizer
             self.nllb_tokenizer = NLLBTokenizer(tokenizer_model)
@@ -198,9 +226,9 @@ class TextProcessor:
             
             # Set up symbol set
             if custom_symbols is not None:
-                self.symbols = custom_symbols
+                self.symbols = list(custom_symbols)
             else:
-                self.symbols = ALL_SYMBOLS
+                self.symbols = list(ALL_SYMBOLS)
             
             # Create symbol to ID mapping
             self.symbol_to_id = {s: i for i, s in enumerate(self.symbols)}
@@ -208,16 +236,8 @@ class TextProcessor:
         
         # Initialize phonemizer if available and requested (custom tokenizer only)
         self.phonemizer = None
-        if self.tokenizer_type == "custom" and self.use_phonemes and PHONEMIZER_AVAILABLE:
-            try:
-                self.phonemizer = EspeakBackend(
-                    language=self.language,
-                    preserve_punctuation=True,
-                    with_stress=True
-                )
-            except Exception as e:
-                print(f"Warning: Could not initialize phonemizer for {language}: {e}")
-                self.use_phonemes = False
+        if self.tokenizer_type == "custom" and self.use_phonemes:
+            self._init_phonemizer()
     
     def clean_text(self, text: str) -> str:
         """
@@ -249,13 +269,63 @@ class TextProcessor:
         """
         if not self.use_phonemes or self.phonemizer is None:
             return text
-        
+
         try:
             phonemes = self.phonemizer.phonemize([text], strip=True)[0]
             return phonemes
         except Exception as e:
             print(f"Warning: Phonemization failed: {e}")
             return text
+
+    def update_language(self, language: str) -> None:
+        """Update processor language and reinitialise phonemizer if required."""
+        if language == self.language:
+            return
+        self.language = language
+        if self.tokenizer_type == "custom" and self.use_phonemes:
+            self._init_phonemizer()
+
+    def _init_phonemizer(self) -> None:
+        """Initialise the phonemizer backend with appropriate language mapping."""
+        if self.tokenizer_type != "custom" or not self.use_phonemes:
+            self.phonemizer = None
+            return
+        if not PHONEMIZER_AVAILABLE:
+            raise RuntimeError(
+                "TextProcessor initialised with use_phonemes=True but the phonemizer package is not installed. "
+                "Install phonemizer (pip install phonemizer) or set use_phonemes=False in the configuration to ensure consistency."
+            )
+
+        target_language = self._resolve_phoneme_language(self.phoneme_language_override or self.language)
+        try:
+            self.phonemizer = EspeakBackend(
+                language=target_language,
+                preserve_punctuation=True,
+                with_stress=True
+            )
+            self._phonemizer_language = target_language
+        except Exception as e:
+            raise RuntimeError(
+                f"Phonemizer backend failed to initialise for language '{target_language}' (requested '{self.language}'). "
+                "Install the required phonemizer dependencies or switch use_phonemes to False."
+            ) from e
+
+    def _resolve_phoneme_language(self, language: str) -> str:
+        """Map user language codes to espeak-compatible ones."""
+        if not language:
+            return "en-us"
+        normalized = language.replace('_', '-').lower()
+        return _ESPEAK_LANGUAGE_FALLBACKS.get(normalized, normalized)
+
+    def _ensure_symbol(self, symbol: str) -> None:
+        """Ensure a symbol exists in the custom tokenizer vocabulary."""
+        if symbol in self.symbol_to_id:
+            return
+
+        idx = len(self.symbols)
+        self.symbols.append(symbol)
+        self.symbol_to_id[symbol] = idx
+        self.id_to_symbol[idx] = symbol
     
     def text_to_sequence(
         self, 
@@ -292,14 +362,17 @@ class TextProcessor:
             sequence.append(self.symbol_to_id[BOS])
             
             for char in text:
-                if char in self.symbol_to_id:
-                    sequence.append(self.symbol_to_id[char])
-                    # Add blank token between characters
-                    if self.add_blank and char != ' ':
-                        sequence.append(self.symbol_to_id[PAD])
-                else:
-                    # Skip unknown characters
-                    print(f"Warning: Unknown character '{char}' (ord: {ord(char)})")
+                if char not in self.symbol_to_id:
+                    if self.tokenizer_type == "custom" and self.use_phonemes:
+                        self._ensure_symbol(char)
+                    else:
+                        print(f"Warning: Unknown character '{char}' (ord: {ord(char)})")
+                        continue
+
+                sequence.append(self.symbol_to_id[char])
+                # Add blank token between characters
+                if self.add_blank and char != ' ':
+                    sequence.append(self.symbol_to_id[PAD])
             
             # Add EOS token
             sequence.append(self.symbol_to_id[EOS])

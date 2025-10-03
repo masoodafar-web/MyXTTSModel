@@ -59,7 +59,8 @@ class XTTSInference:
             language=config.data.language,
             cleaner_names=config.data.text_cleaners,
             add_blank=config.data.add_blank,
-            use_phonemes=True
+            use_phonemes=getattr(config.data, 'use_phonemes', True),
+            phoneme_language=getattr(config.data, 'phoneme_language', None)
         )
         
         # Initialize model
@@ -73,10 +74,20 @@ class XTTSInference:
             else:
                 self.logger.warning("No checkpoint provided. Using untrained model.")
         
-        # Set model to evaluation mode
+        # Set model to evaluation mode (can be changed for training)
         self.model.trainable = False
         
         self.logger.info("XTTS inference engine initialized")
+    
+    def enable_training(self):
+        """Enable training mode for the model."""
+        self.model.trainable = True
+        self.logger.info("Model set to training mode")
+        
+    def disable_training(self):
+        """Disable training mode for the model."""
+        self.model.trainable = False
+        self.logger.info("Model set to inference mode")
     
     def _ensure_model_is_built(self) -> None:
         """Ensure the underlying Keras model is built before weight loading."""
@@ -337,20 +348,13 @@ class XTTSInference:
         """Preprocess text for synthesis."""
         # Update text processor language if different
         if language != self.text_processor.language:
-            self.text_processor.language = language
-            # Reinitialize phonemizer if needed
-            if self.text_processor.use_phonemes:
-                try:
-                    from phonemizer.backend import EspeakBackend
-                    self.text_processor.phonemizer = EspeakBackend(
-                        language=language,
-                        preserve_punctuation=True,
-                        with_stress=True
-                    )
-                except Exception as e:
-                    self.logger.warning(f"Could not initialize phonemizer for {language}: {e}")
-                    self.text_processor.use_phonemes = False
-        
+            try:
+                self.text_processor.update_language(language)
+            except RuntimeError as e:
+                self.logger.warning(f"Could not initialize phonemizer for {language}: {e}")
+                self.text_processor.use_phonemes = False
+                self.text_processor.phonemizer = None
+
         # Clean and process text
         text_processed = self.text_processor.clean_text(text)
         

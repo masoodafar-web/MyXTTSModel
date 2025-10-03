@@ -74,8 +74,9 @@ def mel_loss(
     else:
         loss = tf.reduce_mean(loss)
     
-    # Apply improved loss clipping to prevent three-digit loss values
-    loss = tf.clip_by_value(loss, 0.0, 10.0)  # Much tighter clipping for stability
+    # CRITICAL FIX: Remove loss clipping completely to allow proper mel learning
+    # The original clipping was preventing the model from learning mel spectrograms
+    # by constraining losses when the prediction range was very different from target range
     
     return loss
 
@@ -400,7 +401,7 @@ class XTTSLoss(tf.keras.losses.Loss):
     
     def __init__(
         self,
-        mel_loss_weight: float = 2.5,  # Fixed from 45.0 - was causing three-digit loss values
+        mel_loss_weight: float = 10.0,  # Increased to emphasize mel learning
         stop_loss_weight: float = 1.0,
         attention_loss_weight: float = 0.1,  # Enabled with small weight for gradual alignment learning
         duration_loss_weight: float = 0.1,   # Enabled: model now returns duration predictions

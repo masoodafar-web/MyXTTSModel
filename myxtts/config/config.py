@@ -202,6 +202,8 @@ class DataConfig:
     enable_memory_mapping: bool = True
     cache_verification: bool = True
     prefetch_to_gpu: bool = True
+    auto_rebuild_token_cache: bool = True  # Rebuild token cache automatically when configuration changes
+    auto_rebuild_mel_cache: bool = False   # Optional automatic mel cache rebuild
 
     # Sequence length caps to avoid OOM (optimized for GPU)
     # Increase these for longer sentences: max_mel_frames for audio duration, 

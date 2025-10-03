@@ -807,7 +807,7 @@ def build_config(
         scheduler_params={},
 
         # Fixed loss weights for proper convergence (addresses "لاس سه رقمیه" issue)
-        mel_loss_weight=2.5,    # Fixed from 22.0 - was still causing high loss values
+        mel_loss_weight=10.0,   # Increased to emphasize mel learning and fix spectral quality
         kl_loss_weight=1.8,     # Increased from 1.0 for regularization
         duration_loss_weight=0.8,  # Moderate duration loss
         pitch_loss_weight=0.12,

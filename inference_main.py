@@ -52,8 +52,9 @@ from __future__ import annotations
 import argparse
 import os
 from typing import Optional, List
-import os, sys
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'  # choose GPU
+
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "1")  # default to GPU 1 unless user overrides
+
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 os.environ.setdefault("TF_FORCE_GPU_ALLOW_GROWTH", "true")
 
@@ -64,6 +65,14 @@ from train_main import build_config
 from myxtts.config.config import XTTSConfig
 from myxtts.inference.synthesizer import XTTSInference
 from myxtts.utils.commons import setup_logging, find_latest_checkpoint
+
+# Import mel normalization fix
+try:
+    from mel_normalization_fix import MelNormalizer
+    MEL_FIX_AVAILABLE = True
+except ImportError:
+    MEL_FIX_AVAILABLE = False
+    print("Warning: mel_normalization_fix.py not found - mel normalization disabled")
 
 # Import evaluation capabilities
 try:
@@ -190,7 +199,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--vocoder-type",
         choices=["griffin_lim", "hifigan", "bigvgan"],
-        help="Select vocoder backend for mel-to-audio conversion.",
+        default=None,
+        help="Select vocoder backend for mel-to-audio conversion (defaults to training config).",
     )
     parser.add_argument(
         "--language",
@@ -485,6 +495,7 @@ def apply_phone_normalization(text: str, language: str, logger) -> str:
         processor = TextProcessor(
             language=language,
             use_phonemes=True,
+            phoneme_language=language,
             tokenizer_type="custom"  # Use custom for phonemization
         )
         
@@ -553,6 +564,199 @@ def list_style_tokens(config, logger):
             
     except Exception as e:
         logger.error(f"Failed to list style tokens: {e}")
+
+
+class FixedXTTSInference:
+    """
+    Enhanced XTTS inference with mel normalization fix.
+    """
+    
+    def __init__(self, config, checkpoint_path):
+        self.config = config
+        self.checkpoint_path = checkpoint_path
+        self.logger = setup_logging()
+        
+        # Initialize base inference engine
+        self.base_inference = XTTSInference(config=config, checkpoint_path=checkpoint_path)
+        
+        # Forward important attributes from base inference
+        self.model = self.base_inference.model
+        self.vocoder = getattr(self.base_inference, 'vocoder', None)
+        self.audio_processor = self.base_inference.audio_processor
+        self.text_processor = self.base_inference.text_processor
+        
+        # Initialize mel normalizer if available
+        self.mel_normalizer = None
+        self.scaling_params = None
+        
+        if MEL_FIX_AVAILABLE:
+            try:
+                self.mel_normalizer = MelNormalizer()
+                self.scaling_params = self._load_or_compute_scaling_params()
+                self.logger.info("✅ Mel normalization fix enabled")
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize mel normalizer: {e}")
+                self.mel_normalizer = None
+        else:
+            self.logger.warning("❌ Mel normalization fix not available - output may be noisy")
+    
+    def _load_or_compute_scaling_params(self):
+        """Load or compute mel scaling parameters."""
+        import json
+        from pathlib import Path
+        
+        params_file = "mel_scaling_params.json"
+        
+        if Path(params_file).exists():
+            with open(params_file, 'r') as f:
+                params = json.load(f)
+            self.logger.info(f"Loaded scaling params: scale={params['scale_factor']:.3f}, offset={params['offset']:.3f}")
+            return params
+        else:
+            # Use the computed values from our previous analysis
+            params = {
+                'scale_factor': 0.449,  # From teacher forcing analysis
+                'offset': 0.000
+            }
+            
+            # Save for future use
+            with open(params_file, 'w') as f:
+                json.dump(params, f, indent=2)
+            
+            self.logger.info(f"Using computed scaling params: scale={params['scale_factor']:.3f}, offset={params['offset']:.3f}")
+            return params
+    
+    def _apply_mel_fixes(self, mel_pred):
+        """Apply all mel spectrogram fixes."""
+        if self.mel_normalizer is None or self.scaling_params is None:
+            self.logger.warning("Mel fixes not available, returning raw output")
+            return mel_pred
+        
+        # Apply learned scaling
+        scale_factor = self.scaling_params['scale_factor'] 
+        offset = self.scaling_params['offset']
+        mel_scaled = mel_pred * scale_factor + offset
+        
+        # Denormalize back to raw mel space
+        mel_fixed = self.mel_normalizer.denormalize(mel_scaled)
+        
+        self.logger.debug(f"Applied mel fixes: scale={scale_factor:.3f}, offset={offset:.3f}")
+        return mel_fixed
+    
+    def synthesize(self, text, reference_audio=None, **kwargs):
+        """
+        Synthesize speech with mel normalization fixes.
+        """
+        try:
+            # If no mel fixes available, use base inference
+            if self.mel_normalizer is None:
+                self.logger.warning("Using base inference without mel fixes")
+                return self.base_inference.synthesize(text=text, reference_audio=reference_audio, **kwargs)
+            
+            # Process text
+            processed_text = self.base_inference._preprocess_text(text, self.config.data.language)
+            text_sequence = self.base_inference.text_processor.text_to_sequence(processed_text)
+            
+            # Create text tensors
+            import tensorflow as tf
+            text_tensor = tf.constant([text_sequence], dtype=tf.int32)
+            text_lengths = tf.constant([len(text_sequence)], dtype=tf.int32)
+            
+            # Handle reference audio if provided
+            mel_input = None
+            if reference_audio:
+                import soundfile as sf
+                import numpy as np
+                
+                # Load and process reference audio
+                audio, sr = sf.read(reference_audio)
+                if audio.ndim > 1:
+                    audio = audio.mean(axis=1)
+                    
+                # Process through audio pipeline
+                audio_processed = self.base_inference.audio_processor.preprocess_audio(audio)
+                mel_raw = self.base_inference.audio_processor.wav_to_mel(audio_processed).T
+                
+                # Normalize mel for model input
+                mel_normalized = self.mel_normalizer.normalize(mel_raw)
+                
+                # Use a portion for conditioning
+                conditioning_frames = min(20, mel_normalized.shape[0])
+                mel_conditioning = mel_normalized[:conditioning_frames]
+                
+                # Create input mel tensor
+                estimated_length = len(text_sequence) * 4  # Rough estimate
+                mel_input = np.zeros((estimated_length, self.config.model.n_mels), dtype=np.float32)
+                mel_input[:conditioning_frames] = mel_conditioning
+                
+                self.logger.info(f"Using reference audio conditioning: {conditioning_frames} frames")
+            
+            # Generate mel spectrogram
+            if mel_input is not None:
+                mel_tensor = tf.constant(mel_input[np.newaxis, ...], dtype=tf.float32)
+                mel_lengths = tf.constant([mel_input.shape[0]], dtype=tf.int32)
+            else:
+                # Use zero conditioning
+                estimated_length = len(text_sequence) * 4
+                mel_tensor = tf.zeros((1, estimated_length, self.config.model.n_mels), dtype=tf.float32)
+                mel_lengths = tf.constant([estimated_length], dtype=tf.int32)
+            
+            # Run model inference
+            outputs = self.base_inference.model(
+                text_inputs=text_tensor,
+                mel_inputs=mel_tensor,
+                text_lengths=text_lengths,
+                mel_lengths=mel_lengths,
+                training=False
+            )
+            
+            # Extract mel prediction
+            mel_pred_raw = outputs['mel_output'].numpy()[0]
+            
+            # Apply mel fixes
+            self.logger.info("Applying mel spectrogram fixes...")
+            mel_fixed = self._apply_mel_fixes(mel_pred_raw)
+            
+            # Convert to audio using Griffin-Lim
+            self.logger.info("Converting mel to audio...")
+            audio_output = self.base_inference.audio_processor.mel_to_wav(mel_fixed.T)  # Need [n_mels, time]
+            
+            # Post-process audio
+            audio_output = self.base_inference._postprocess_audio(audio_output)
+            
+            # Return result in expected format
+            result = {
+                "audio": audio_output,
+                "mel_spectrogram": mel_fixed,
+                "sample_rate": self.config.model.sample_rate if hasattr(self.config.model, 'sample_rate') else 22050
+            }
+            
+            self.logger.info(f"✅ Synthesis complete with mel fixes. Audio length: {len(audio_output)/result['sample_rate']:.2f}s")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"❌ Fixed synthesis failed: {e}")
+            self.logger.info("Falling back to base inference")
+            return self.base_inference.synthesize(text=text, reference_audio=reference_audio, **kwargs)
+    
+    def clone_voice(self, text, reference_audio, **kwargs):
+        """Clone voice using enhanced synthesis."""
+        return self.synthesize(text=text, reference_audio=reference_audio, **kwargs)
+    
+    def save_audio(self, audio, output_path, sample_rate):
+        """Save audio to file."""
+        import soundfile as sf
+        import os
+        
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:  # Only create directory if there is one
+            os.makedirs(output_dir, exist_ok=True)
+        
+        # Save audio
+        sf.write(output_path, audio, sample_rate)
+        self.logger.info(f"Audio saved to: {output_path}")
+        return output_path
 
 
 def main():
@@ -734,8 +938,8 @@ def main():
             
         except Exception as e:
             logger.warning(f"Failed to initialize optimized inference: {e}")
-            logger.info("Falling back to standard inference engine")
-            inference_engine = XTTSInference(
+            logger.info("Falling back to enhanced standard inference engine")
+            inference_engine = FixedXTTSInference(
                 config=config,
                 checkpoint_path=checkpoint_prefix,
             )
@@ -743,7 +947,7 @@ def main():
         if hasattr(args, 'optimized_inference') and args.optimized_inference and not EVAL_OPT_AVAILABLE:
             logger.warning("Optimized inference requested but optimization modules not available")
             
-        inference_engine = XTTSInference(
+        inference_engine = FixedXTTSInference(
             config=config,
             checkpoint_path=checkpoint_prefix,
         )
