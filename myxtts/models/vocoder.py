@@ -222,6 +222,7 @@ class VocoderInterface(tf.keras.layers.Layer):
         
         self.config = config
         self.vocoder_type = vocoder_type
+        self._weights_initialized = False
         
         # Initialize appropriate vocoder
         if vocoder_type == "hifigan":
@@ -229,8 +230,17 @@ class VocoderInterface(tf.keras.layers.Layer):
         elif vocoder_type == "griffin_lim":
             # Keep Griffin-Lim as fallback for backward compatibility
             self.vocoder = None  # Will use AudioProcessor method
+            self._weights_initialized = True  # Griffin-Lim doesn't need weights
         else:
             raise ValueError(f"Unsupported vocoder type: {vocoder_type}")
+    
+    def mark_weights_loaded(self):
+        """Mark that vocoder weights have been loaded from checkpoint."""
+        self._weights_initialized = True
+    
+    def check_weights_initialized(self) -> bool:
+        """Check if vocoder weights are properly initialized."""
+        return self._weights_initialized
     
     def call(
         self,
@@ -247,8 +257,35 @@ class VocoderInterface(tf.keras.layers.Layer):
         Returns:
             Audio waveform [batch, audio_length, 1]
         """
+        # Warn if vocoder weights may not be initialized
+        if not training and self.vocoder_type == "hifigan" and not self._weights_initialized:
+            import logging
+            logger = logging.getLogger("MyXTTS.Vocoder")
+            logger.warning(
+                "⚠️ HiFi-GAN vocoder weights may not be properly initialized! "
+                "This will produce noise instead of speech. "
+                "Make sure to load a trained checkpoint with vocoder weights."
+            )
+        
         if self.vocoder_type == "hifigan":
-            return self.vocoder(mel, training=training)
+            audio = self.vocoder(mel, training=training)
+            
+            # Validate output is not all zeros or NaNs
+            if not training:
+                # Check for problematic output
+                audio_mean = tf.reduce_mean(tf.abs(audio))
+                if tf.math.is_nan(audio_mean) or audio_mean < 1e-8:
+                    import logging
+                    logger = logging.getLogger("MyXTTS.Vocoder")
+                    logger.error(
+                        "❌ Vocoder produced invalid output (NaN or near-zero). "
+                        "This indicates the vocoder is not properly trained. "
+                        "Falling back to returning mel spectrogram for Griffin-Lim conversion."
+                    )
+                    # Return mel for fallback processing
+                    return mel
+            
+            return audio
         elif self.vocoder_type == "griffin_lim":
             # For Griffin-Lim, we'll need to handle this in audio processor
             # This is a placeholder - actual Griffin-Lim conversion happens in post-processing

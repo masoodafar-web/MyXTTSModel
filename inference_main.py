@@ -747,6 +747,26 @@ def main():
             config=config,
             checkpoint_path=checkpoint_prefix,
         )
+    
+    # Check vocoder initialization status and provide helpful guidance
+    if hasattr(inference_engine.model, 'vocoder'):
+        if not inference_engine.model.vocoder.check_weights_initialized():
+            logger.warning("=" * 70)
+            logger.warning("⚠️  VOCODER WEIGHTS NOT INITIALIZED WARNING")
+            logger.warning("=" * 70)
+            logger.warning("The neural vocoder (HiFi-GAN) weights may not be properly trained.")
+            logger.warning("This will likely result in NOISE instead of intelligible speech.")
+            logger.warning("")
+            logger.warning("Common causes:")
+            logger.warning("  1. Model checkpoint doesn't include vocoder weights")
+            logger.warning("  2. Vocoder was not trained (training stopped too early)")
+            logger.warning("  3. Using wrong checkpoint or model configuration")
+            logger.warning("")
+            logger.warning("Solutions:")
+            logger.warning("  • Train the model longer to ensure vocoder converges")
+            logger.warning("  • Check that checkpoint includes all model components")
+            logger.warning("  • System will automatically fallback to Griffin-Lim if output is invalid")
+            logger.warning("=" * 70)
 
     # Handle advanced voice cloning features
     if args.clone_voice or args.multiple_reference_audios:

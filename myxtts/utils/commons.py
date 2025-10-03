@@ -504,6 +504,11 @@ def load_checkpoint(
     if os.path.exists(model_path):
         model.load_weights(model_path)
         logger.info(f"Loaded model weights from {model_path}")
+        
+        # Mark vocoder weights as initialized if model has a vocoder
+        if hasattr(model, 'vocoder') and hasattr(model.vocoder, 'mark_weights_loaded'):
+            model.vocoder.mark_weights_loaded()
+            logger.debug("Marked vocoder weights as loaded from checkpoint")
     else:
         raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
     
