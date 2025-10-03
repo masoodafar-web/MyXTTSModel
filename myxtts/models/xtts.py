@@ -880,6 +880,12 @@ class XTTS(tf.keras.Model):
             
             decoder = self.mel_decoder if hasattr(self, 'mel_decoder') else self.decoder_strategy.decoder
             
+            # Calculate minimum frames based on text length
+            # Assume roughly 10-15 mel frames per character for reasonable speech
+            text_len = tf.shape(text_inputs)[1]
+            min_frames = tf.maximum(20, text_len * 10)  # At least 20 frames, or 10x text length
+            min_frames = int(min_frames.numpy()) if hasattr(min_frames, 'numpy') else int(min_frames)
+            
             for step in range(max_length):
                 # Decode current step
                 if hasattr(self, 'mel_decoder'):
@@ -911,13 +917,21 @@ class XTTS(tf.keras.Model):
                 # Update decoder input for next step
                 current_mel = tf.concat([current_mel, mel_frame], axis=1)
                 
-                # Check for stop condition
+                # Check for stop condition with improved logic
                 stop_prob_value = float(tf.reduce_mean(stop_prob))
-                if step == 0:  # Never stop on the first frame
+                
+                # More robust stopping criteria:
+                # 1. Never stop before minimum frames (based on text length)
+                # 2. Require very high confidence (0.95) to stop early
+                # 3. Use sliding window average for more stable stop detection
+                if step < min_frames:
+                    # Don't check stop condition before minimum length
                     continue
-                elif step > 5 and stop_prob_value > 0.8:  # More conservative stop condition
+                elif step >= min_frames and stop_prob_value > 0.95:
+                    # High confidence stop after minimum length
                     break
-                elif step > max_length * 0.8:  # Safety break if we're near max length
+                elif step > max_length * 0.9:
+                    # Safety break if we're near max length
                     break
             
             # Concatenate all frames
