@@ -1967,14 +1967,14 @@ class XTTSTrainer:
         
         # Plot target spectrogram
         im0 = axes[0].imshow(target_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
-        axes[0].set_title('Target Spectrogram')
+        axes[0].set_title('Target Mel Spectrogram')
         axes[0].set_xlabel('Frames')
         axes[0].set_ylabel('Mel Bins')
         plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
         
         # Plot predicted spectrogram
         im1 = axes[1].imshow(pred_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
-        axes[1].set_title('Predicted Spectrogram')
+        axes[1].set_title('Predicted Mel Spectrogram')
         axes[1].set_xlabel('Frames')
         axes[1].set_ylabel('Mel Bins')
         plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
