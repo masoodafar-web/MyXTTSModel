@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>راهنمای جامع رفع مشکلات MyXTTS</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif; 
+      line-height: 1.7; 
+      margin: 2rem auto; 
+      max-width: 1200px;
+      color: #333;
+      background: #f8f9fa;
+    }
+    .container {
+      background: white;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    h1 { 
+      font-size: 2.2rem; 
+      margin-bottom: 1.5rem; 
+      color: #2c3e50;
+      text-align: center;
+      border-bottom: 3px solid #e74c3c;
+      padding-bottom: 0.5rem;
+    }
+    h2 {
+      font-size: 1.6rem;
+      color: #c0392b;
+      margin: 2rem 0 1rem 0;
+      border-right: 4px solid #e74c3c;
+      padding-right: 1rem;
+    }
+    h3 {
+      font-size: 1.3rem;
+      color: #34495e;
+      margin: 1.5rem 0 0.8rem 0;
+    }
+    .problem {
+      background: #ffebee;
+      border: 2px solid #f44336;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+      border-right: 6px solid #f44336;
+    }
+    .problem-title {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #c62828;
+      margin-bottom: 0.8rem;
+      display: flex;
+      align-items: center;
+    }
+    .problem-title::before {
+      content: "⚠️";
+      margin-left: 0.5rem;
+    }
+    .symptoms {
+      background: #fff3e0;
+      border: 2px solid #ff9800;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .solution {
+      background: #e8f5e8;
+      border: 2px solid #4caf50;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .solution-title {
+      font-weight: bold;
+      color: #2e7d32;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+    }
+    .solution-title::before {
+      content: "✅";
+      margin-left: 0.5rem;
+    }
+    .command {
+      background: #2c3e50;
+      color: #ecf0f1;
+      border: 2px solid #34495e;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+      font-family: 'Courier New', monospace;
+      direction: ltr;
+      text-align: left;
+      overflow-x: auto;
+    }
+    .tip {
+      background: #e3f2fd;
+      border: 2px solid #2196f3;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .warning {
+      background: #fff3e0;
+      border: 2px solid #ff9800;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .category {
+      border-right: 6px solid #e74c3c;
+      background: linear-gradient(to left, #ffebee, #ffffff);
+      padding: 1.5rem;
+      margin: 2rem 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .category h2 {
+      border-right: none;
+      padding-right: 0;
+    }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      color: #d63384;
+    }
+    .toc {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+    }
+    .toc h3 {
+      margin-top: 0;
+      color: #495057;
+    }
+    .toc ul {
+      list-style: none;
+      padding-right: 0;
+    }
+    .toc li {
+      margin: 0.5rem 0;
+      padding-right: 1rem;
+    }
+    .toc a {
+      text-decoration: none;
+      color: #007bff;
+      font-weight: 500;
+    }
+    .toc a:hover {
+      color: #0056b3;
+      text-decoration: underline;
+    }
+    .severity-critical {
+      border-right-color: #d32f2f;
+      background: linear-gradient(to left, #ffcdd2, #ffffff);
+    }
+    .severity-high {
+      border-right-color: #f57c00;
+      background: linear-gradient(to left, #ffe0b2, #ffffff);
+    }
+    .severity-medium {
+      border-right-color: #fbc02d;
+      background: linear-gradient(to left, #fff9c4, #ffffff);
+    }
+    .cause {
+      background: #f5f5f5;
+      border-right: 3px solid #9e9e9e;
+      padding: 0.8rem;
+      margin: 0.5rem 0;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🔧 راهنمای جامع رفع مشکلات MyXTTS</h1>
+    
+    <div class="toc">
+      <h3>📋 فهرست مطالب</h3>
+      <ul>
+        <li><a href="#loss-issues">📉 مشکلات Loss</a></li>
+        <li><a href="#memory-issues">💾 مشکلات حافظه</a></li>
+        <li><a href="#gpu-issues">🎮 مشکلات GPU</a></li>
+        <li><a href="#training-issues">🏋️ مشکلات آموزش</a></li>
+        <li><a href="#inference-issues">🎤 مشکلات Inference</a></li>
+        <li><a href="#data-issues">📊 مشکلات دیتاست</a></li>
+        <li><a href="#installation-issues">⚙️ مشکلات نصب</a></li>
+        <li><a href="#quick-fixes">⚡ راه‌حل‌های سریع</a></li>
+      </ul>
+    </div>
+
+    <div class="category severity-critical" id="loss-issues">
+      <h2>📉 مشکلات Loss</h2>
+      
+      <div class="problem">
+        <div class="problem-title">Loss به NaN تبدیل می‌شود</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>در console پیام "Loss is NaN" نمایش داده می‌شود</li>
+            <li>آموزش به طور ناگهانی متوقف می‌شود</li>
+            <li>TensorBoard نمودار loss را قطع شده نشان می‌دهد</li>
+          </ul>
+        </div>
+        
+        <div class="cause">
+          <strong>🎯 علت‌های احتمالی:</strong>
+          <ul>
+            <li>Learning rate خیلی بالا است</li>
+            <li>Gradient explosion رخ داده است</li>
+            <li>Mixed precision به درستی تنظیم نشده</li>
+            <li>دیتای خراب یا نامعتبر در دیتاست</li>
+            <li>مقداردهی اولیه نادرست وزن‌ها</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">راه‌حل‌ها (به ترتیب اولویت)</div>
+          <ol>
+            <li>
+              <strong>کاهش Learning Rate:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --lr 0.00005  # نصف مقدار قبلی
+              </div>
+            </li>
+            <li>
+              <strong>فعال‌سازی Gradient Clipping:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --gradient-clip-val 0.5 \
+  --gradient-clip-norm 1.0
+              </div>
+            </li>
+            <li>
+              <strong>غیرفعال‌سازی Mixed Precision:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --no-mixed-precision
+              </div>
+            </li>
+            <li>
+              <strong>بررسی و پاک‌سازی دیتاست:</strong>
+              <div class="command">
+python3 utilities/validate_dataset.py \
+  --data-path ../dataset/dataset_train \
+  --fix-issues \
+  --remove-invalid
+              </div>
+            </li>
+          </ol>
+        </div>
+        
+        <div class="tip">
+          <strong>💡 نکته مهم:</strong> اگر مشکل همچنان ادامه دارد، از checkpoint آخرین epoch معتبر استفاده کنید و با learning rate پایین‌تر ادامه دهید.
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">Loss سه رقمی است و پایین نمی‌آید (لاس سه رقمیه!!!)</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>Loss در محدوده 100-999 باقی می‌ماند</li>
+            <li>حتی بعد از چندین epoch تغییر محسوسی ندارد</li>
+            <li>Validation loss بالاتر از training loss است</li>
+          </ul>
+        </div>
+        
+        <div class="cause">
+          <strong>🎯 علت‌های احتمالی:</strong>
+          <ul>
+            <li>Loss weights نامتعادل است</li>
+            <li>مدل به درستی initialize نشده</li>
+            <li>Normalization دیتا اشتباه است</li>
+            <li>Learning rate خیلی پایین است</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">راه‌حل قطعی</div>
+          <ol>
+            <li>
+              <strong>استفاده از پیکربندی بهینه‌شده:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --optimization-level enhanced \
+  --enable-gpu-stabilizer \
+  --lr 0.0005 \
+  --batch-size 16
+              </div>
+            </li>
+            <li>
+              <strong>تنظیم Loss Weights:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --mel-loss-weight 1.0 \
+  --duration-loss-weight 0.1 \
+  --speaker-loss-weight 0.01
+              </div>
+            </li>
+            <li>
+              <strong>استفاده از Fast Convergence Config:</strong>
+              <div class="command">
+cp configs/config_fast_convergence.yaml config.yaml
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval
+              </div>
+            </li>
+          </ol>
+        </div>
+        
+        <div class="tip">
+          <strong>✨ نتیجه مورد انتظار:</strong> Loss باید در عرض 10-20 epoch به زیر 50 برسد و به تدریج به زیر 10 کاهش یابد.
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">Loss خیلی کند پایین می‌آید</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>Loss در هر epoch فقط کمی کاهش می‌یابد</li>
+            <li>برای رسیدن به loss مناسب صدها epoch طول می‌کشد</li>
+            <li>نمودار loss تقریباً صاف است</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">راه‌حل‌های سریع</div>
+          <ol>
+            <li>
+              <strong>افزایش Learning Rate:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --lr 0.001  # دو برابر کنید
+              </div>
+            </li>
+            <li>
+              <strong>استفاده از Warmup و Scheduler:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --lr-scheduler cosine \
+  --warmup-steps 1000 \
+  --lr 0.0005
+              </div>
+            </li>
+            <li>
+              <strong>افزایش Batch Size:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 32  # دو برابر batch size
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">Loss در یک مقدار گیر کرده (Plateau)</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>Loss چند epoch متوالی تغییر نمی‌کند</li>
+            <li>مدل به local minimum رسیده است</li>
+            <li>Validation loss شروع به افزایش کرده (overfitting)</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">تکنیک‌های شکستن Plateau</div>
+          <ol>
+            <li>
+              <strong>Plateau Breaker Config:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --config configs/config_plateau_breaker.yaml
+              </div>
+            </li>
+            <li>
+              <strong>Reduce LR on Plateau:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --lr-scheduler plateau \
+  --patience 5
+              </div>
+            </li>
+            <li>
+              <strong>اضافه کردن Noise به Parameters:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --add-parameter-noise 0.01
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category severity-critical" id="memory-issues">
+      <h2>💾 مشکلات حافظه (Memory Issues)</h2>
+      
+      <div class="problem">
+        <div class="problem-title">Out of Memory (OOM) - حافظه GPU پر است</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>خطای "CUDA out of memory"</li>
+            <li>آموزش crash می‌کند</li>
+            <li>سیستم freeze می‌شود</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">راه‌حل‌های فوری</div>
+          <ol>
+            <li>
+              <strong>کاهش Batch Size:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 4  # شروع با batch size کوچک
+              </div>
+            </li>
+            <li>
+              <strong>فعال‌سازی Mixed Precision:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --mixed-precision  # صرفه‌جویی 30-50% حافظه
+              </div>
+            </li>
+            <li>
+              <strong>Gradient Accumulation:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 4 \
+  --gradient-accumulation-steps 8  # معادل batch size 32
+              </div>
+            </li>
+            <li>
+              <strong>استفاده از Model Size کوچک‌تر:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --model-size small
+              </div>
+            </li>
+            <li>
+              <strong>Gradient Checkpointing:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --enable-gradient-checkpointing
+              </div>
+            </li>
+          </ol>
+        </div>
+        
+        <div class="tip">
+          <strong>💡 ترتیب اولویت:</strong> ابتدا mixed precision را فعال کنید، سپس batch size را کاهش دهید، و در نهایت از gradient accumulation استفاده کنید.
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">حافظه RAM سیستم پر می‌شود</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>سیستم عامل کند می‌شود</li>
+            <li>Data loading خیلی کند است</li>
+            <li>Swap memory استفاده می‌شود</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">بهینه‌سازی RAM</div>
+          <ol>
+            <li>
+              <strong>کاهش تعداد Workers:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --num-workers 2  # کاهش از 8 به 2
+              </div>
+            </li>
+            <li>
+              <strong>استفاده از Memory Mapping:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --enable-memory-mapping
+              </div>
+            </li>
+            <li>
+              <strong>پاکسازی Cache:</strong>
+              <div class="command">
+# در لینوکس
+sudo sh -c "echo 3 > /proc/sys/vm/drop_caches"
+
+# یا بستن برنامه‌های دیگر
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category severity-high" id="gpu-issues">
+      <h2>🎮 مشکلات GPU</h2>
+      
+      <div class="problem">
+        <div class="problem-title">GPU Utilization پایین است (زیر 50%)</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>nvidia-smi نشان می‌دهد GPU utilization پایین است</li>
+            <li>آموزش خیلی کند پیش می‌رود</li>
+            <li>CPU utilization بالاست (CPU bottleneck)</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">بهینه‌سازی GPU</div>
+          <ol>
+            <li>
+              <strong>GPU Stabilizer:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --enable-gpu-stabilizer \
+  --optimization-level enhanced
+              </div>
+            </li>
+            <li>
+              <strong>افزایش تعداد Workers:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --num-workers 8  # استفاده از CPU cores بیشتر
+              </div>
+            </li>
+            <li>
+              <strong>Prefetch و Pin Memory:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --pin-memory \
+  --prefetch-factor 4
+              </div>
+            </li>
+            <li>
+              <strong>افزایش Batch Size:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 32  # GPU را بیشتر مشغول می‌کند
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">CUDA Error یا GPU Crash</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>خطای "CUDA error: device-side assert triggered"</li>
+            <li>GPU driver crash می‌کند</li>
+            <li>سیستم فریز می‌شود</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">رفع مشکلات CUDA</div>
+          <ol>
+            <li>
+              <strong>بررسی سلامت GPU:</strong>
+              <div class="command">
+# تست حافظه GPU
+nvidia-smi -q -d MEMORY
+
+# بررسی دمای GPU
+nvidia-smi --query-gpu=temperature.gpu --format=csv
+              </div>
+            </li>
+            <li>
+              <strong>بروزرسانی Driver:</strong>
+              <div class="command">
+# بررسی نسخه فعلی
+nvidia-smi
+
+# نصب آخرین driver از سایت NVIDIA
+              </div>
+            </li>
+            <li>
+              <strong>کاهش فشار روی GPU:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 8 \
+  --no-mixed-precision
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category severity-high" id="training-issues">
+      <h2>🏋️ مشکلات آموزش</h2>
+      
+      <div class="problem">
+        <div class="problem-title">آموزش خیلی کند است</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>هر epoch چند ساعت طول می‌کشد</li>
+            <li>GPU utilization پایین است</li>
+            <li>Data loading bottleneck دارد</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">تسریع آموزش</div>
+          <ol>
+            <li>
+              <strong>استفاده از تنظیمات بهینه:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --optimization-level enhanced \
+  --enable-gpu-stabilizer \
+  --mixed-precision \
+  --num-workers 8 \
+  --batch-size 16
+              </div>
+            </li>
+            <li>
+              <strong>Precompute Mel Spectrograms:</strong>
+              <div class="command">
+# محاسبه قبلی mel ها برای صرفه‌جویی زمان
+python3 utilities/precompute_mels.py \
+  --data-path ../dataset/dataset_train
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">Model Overfitting می‌کند</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>Training loss پایین اما validation loss بالاست</li>
+            <li>مدل روی train set عالی کار می‌کند اما روی validation ضعیف است</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">جلوگیری از Overfitting</div>
+          <ol>
+            <li>
+              <strong>افزایش Dropout:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --dropout 0.3  # افزایش از 0.1 به 0.3
+              </div>
+            </li>
+            <li>
+              <strong>Data Augmentation:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --enable-augmentation \
+  --augmentation-strength 0.5
+              </div>
+            </li>
+            <li>
+              <strong>Early Stopping:</strong>
+              <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --early-stopping \
+  --patience 10
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category severity-medium" id="inference-issues">
+      <h2>🎤 مشکلات Inference</h2>
+      
+      <div class="problem">
+        <div class="problem-title">صدای تولیدی نویز خالص است</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>خروجی فقط نویز است، بدون محتوای قابل فهم</li>
+            <li>Vocoder آموزش ندیده یا خراب است</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">رفع مشکل Vocoder</div>
+          <ol>
+            <li>
+              <strong>بررسی Vocoder:</strong>
+              <div class="command">
+python3 utilities/validate_vocoder.py \
+  --checkpoint checkpointsmain/best_model.pt
+              </div>
+            </li>
+            <li>
+              <strong>استفاده از Griffin-Lim Fallback:</strong>
+              <div class="command">
+python3 inference_main.py \
+  --checkpoint checkpointsmain/best_model.pt \
+  --text "سلام دنیا" \
+  --reference-audio assets/speaker.wav \
+  --use-griffin-lim  # fallback به روش قدیمی
+              </div>
+            </li>
+            <li>
+              <strong>آموزش بیشتر Vocoder:</strong>
+              <div class="tip">
+                Vocoder نیاز به حداقل 50-100 epoch آموزش دارد تا خروجی قابل قبولی تولید کند.
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">صدای تولیدی کیفیت پایین دارد</div>
+        <div class="symptoms">
+          <strong>🔍 علائم:</strong>
+          <ul>
+            <li>صدا رباتیک است</li>
+            <li>تلفظ نادرست</li>
+            <li>لحن طبیعی نیست</li>
+          </ul>
+        </div>
+        
+        <div class="solution">
+          <div class="solution-title">بهبود کیفیت</div>
+          <ol>
+            <li>مدل را بیشتر آموزش دهید (حداقل 100 epoch)</li>
+            <li>از checkpoint با کمترین validation loss استفاده کنید</li>
+            <li>کیفیت reference audio را بررسی کنید</li>
+            <li>از inference با sampling بهتر استفاده کنید:
+              <div class="command">
+python3 inference_main.py \
+  --checkpoint checkpointsmain/best_model.pt \
+  --text "متن شما" \
+  --temperature 0.7 \
+  --top-k 50 \
+  --top-p 0.9
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category severity-medium" id="data-issues">
+      <h2>📊 مشکلات دیتاست</h2>
+      
+      <div class="problem">
+        <div class="problem-title">خطای "Dataset not found" یا "Invalid dataset"</div>
+        <div class="solution">
+          <div class="solution-title">بررسی ساختار دیتاست</div>
+          <ol>
+            <li>
+              <strong>اعتبارسنجی دیتاست:</strong>
+              <div class="command">
+python3 utilities/validate_dataset.py \
+  --data-path ../dataset/dataset_train \
+  --check-structure \
+  --check-audio-files
+              </div>
+            </li>
+            <li>
+              <strong>ساختار صحیح:</strong>
+              <div class="command">
+dataset_train/
+├── wavs/
+│   ├── file001.wav
+│   └── ...
+└── metadata.txt
+              </div>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category severity-medium" id="installation-issues">
+      <h2>⚙️ مشکلات نصب</h2>
+      
+      <div class="problem">
+        <div class="problem-title">خطای "No module named 'myxtts'"</div>
+        <div class="solution">
+          <div class="solution-title">نصب مجدد پکیج</div>
+          <div class="command">
+# نصب در حالت development
+pip install -e .
+
+# یا نصب مستقیم
+pip install -r requirements.txt
+          </div>
+        </div>
+      </div>
+
+      <div class="problem">
+        <div class="problem-title">خطاهای مربوط به TensorFlow یا PyTorch</div>
+        <div class="solution">
+          <div class="solution-title">نصب نسخه صحیح</div>
+          <div class="command">
+# بررسی نسخه CUDA
+nvidia-smi
+
+# نصب PyTorch/TensorFlow مناسب
+# برای CUDA 11.8:
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="quick-fixes">
+      <h2>⚡ راه‌حل‌های سریع (Quick Fixes)</h2>
+      
+      <div class="tip">
+        <h3>🚀 دستورات اضطراری</h3>
+        <p><strong>وقتی هیچ چیز کار نمی‌کند، این‌ها را امتحان کنید:</strong></p>
+        
+        <div class="command">
+# 1. ریست کامل محیط
+pip uninstall myxtts -y
+pip install -e .
+
+# 2. پاکسازی cache
+rm -rf __pycache__ *.pyc
+find . -type d -name __pycache__ -exec rm -rf {} +
+
+# 3. شروع با تنظیمات minimal
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 4 \
+  --epochs 10 \
+  --lr 0.0001
+
+# 4. تست سریع
+python3 tests/test_basic_functionality.py
+        </div>
+      </div>
+
+      <div class="warning">
+        <h3>⚠️ هشدارهای مهم</h3>
+        <ul>
+          <li>همیشه قبل از تغییرات بزرگ، backup از checkpoint بگیرید</li>
+          <li>هر تغییری را به صورت تدریجی اعمال کنید</li>
+          <li>پس از هر تغییر، نتایج را monitor کنید</li>
+          <li>از تغییرات همزمان چندین پارامتر خودداری کنید</li>
+        </ul>
+      </div>
+    </div>
+
+    <div style="background: #e3f2fd; border: 2px solid #2196f3; border-radius: 8px; padding: 1.5rem; margin: 2rem 0;">
+      <h3 style="color: #1565c0; margin-top: 0;">📞 دریافت کمک</h3>
+      <p>اگر مشکل شما در این راهنما نیست:</p>
+      <ol>
+        <li>Log کامل خطا را ذخیره کنید</li>
+        <li>دستوراتی که اجرا کرده‌اید را یادداشت کنید</li>
+        <li>مشخصات سیستم (GPU, RAM, OS) را آماده کنید</li>
+        <li>یک Issue در GitHub باز کنید با تمام جزئیات</li>
+      </ol>
+    </div>
+
+    <footer style="text-align: center; margin-top: 3rem; padding: 1rem; border-top: 1px solid #ddd; color: #666;">
+      <p>🔧 این راهنما برای رفع سریع مشکلات رایج MyXTTS تهیه شده است.</p>
+      <p>🔄 آخرین بروزرسانی: راهنمای جامع با تمام مشکلات شناخته شده</p>
+      <p>💬 برای مشکلات جدید، لطفاً Issue جدید باز کنید.</p>
+    </footer>
+  </div>
+</body>
+</html>

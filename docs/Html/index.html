@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>مستندات MyXTTS - صفحه اصلی</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif; 
+      line-height: 1.7; 
+      margin: 2rem auto; 
+      max-width: 1200px;
+      color: #333;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    }
+    h1 { 
+      font-size: 2.5rem; 
+      margin-bottom: 1rem; 
+      color: #2c3e50;
+      text-align: center;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .subtitle {
+      text-align: center;
+      color: #7f8c8d;
+      font-size: 1.2rem;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 2px solid #ecf0f1;
+    }
+    .card-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 1.5rem;
+      margin: 2rem 0;
+    }
+    .card {
+      background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+      border-radius: 12px;
+      padding: 2rem;
+      transition: all 0.3s ease;
+      cursor: pointer;
+      text-decoration: none;
+      color: inherit;
+      display: block;
+      border: 2px solid transparent;
+    }
+    .card:hover {
+      transform: translateY(-8px);
+      box-shadow: 0 12px 24px rgba(0,0,0,0.15);
+      border-color: #667eea;
+    }
+    .card-icon {
+      font-size: 3rem;
+      text-align: center;
+      margin-bottom: 1rem;
+    }
+    .card-title {
+      font-size: 1.4rem;
+      font-weight: bold;
+      color: #2c3e50;
+      margin-bottom: 0.5rem;
+      text-align: center;
+    }
+    .card-description {
+      color: #555;
+      text-align: center;
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+    .card-model {
+      background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+    }
+    .card-training {
+      background: linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%);
+    }
+    .card-troubleshooting {
+      background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+    }
+    .features {
+      background: #f8f9fa;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+    }
+    .features h3 {
+      color: #2c3e50;
+      margin-top: 0;
+    }
+    .features ul {
+      list-style: none;
+      padding-right: 0;
+    }
+    .features li {
+      padding: 0.5rem 0;
+      padding-right: 1.5rem;
+      position: relative;
+    }
+    .features li::before {
+      content: "✓";
+      position: absolute;
+      right: 0;
+      color: #27ae60;
+      font-weight: bold;
+    }
+    .cta-section {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 12px;
+      padding: 2rem;
+      text-align: center;
+      margin: 2rem 0;
+    }
+    .cta-section h3 {
+      margin-top: 0;
+      font-size: 1.8rem;
+    }
+    .btn {
+      display: inline-block;
+      padding: 1rem 2rem;
+      background: white;
+      color: #667eea;
+      text-decoration: none;
+      border-radius: 8px;
+      font-weight: bold;
+      margin: 0.5rem;
+      transition: all 0.3s ease;
+    }
+    .btn:hover {
+      transform: scale(1.05);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+    }
+    .info-box {
+      background: #e3f2fd;
+      border: 2px solid #2196f3;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+    }
+    .info-box h3 {
+      color: #1565c0;
+      margin-top: 0;
+    }
+    footer {
+      text-align: center;
+      margin-top: 3rem;
+      padding: 1.5rem;
+      background: #f8f9fa;
+      border-radius: 8px;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📚 مستندات جامع MyXTTS</h1>
+    <div class="subtitle">
+      سیستم پیشرفته تبدیل متن به گفتار با قابلیت شبیه‌سازی صدا
+      <br>
+      Advanced Text-to-Speech Training Framework with Voice Cloning
+    </div>
+
+    <div class="cta-section">
+      <h3>🎯 به مستندات MyXTTS خوش آمدید!</h3>
+      <p>
+        این مجموعه شامل راهنماهای جامع برای آموزش، استفاده و رفع مشکلات مدل MyXTTS است.
+        <br>
+        هر بخش به صورت تعاملی و با مثال‌های عملی طراحی شده است.
+      </p>
+    </div>
+
+    <h2 style="color: #2c3e50; margin-top: 2rem; margin-bottom: 1rem; text-align: center;">
+      📖 راهنماهای موجود
+    </h2>
+
+    <div class="card-grid">
+      <a href="model_components.html" class="card card-model">
+        <div class="card-icon">🏗️</div>
+        <div class="card-title">بخش‌های مدل</div>
+        <div class="card-description">
+          راهنمای کامل معماری و اجزای مدل MyXTTS شامل Encoders، Decoders، Vocoder و لایه‌های Transformer
+        </div>
+      </a>
+
+      <a href="training_guide.html" class="card card-training">
+        <div class="card-icon">🎓</div>
+        <div class="card-title">راهنمای آموزش</div>
+        <div class="card-description">
+          آموزش گام به گام از نصب تا آموزش پیشرفته با بهینه‌سازی‌ها، monitoring و بهترین روش‌ها
+        </div>
+      </a>
+
+      <a href="troubleshooting.html" class="card card-troubleshooting">
+        <div class="card-icon">🔧</div>
+        <div class="card-title">رفع مشکلات</div>
+        <div class="card-description">
+          راهنمای جامع رفع مشکلات رایج شامل Loss، Memory، GPU، Training و Inference
+        </div>
+      </a>
+    </div>
+
+    <div class="features">
+      <h3>✨ ویژگی‌های مستندات</h3>
+      <ul>
+        <li><strong>دو زبانه:</strong> محتوا به فارسی و انگلیسی</li>
+        <li><strong>مثال‌های عملی:</strong> کدهای آماده برای استفاده</li>
+        <li><strong>راه‌حل‌های گام به گام:</strong> توضیحات دقیق و مرحله به مرحله</li>
+        <li><strong>جدول‌های مرجع:</strong> پارامترها و تنظیمات به صورت جدول</li>
+        <li><strong>نکات و هشدارها:</strong> توصیه‌های مهم در جاهای حساس</li>
+        <li><strong>طراحی زیبا:</strong> رابط کاربری جذاب و خوانا</li>
+        <li><strong>جستجوی آسان:</strong> فهرست مطالب در هر صفحه</li>
+      </ul>
+    </div>
+
+    <div class="info-box">
+      <h3>🎯 چگونه شروع کنیم؟</h3>
+      <ol>
+        <li>
+          <strong>تازه‌کار هستید؟</strong> 
+          ابتدا <a href="training_guide.html#quick-start">راهنمای شروع سریع</a> را بخوانید.
+        </li>
+        <li>
+          <strong>می‌خواهید معماری را بفهمید؟</strong> 
+          به <a href="model_components.html">بخش‌های مدل</a> مراجعه کنید.
+        </li>
+        <li>
+          <strong>با مشکل مواجه شدید؟</strong> 
+          <a href="troubleshooting.html">راهنمای رفع مشکلات</a> را ببینید.
+        </li>
+        <li>
+          <strong>می‌خواهید مدل را بهینه کنید؟</strong> 
+          <a href="training_guide.html#optimization">بخش بهینه‌سازی</a> را مطالعه کنید.
+        </li>
+      </ol>
+    </div>
+
+    <div class="info-box" style="background: #fff3e0; border-color: #ff9800;">
+      <h3 style="color: #ef6c00;">📚 مستندات تکمیلی</h3>
+      <p>علاوه بر این راهنماهای HTML، مستندات زیر نیز در دسترس است:</p>
+      <ul>
+        <li><strong>README.md:</strong> نمای کلی پروژه و راهنمای سریع</li>
+        <li><strong>docs/FAST_CONVERGENCE_SOLUTION.md:</strong> راه‌حل همگرایی سریع</li>
+        <li><strong>docs/GPU_UTILIZATION_FIX_GUIDE.md:</strong> راهنمای بهینه‌سازی GPU</li>
+        <li><strong>docs/PLATEAU_BREAKTHROUGH_GUIDE.md:</strong> تکنیک‌های شکستن Plateau</li>
+        <li><strong>examples/:</strong> نمونه کدهای کاربردی</li>
+      </ul>
+    </div>
+
+    <div style="background: #e8f5e8; border: 2px solid #4caf50; border-radius: 8px; padding: 1.5rem; margin: 2rem 0;">
+      <h3 style="color: #2e7d32; margin-top: 0;">🚀 شروع سریع</h3>
+      <p><strong>برای شروع فوری آموزش:</strong></p>
+      <div style="background: #2c3e50; color: #ecf0f1; padding: 1rem; border-radius: 6px; font-family: 'Courier New', monospace; direction: ltr; text-align: left; margin-top: 1rem;">
+# نصب وابستگی‌ها
+pip install -r requirements.txt
+
+# آموزش پایه
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval
+
+# آموزش بهینه شده
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --optimization-level enhanced \
+  --enable-gpu-stabilizer
+      </div>
+    </div>
+
+    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 12px; padding: 2rem; text-align: center; margin: 2rem 0;">
+      <h3 style="margin-top: 0;">💡 نکات مهم</h3>
+      <div style="text-align: right; max-width: 800px; margin: 0 auto;">
+        <ul>
+          <li>همیشه از آخرین نسخه مستندات استفاده کنید</li>
+          <li>قبل از شروع، سیستم خود را بررسی کنید (GPU, RAM, Storage)</li>
+          <li>با تنظیمات پایه شروع کنید و به تدریج پیشرفته شوید</li>
+          <li>پیشرفت آموزش را با TensorBoard دنبال کنید</li>
+          <li>از checkpoint های منظم برای امنیت استفاده کنید</li>
+        </ul>
+      </div>
+    </div>
+
+    <div style="text-align: center; margin: 2rem 0;">
+      <h3 style="color: #2c3e50;">🔗 لینک‌های مفید</h3>
+      <a href="https://github.com/masoodafar-web/MyXTTSModel" class="btn">
+        GitHub Repository
+      </a>
+      <a href="training_guide.html" class="btn">
+        شروع آموزش
+      </a>
+      <a href="troubleshooting.html" class="btn">
+        رفع مشکلات
+      </a>
+    </div>
+
+    <footer>
+      <h4>📝 درباره این مستندات</h4>
+      <p>
+        این مجموعه مستندات برای کمک به استفاده آسان‌تر و موثرتر از MyXTTS طراحی شده است.
+        <br>
+        تمام محتوا با دقت تهیه و به‌روزرسانی می‌شود.
+      </p>
+      <p style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #ddd;">
+        <strong>آخرین بروزرسانی:</strong> نسخه کامل با سه راهنمای جامع
+        <br>
+        <strong>نسخه مستندات:</strong> 1.0.0
+      </p>
+      <p style="color: #7f8c8d; font-size: 0.9rem; margin-top: 1rem;">
+        💬 برای گزارش مشکل یا پیشنهاد بهبود، یک Issue در GitHub باز کنید.
+      </p>
+    </footer>
+  </div>
+</body>
+</html>

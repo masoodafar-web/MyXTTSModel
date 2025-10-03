@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>راهنمای جامع آموزش مدل MyXTTS</title>
+  <style>
+    body { 
+      font-family: 'Segoe UI', Tahoma, Arial, sans-serif; 
+      line-height: 1.7; 
+      margin: 2rem auto; 
+      max-width: 1200px;
+      color: #333;
+      background: #f8f9fa;
+    }
+    .container {
+      background: white;
+      padding: 2rem;
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    h1 { 
+      font-size: 2.2rem; 
+      margin-bottom: 1.5rem; 
+      color: #2c3e50;
+      text-align: center;
+      border-bottom: 3px solid #3498db;
+      padding-bottom: 0.5rem;
+    }
+    h2 {
+      font-size: 1.6rem;
+      color: #2980b9;
+      margin: 2rem 0 1rem 0;
+      border-right: 4px solid #3498db;
+      padding-right: 1rem;
+    }
+    h3 {
+      font-size: 1.3rem;
+      color: #34495e;
+      margin: 1.5rem 0 0.8rem 0;
+    }
+    .section {
+      background: #f8f9fa;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 1rem 0;
+      transition: all 0.3s ease;
+    }
+    .section:hover {
+      background: #e3f2fd;
+      border-color: #2196f3;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(33, 150, 243, 0.15);
+    }
+    .section-title {
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #1976d2;
+      margin-bottom: 0.5rem;
+    }
+    .section-desc {
+      color: #555;
+      margin-bottom: 1rem;
+    }
+    .command {
+      background: #2c3e50;
+      color: #ecf0f1;
+      border: 2px solid #34495e;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+      font-family: 'Courier New', monospace;
+      direction: ltr;
+      text-align: left;
+      overflow-x: auto;
+    }
+    .tip {
+      background: #fff3e0;
+      border: 2px solid #ff9800;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .warning {
+      background: #ffebee;
+      border: 2px solid #f44336;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .success {
+      background: #e8f5e8;
+      border: 2px solid #4caf50;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 0.8rem 0;
+    }
+    .category {
+      border-right: 6px solid #ff6b6b;
+      background: linear-gradient(to left, #fff5f5, #ffffff);
+      padding: 1.5rem;
+      margin: 2rem 0;
+      border-radius: 0 8px 8px 0;
+    }
+    .category h2 {
+      border-right: none;
+      padding-right: 0;
+      color: #c0392b;
+    }
+    code {
+      background: #f4f4f4;
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: 'Courier New', monospace;
+      color: #d63384;
+    }
+    .toc {
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin: 2rem 0;
+    }
+    .toc h3 {
+      margin-top: 0;
+      color: #495057;
+    }
+    .toc ul {
+      list-style: none;
+      padding-right: 0;
+    }
+    .toc li {
+      margin: 0.5rem 0;
+      padding-right: 1rem;
+    }
+    .toc a {
+      text-decoration: none;
+      color: #007bff;
+      font-weight: 500;
+    }
+    .toc a:hover {
+      color: #0056b3;
+      text-decoration: underline;
+    }
+    .parameter-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      background: white;
+    }
+    .parameter-table th {
+      background: #3498db;
+      color: white;
+      padding: 0.8rem;
+      text-align: right;
+      border: 1px solid #2980b9;
+    }
+    .parameter-table td {
+      padding: 0.8rem;
+      border: 1px solid #ddd;
+    }
+    .parameter-table tr:nth-child(even) {
+      background: #f8f9fa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎓 راهنمای جامع آموزش مدل MyXTTS</h1>
+    
+    <div class="toc">
+      <h3>📋 فهرست مطالب</h3>
+      <ul>
+        <li><a href="#quick-start">🚀 شروع سریع</a></li>
+        <li><a href="#basic-training">📚 آموزش پایه</a></li>
+        <li><a href="#advanced-training">⚡ آموزش پیشرفته</a></li>
+        <li><a href="#optimization">🔧 بهینه‌سازی</a></li>
+        <li><a href="#monitoring">📊 نظارت و مانیتورینگ</a></li>
+        <li><a href="#troubleshooting">🔍 رفع مشکلات</a></li>
+        <li><a href="#best-practices">✨ بهترین روش‌ها</a></li>
+      </ul>
+    </div>
+
+    <div class="category" id="quick-start">
+      <h2>🚀 شروع سریع (Quick Start)</h2>
+      
+      <div class="section">
+        <div class="section-title">نصب وابستگی‌ها (Installation)</div>
+        <div class="section-desc">
+          قبل از شروع آموزش، باید تمام کتابخانه‌های مورد نیاز را نصب کنید.
+        </div>
+        <div class="command">
+# نصب کتابخانه‌های پایه
+pip install -r requirements.txt
+
+# نصب پکیج MyXTTS
+pip install -e .
+        </div>
+        <div class="success">
+          <strong>✅ توجه:</strong> اطمینان حاصل کنید Python 3.8 یا بالاتر نصب شده باشد.
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">اولین آموزش (First Training)</div>
+        <div class="section-desc">
+          ساده‌ترین روش برای شروع آموزش مدل.
+        </div>
+        <div class="command">
+# آموزش پایه با تنظیمات پیش‌فرض
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval
+        </div>
+        <div class="tip">
+          <strong>💡 نکته:</strong> این دستور با تنظیمات پیش‌فرض شروع به آموزش می‌کند. برای کنترل بیشتر از پارامترهای اضافی استفاده کنید.
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">بررسی پیشرفت (Progress Monitoring)</div>
+        <div class="section-desc">
+          در حین آموزش، می‌توانید پیشرفت را در TensorBoard مشاهده کنید.
+        </div>
+        <div class="command">
+# اجرای TensorBoard
+tensorboard --logdir runs/
+
+# دسترسی از طریق مرورگر
+# http://localhost:6006
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="basic-training">
+      <h2>📚 آموزش پایه (Basic Training)</h2>
+      
+      <div class="section">
+        <div class="section-title">ساختار دیتاست (Dataset Structure)</div>
+        <div class="section-desc">
+          دیتاست باید ساختار خاصی داشته باشد تا مدل بتواند آن را بخواند.
+        </div>
+        <div class="command">
+dataset/
+├── dataset_train/
+│   ├── wavs/              # فایل‌های صوتی
+│   │   ├── speaker1_001.wav
+│   │   ├── speaker1_002.wav
+│   │   └── ...
+│   └── metadata.txt       # فایل متنی حاوی متن‌ها
+│
+└── dataset_eval/
+    ├── wavs/
+    └── metadata.txt
+        </div>
+        <div class="success">
+          <strong>فرمت metadata.txt:</strong><br>
+          <code>speaker1_001|سلام دنیا|Hello world</code><br>
+          <code>speaker1_002|این یک مثال است|This is an example</code>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">پارامترهای اصلی آموزش</div>
+        <div class="section-desc">
+          جدول زیر مهم‌ترین پارامترهای آموزش را نشان می‌دهد.
+        </div>
+        <table class="parameter-table">
+          <tr>
+            <th>پارامتر</th>
+            <th>توضیحات</th>
+            <th>مقدار پیش‌فرض</th>
+          </tr>
+          <tr>
+            <td><code>--train-data</code></td>
+            <td>مسیر دیتاست آموزش</td>
+            <td>ضروری</td>
+          </tr>
+          <tr>
+            <td><code>--val-data</code></td>
+            <td>مسیر دیتاست اعتبارسنجی</td>
+            <td>ضروری</td>
+          </tr>
+          <tr>
+            <td><code>--batch-size</code></td>
+            <td>تعداد نمونه در هر batch</td>
+            <td>8</td>
+          </tr>
+          <tr>
+            <td><code>--epochs</code></td>
+            <td>تعداد epoch های آموزش</td>
+            <td>100</td>
+          </tr>
+          <tr>
+            <td><code>--lr</code></td>
+            <td>نرخ یادگیری (Learning Rate)</td>
+            <td>0.0001</td>
+          </tr>
+          <tr>
+            <td><code>--checkpoint-dir</code></td>
+            <td>مسیر ذخیره checkpoint ها</td>
+            <td>checkpointsmain/</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="section">
+        <div class="section-title">مثال آموزش کامل</div>
+        <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --batch-size 16 \
+  --epochs 200 \
+  --lr 0.0002 \
+  --checkpoint-dir ./my_checkpoints \
+  --save-interval 10
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="advanced-training">
+      <h2>⚡ آموزش پیشرفته (Advanced Training)</h2>
+      
+      <div class="section">
+        <div class="section-title">بهینه‌سازی GPU (GPU Optimization)</div>
+        <div class="section-desc">
+          برای استفاده بهینه از GPU و افزایش سرعت آموزش از این تنظیمات استفاده کنید.
+        </div>
+        <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --optimization-level enhanced \
+  --enable-gpu-stabilizer \
+  --batch-size 32 \
+  --gradient-accumulation-steps 4
+        </div>
+        <div class="tip">
+          <strong>💡 نکته:</strong> 
+          <ul>
+            <li><code>--optimization-level enhanced</code>: فعال‌سازی بهینه‌سازی‌های پیشرفته</li>
+            <li><code>--enable-gpu-stabilizer</code>: پایدارسازی استفاده از GPU</li>
+            <li><code>--gradient-accumulation-steps</code>: شبیه‌سازی batch بزرگ‌تر با حافظه کمتر</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">آموزش با Mixed Precision</div>
+        <div class="section-desc">
+          استفاده از mixed precision برای سرعت بیشتر و مصرف حافظه کمتر.
+        </div>
+        <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --mixed-precision \
+  --optimization-level enhanced
+        </div>
+        <div class="success">
+          <strong>✅ مزایا:</strong>
+          <ul>
+            <li>سرعت آموزش 2-3 برابر بیشتر</li>
+            <li>مصرف حافظه 30-50% کمتر</li>
+            <li>امکان استفاده از batch size بزرگ‌تر</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">آموزش از checkpoint قبلی</div>
+        <div class="section-desc">
+          ادامه آموزش از یک checkpoint ذخیره شده.
+        </div>
+        <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --checkpoint checkpointsmain/checkpoint_epoch_50.pt \
+  --resume-training
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">تنظیمات پیشرفته Loss</div>
+        <div class="section-desc">
+          کنترل دقیق وزن‌های مختلف loss برای بهبود کیفیت.
+        </div>
+        <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --mel-loss-weight 1.0 \
+  --duration-loss-weight 0.5 \
+  --speaker-loss-weight 0.3 \
+  --stop-loss-weight 0.2
+        </div>
+        <div class="tip">
+          <strong>💡 راهنمای تنظیم Loss Weights:</strong>
+          <ul>
+            <li><strong>mel-loss-weight:</strong> وزن اصلی (همیشه 1.0 نگه دارید)</li>
+            <li><strong>duration-loss-weight:</strong> برای سرعت بیان مناسب (0.3-0.7)</li>
+            <li><strong>speaker-loss-weight:</strong> برای شبیه‌سازی صدا (0.2-0.5)</li>
+            <li><strong>stop-loss-weight:</strong> برای پایان صحیح جمله (0.1-0.3)</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="optimization">
+      <h2>🔧 بهینه‌سازی (Optimization)</h2>
+      
+      <div class="section">
+        <div class="section-title">انتخاب Batch Size مناسب</div>
+        <div class="section-desc">
+          انتخاب batch size مناسب بر اساس حافظه GPU شما.
+        </div>
+        <table class="parameter-table">
+          <tr>
+            <th>حافظه GPU</th>
+            <th>Batch Size توصیه شده</th>
+            <th>توضیحات</th>
+          </tr>
+          <tr>
+            <td>4-6 GB</td>
+            <td>4-8</td>
+            <td>GPU های ضعیف‌تر</td>
+          </tr>
+          <tr>
+            <td>8-12 GB</td>
+            <td>8-16</td>
+            <td>GPU های متوسط (RTX 2060, 3060)</td>
+          </tr>
+          <tr>
+            <td>16-24 GB</td>
+            <td>16-32</td>
+            <td>GPU های قوی (RTX 3080, 3090, 4090)</td>
+          </tr>
+          <tr>
+            <td>24+ GB</td>
+            <td>32-64</td>
+            <td>GPU های حرفه‌ای (A100, V100)</td>
+          </tr>
+        </table>
+      </div>
+
+      <div class="section">
+        <div class="section-title">استراتژی Learning Rate</div>
+        <div class="section-desc">
+          انتخاب استراتژی مناسب learning rate برای همگرایی بهتر.
+        </div>
+        <div class="command">
+# استفاده از Learning Rate Scheduler
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --lr 0.0005 \
+  --lr-scheduler cosine \
+  --warmup-steps 1000
+        </div>
+        <div class="tip">
+          <strong>💡 انواع Scheduler:</strong>
+          <ul>
+            <li><strong>cosine:</strong> کاهش نرم و تدریجی (توصیه می‌شود)</li>
+            <li><strong>plateau:</strong> کاهش زمانی که loss ثابت شد</li>
+            <li><strong>step:</strong> کاهش در epoch های مشخص</li>
+            <li><strong>exponential:</strong> کاهش نمایی</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">Gradient Clipping</div>
+        <div class="section-desc">
+          جلوگیری از exploding gradients با محدود کردن مقدار گرادیان.
+        </div>
+        <div class="command">
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --gradient-clip-val 1.0 \
+  --gradient-clip-norm 2.0
+        </div>
+        <div class="warning">
+          <strong>⚠️ هشدار:</strong> اگر loss به NaN تبدیل می‌شود، مقدار gradient clipping را کاهش دهید (مثلاً 0.5).
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="monitoring">
+      <h2>📊 نظارت و مانیتورینگ (Monitoring)</h2>
+      
+      <div class="section">
+        <div class="section-title">استفاده از TensorBoard</div>
+        <div class="section-desc">
+          مشاهده real-time پیشرفت آموزش، نمودار loss ها و متریک‌ها.
+        </div>
+        <div class="command">
+# اجرای TensorBoard
+tensorboard --logdir runs/ --port 6006
+
+# در مرورگر باز کنید
+# http://localhost:6006
+        </div>
+        <div class="success">
+          <strong>📈 متریک‌های قابل مشاهده:</strong>
+          <ul>
+            <li>Training Loss / Validation Loss</li>
+            <li>Learning Rate Schedule</li>
+            <li>Mel Spectrogram Samples</li>
+            <li>Audio Waveform Samples</li>
+            <li>GPU Utilization</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">مانیتورینگ GPU</div>
+        <div class="section-desc">
+          بررسی استفاده بهینه از GPU در حین آموزش.
+        </div>
+        <div class="command">
+# مانیتورینگ real-time GPU
+watch -n 1 nvidia-smi
+
+# یا استفاده از اسکریپت مخصوص
+python3 monitoring/monitor_gpu_live.py
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">لاگ‌های آموزش</div>
+        <div class="section-desc">
+          تمام اطلاعات آموزش در فایل log ذخیره می‌شود.
+        </div>
+        <div class="command">
+# مشاهده لاگ‌های زنده
+tail -f training.log
+
+# جستجوی خطاها
+grep "ERROR" training.log
+
+# جستجوی بهترین loss
+grep "Best" training.log
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="troubleshooting">
+      <h2>🔍 رفع مشکلات (Troubleshooting)</h2>
+      
+      <div class="section">
+        <div class="section-title">مشکل: Loss به NaN تبدیل می‌شود</div>
+        <div class="warning">
+          <strong>⚠️ علت:</strong> Exploding gradients یا learning rate خیلی بالا
+        </div>
+        <div class="success">
+          <strong>✅ راه‌حل:</strong>
+          <ol>
+            <li>Learning rate را کاهش دهید (مثلاً نصف کنید)</li>
+            <li>Gradient clipping فعال کنید: <code>--gradient-clip-val 0.5</code></li>
+            <li>Mixed precision غیرفعال کنید اگر فعال است</li>
+            <li>Batch size را کاهش دهید</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">مشکل: Loss خیلی کند پایین می‌آید</div>
+        <div class="warning">
+          <strong>⚠️ علت:</strong> Learning rate خیلی پایین یا تنظیمات نامناسب
+        </div>
+        <div class="success">
+          <strong>✅ راه‌حل:</strong>
+          <ol>
+            <li>Learning rate را افزایش دهید: <code>--lr 0.0005</code></li>
+            <li>از optimization level بالاتر استفاده کنید: <code>--optimization-level enhanced</code></li>
+            <li>GPU stabilizer فعال کنید: <code>--enable-gpu-stabilizer</code></li>
+            <li>Batch size را افزایش دهید</li>
+            <li>از تنظیمات fast convergence استفاده کنید</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">مشکل: Out of Memory (OOM)</div>
+        <div class="warning">
+          <strong>⚠️ علت:</strong> حافظه GPU کافی نیست
+        </div>
+        <div class="success">
+          <strong>✅ راه‌حل:</strong>
+          <ol>
+            <li>Batch size را کاهش دهید</li>
+            <li>Mixed precision فعال کنید: <code>--mixed-precision</code></li>
+            <li>Gradient accumulation استفاده کنید: <code>--gradient-accumulation-steps 4</code></li>
+            <li>Model size کوچک‌تر انتخاب کنید: <code>--model-size small</code></li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">مشکل: GPU Utilization پایین است</div>
+        <div class="warning">
+          <strong>⚠️ علت:</strong> CPU bottleneck یا data loading کند
+        </div>
+        <div class="success">
+          <strong>✅ راه‌حل:</strong>
+          <ol>
+            <li>GPU stabilizer فعال کنید: <code>--enable-gpu-stabilizer</code></li>
+            <li>تعداد data workers افزایش دهید: <code>--num-workers 8</code></li>
+            <li>از precomputed cache استفاده کنید</li>
+            <li>Batch size را افزایش دهید</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">مشکل: کیفیت صدای تولیدی پایین است</div>
+        <div class="warning">
+          <strong>⚠️ علت:</strong> آموزش ناکافی یا Vocoder آموزش ندیده
+        </div>
+        <div class="success">
+          <strong>✅ راه‌حل:</strong>
+          <ol>
+            <li>مدل را بیشتر آموزش دهید (حداقل 100 epoch)</li>
+            <li>اطمینان حاصل کنید Vocoder به درستی آموزش دیده</li>
+            <li>کیفیت دیتاست را بررسی کنید</li>
+            <li>از loss weights مناسب استفاده کنید</li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <div class="category" id="best-practices">
+      <h2>✨ بهترین روش‌ها (Best Practices)</h2>
+      
+      <div class="section">
+        <div class="section-title">💾 ذخیره Checkpoint ها</div>
+        <div class="section-desc">
+          همیشه checkpoint های منظم ذخیره کنید تا در صورت مشکل بتوانید از آن‌ها استفاده کنید.
+        </div>
+        <div class="tip">
+          <strong>💡 توصیه:</strong>
+          <ul>
+            <li>هر 5-10 epoch یک checkpoint ذخیره کنید</li>
+            <li>بهترین checkpoint را نگه دارید (کمترین validation loss)</li>
+            <li>چند checkpoint آخر را برای مقایسه نگه دارید</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">📊 ارزیابی منظم</div>
+        <div class="section-desc">
+          به طور منظم کیفیت مدل را روی validation set ارزیابی کنید.
+        </div>
+        <div class="command">
+# ارزیابی مدل
+python3 utilities/evaluate_tts.py \
+  --checkpoint checkpointsmain/best_model.pt \
+  --test-data ../dataset/dataset_eval
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🎯 استراتژی آموزش تدریجی</div>
+        <div class="section-desc">
+          شروع با تنظیمات ساده و به تدریج پیچیده‌تر کردن.
+        </div>
+        <div class="success">
+          <strong>مراحل توصیه شده:</strong>
+          <ol>
+            <li><strong>مرحله 1:</strong> آموزش پایه با تنظیمات default (20-30 epoch)</li>
+            <li><strong>مرحله 2:</strong> فعال‌سازی optimizations (30-50 epoch)</li>
+            <li><strong>مرحله 3:</strong> Fine-tuning با learning rate کمتر (50+ epoch)</li>
+            <li><strong>مرحله 4:</strong> آموزش نهایی تا همگرایی کامل</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">🔄 Backup و Version Control</div>
+        <div class="section-desc">
+          همیشه از کد و checkpoint های خود backup بگیرید.
+        </div>
+        <div class="tip">
+          <strong>💡 توصیه:</strong>
+          <ul>
+            <li>از Git برای version control کد استفاده کنید</li>
+            <li>Checkpoint های مهم را در مکان امن ذخیره کنید</li>
+            <li>تنظیمات و پارامترهای موفق را یادداشت کنید</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="section">
+        <div class="section-title">📝 مستندسازی آزمایش‌ها</div>
+        <div class="section-desc">
+          نتایج و تنظیمات هر آزمایش را ثبت کنید.
+        </div>
+        <div class="command">
+# ایجاد فایل log برای هر آزمایش
+python3 train_main.py \
+  --train-data ../dataset/dataset_train \
+  --val-data ../dataset/dataset_eval \
+  --experiment-name "exp_001_baseline" \
+  --log-file logs/exp_001.log
+        </div>
+      </div>
+    </div>
+
+    <div style="background: #e8f5e8; border: 2px solid #4caf50; border-radius: 8px; padding: 1.5rem; margin: 2rem 0;">
+      <h3 style="color: #2e7d32; margin-top: 0;">🎉 تبریک! شما آماده هستید</h3>
+      <p>
+        حالا شما با تمام جنبه‌های آموزش مدل MyXTTS آشنا شدید. برای شروع:
+      </p>
+      <ol>
+        <li>دیتاست خود را آماده کنید</li>
+        <li>با تنظیمات پایه شروع کنید</li>
+        <li>به تدریج optimization ها را فعال کنید</li>
+        <li>پیشرفت را monitor کنید</li>
+        <li>در صورت مشکل به بخش Troubleshooting مراجعه کنید</li>
+      </ol>
+    </div>
+
+    <div style="background: #fff3e0; border: 2px solid #ff9800; border-radius: 8px; padding: 1.5rem; margin: 2rem 0;">
+      <h3 style="color: #ef6c00; margin-top: 0;">🔗 منابع مفید</h3>
+      <ul>
+        <li><strong>مستندات مدل:</strong> <a href="model_components.html">راهنمای کامل بخش‌های مدل</a></li>
+        <li><strong>رفع مشکلات:</strong> <a href="../FAST_CONVERGENCE_SOLUTION.md">راه‌حل همگرایی سریع</a></li>
+        <li><strong>بهینه‌سازی GPU:</strong> <a href="../GPU_UTILIZATION_FIX_GUIDE.md">راهنمای بهینه‌سازی GPU</a></li>
+        <li><strong>مثال‌های کاربردی:</strong> پوشه <code>examples/</code></li>
+      </ul>
+    </div>
+
+    <footer style="text-align: center; margin-top: 3rem; padding: 1rem; border-top: 1px solid #ddd; color: #666;">
+      <p>📝 این راهنما برای کمک به آموزش بهتر و سریع‌تر مدل MyXTTS تهیه شده است.</p>
+      <p>🔄 آخرین بروزرسانی: راهنمای جامع با تمام تنظیمات و بهینه‌سازی‌ها</p>
+      <p>💬 برای سوالات و مشکلات، به بخش Issues مراجعه کنید.</p>
+    </footer>
+  </div>
+</body>
+</html>
