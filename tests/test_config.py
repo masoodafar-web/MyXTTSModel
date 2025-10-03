@@ -218,7 +218,7 @@ class TestConfig(unittest.TestCase):
         
         # Should have default values
         self.assertEqual(config.training.epochs, 1000)
-        self.assertEqual(config.data.batch_size, 32)
+        self.assertEqual(config.data.batch_size, 56)  # Updated to match optimized GPU utilization config
         self.assertEqual(config.model.text_encoder_dim, 512)
 
 
