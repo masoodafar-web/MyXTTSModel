@@ -15,6 +15,7 @@ pynvml>=11.4.1
 # New dependencies for evaluation and optimization
 tensorflow-model-optimization>=0.7.0
 matplotlib>=3.5.0
+Pillow>=9.0.0
 
 # Benchmarking and monitoring dependencies
 GPUtil>=1.4.0

@@ -328,7 +328,7 @@ class TrainingConfig:
     
     # Logging
     log_step: int = 100
-    spectrogram_log_interval: int = 5  # Log mel spectrogram comparisons every N steps (0 disables)
+    spectrogram_log_interval: int = 5  # Log mel spectrogram comparisons every N steps (0 disables). Creates matplotlib-based side-by-side comparison images.
     spectrogram_log_num_examples: int = 1  # Number of samples to visualize per logging event
     spectrogram_log_example_index: Optional[int] = None  # Fixed sample index; None selects from batch sequentially
     spectrogram_reference_subset: str = "batch"  # "batch", "train", or "val" for fixed-sample logging
