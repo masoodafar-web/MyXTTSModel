@@ -1924,94 +1924,73 @@ class XTTSTrainer:
     def _create_spectrogram_comparison_image(
         target_mel: np.ndarray,
         pred_mel: np.ndarray,
-        title: str = "Spectrogram Comparison"
+        title: str,
     ) -> tf.Tensor:
-        """
-        Create a side-by-side comparison image of target and predicted spectrograms using matplotlib.
-        
-        Args:
-            target_mel: Target mel spectrogram [frames, n_mels]
-            pred_mel: Predicted mel spectrogram [frames, n_mels]
-            title: Title for the comparison plot
-            
-        Returns:
-            TensorFlow tensor containing the comparison image [1, H, W, 3]
-        """
-        # Clean input data
+        """Create a 2x2 Figure that mirrors spectral_analysis.png layout."""
+
         target_mel = np.asarray(target_mel, dtype=np.float32)
         pred_mel = np.asarray(pred_mel, dtype=np.float32)
-        
-        # Handle dimension mismatches
+
         if target_mel.ndim != 2 or pred_mel.ndim != 2:
-            raise ValueError(f"Expected 2D spectrograms, got target: {target_mel.shape}, pred: {pred_mel.shape}")
-        
-        # Ensure same number of frames by padding/truncating
-        target_frames, target_mels = target_mel.shape
-        pred_frames, pred_mels = pred_mel.shape
-        
-        max_frames = max(target_frames, pred_frames)
-        if target_frames < max_frames:
-            pad = max_frames - target_frames
+            raise ValueError(
+                f"Expected 2D spectrograms; got target {target_mel.shape}, pred {pred_mel.shape}"
+            )
+
+        # Align frame lengths for visual comparison
+        max_frames = max(target_mel.shape[0], pred_mel.shape[0])
+        if target_mel.shape[0] < max_frames:
+            pad = max_frames - target_mel.shape[0]
             target_mel = np.pad(target_mel, ((0, pad), (0, 0)), mode='edge')
-        elif target_frames > max_frames:
-            target_mel = target_mel[:max_frames, :]
-            
-        if pred_frames < max_frames:
-            pad = max_frames - pred_frames
+        else:
+            target_mel = target_mel[:max_frames]
+
+        if pred_mel.shape[0] < max_frames:
+            pad = max_frames - pred_mel.shape[0]
             pred_mel = np.pad(pred_mel, ((0, pad), (0, 0)), mode='edge')
-        elif pred_frames > max_frames:
-            pred_mel = pred_mel[:max_frames, :]
-        
-        # Create figure with 3 subplots: target, prediction, difference
-        fig, axes = plt.subplots(1, 3, figsize=(15, 4))
-        
-        # Plot target spectrogram
-        im0 = axes[0].imshow(target_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
-        axes[0].set_title('Target Spectrogram')
-        axes[0].set_xlabel('Frames')
-        axes[0].set_ylabel('Mel Bins')
-        plt.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
-        
-        # Plot predicted spectrogram
-        im1 = axes[1].imshow(pred_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='viridis')
-        axes[1].set_title('Predicted Spectrogram')
-        axes[1].set_xlabel('Frames')
-        axes[1].set_ylabel('Mel Bins')
-        plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-        
-        # Plot absolute difference
+        else:
+            pred_mel = pred_mel[:max_frames]
+
         diff_mel = np.abs(target_mel - pred_mel)
-        im2 = axes[2].imshow(diff_mel.T, aspect='auto', origin='lower', interpolation='nearest', cmap='hot')
-        axes[2].set_title('Absolute Difference')
-        axes[2].set_xlabel('Frames')
-        axes[2].set_ylabel('Mel Bins')
-        plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
-        
-        # Add overall title
+        temporal_error = np.mean(diff_mel, axis=1)
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+
+        im0 = axes[0, 0].imshow(target_mel.T, aspect='auto', origin='lower', cmap='viridis')
+        axes[0, 0].set_title('Target Mel (Model Processing)')
+        axes[0, 0].set_ylabel('Mel Bins')
+        axes[0, 0].set_xlabel('Time Frames')
+        fig.colorbar(im0, ax=axes[0, 0], fraction=0.046, pad=0.04)
+
+        im1 = axes[0, 1].imshow(pred_mel.T, aspect='auto', origin='lower', cmap='viridis')
+        axes[0, 1].set_title('Model Prediction')
+        axes[0, 1].set_ylabel('Mel Bins')
+        axes[0, 1].set_xlabel('Time Frames')
+        fig.colorbar(im1, ax=axes[0, 1], fraction=0.046, pad=0.04)
+
+        im2 = axes[1, 0].imshow(diff_mel.T, aspect='auto', origin='lower', cmap='viridis')
+        axes[1, 0].set_title('Absolute Difference')
+        axes[1, 0].set_ylabel('Mel Bins')
+        axes[1, 0].set_xlabel('Time Frames')
+        fig.colorbar(im2, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+        axes[1, 1].hist(temporal_error, bins=50, alpha=0.8, color='tab:blue', label='Temporal Error')
+        axes[1, 1].set_title('Error Distribution')
+        axes[1, 1].set_xlabel('Error')
+        axes[1, 1].set_ylabel('Count')
+        axes[1, 1].legend()
+
         fig.suptitle(title, fontsize=14, fontweight='bold')
-        plt.tight_layout()
-        
-        # Convert matplotlib figure to image tensor
+        fig.tight_layout()
+
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-        plt.close(fig)  # Important: close figure to free memory
+        fig.savefig(buf, format='png', dpi=120, bbox_inches='tight')
+        plt.close(fig)
         buf.seek(0)
-        
-        # Read image from buffer and convert to tensor
-        from PIL import Image
-        img = Image.open(buf)
-        img_array = np.array(img)
+        image = tf.image.decode_png(buf.getvalue(), channels=4)
         buf.close()
-        
-        # Ensure RGB format (remove alpha channel if present)
-        if img_array.ndim == 3 and img_array.shape[2] == 4:
-            img_array = img_array[:, :, :3]
-        elif img_array.ndim == 2:
-            img_array = np.stack([img_array, img_array, img_array], axis=-1)
-        
-        # Add batch dimension and convert to tensor
-        img_array = np.expand_dims(img_array, axis=0)
-        return tf.convert_to_tensor(img_array, dtype=tf.uint8)
+        image = tf.image.convert_image_dtype(image, dtype=tf.float32)
+        image = tf.expand_dims(image, axis=0)
+        return image
 
     def _log_spectrogram_from_batch(
         self,
@@ -2024,7 +2003,6 @@ class XTTSTrainer:
 
         reference_sample = self._get_spectrogram_reference_sample()
         using_reference = reference_sample is not None
-
         if using_reference:
             text_sequences_np = np.expand_dims(reference_sample['text_sequence'], axis=0)
             mel_spectrograms_np = np.expand_dims(reference_sample['mel_spectrogram'], axis=0)
@@ -2125,39 +2103,43 @@ class XTTSTrainer:
 
         comparison_images = []
         for local_idx, source_idx in enumerate(indices):
-            mel_len = int(mel_len_sel_np[local_idx]) if mel_len_sel_np.ndim > 0 else mel_sel_np.shape[1]
-            mel_len = max(1, min(mel_len, mel_sel_np.shape[1]))
-            target_slice = mel_sel_np[local_idx, :mel_len, :]
-
+            target_slice = mel_sel_np[local_idx]
             pred_slice = mel_pred_np[local_idx]
-            if pred_slice.ndim == 2:
-                pred_frames = pred_slice.shape[0]
-                if pred_frames < mel_len:
-                    pad = mel_len - pred_frames
-                    if pad > 0:
-                        pad_values = np.expand_dims(pred_slice[-1], axis=0) if pred_frames > 0 else np.zeros((1, pred_slice.shape[1]), dtype=pred_slice.dtype)
-                        pred_slice = np.concatenate([pred_slice, np.repeat(pad_values, pad, axis=0)], axis=0)
-                pred_slice = pred_slice[:mel_len, :]
-            else:
-                pred_slice = np.zeros_like(target_slice)
 
-            # Create matplotlib-based comparison image
+            if target_slice.ndim != 2 or pred_slice.ndim != 2:
+                self.logger.debug(
+                    "Spectrogram slice dimensionality mismatch at step %s: target %s, pred %s",
+                    step,
+                    target_slice.shape,
+                    pred_slice.shape,
+                )
+                continue
+
+            target_frames = target_slice.shape[0]
+            pred_frames = pred_slice.shape[0]
+            common_frames = min(target_frames, pred_frames)
+            if common_frames <= 0:
+                continue
+
+            target_slice = target_slice[:common_frames, :]
+            pred_slice = pred_slice[:common_frames, :]
+
             try:
-                # Determine title for the comparison
                 if using_reference and reference_sample is not None:
                     ref_id = reference_sample.get('id')
                     if ref_id is not None:
-                        title = f"Sample: {ref_id} (Step {step})"
+                        title = f"Sample {ref_id} (Step {step})"
                     else:
                         title = f"Sample {source_idx} (Step {step})"
                 else:
                     title = f"Sample {local_idx} (Step {step})"
-                
+
                 comparison_img = self._create_spectrogram_comparison_image(
-                    target_slice, pred_slice, title=title
+                    target_slice,
+                    pred_slice,
+                    title=title,
                 )
-                frame_count = target_slice.shape[0]
-                comparison_images.append((local_idx, source_idx, comparison_img, frame_count))
+                comparison_images.append((local_idx, source_idx, comparison_img, float(common_frames)))
             except Exception as err:
                 self.logger.debug(f"Spectrogram comparison image creation failed at step {step}: {err}")
                 continue
