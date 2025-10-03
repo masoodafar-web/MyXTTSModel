@@ -100,8 +100,16 @@ class XTTSTrainer:
         self.spectrogram_log_interval = max(0, getattr(training_cfg, 'spectrogram_log_interval', 0)) if training_cfg else 0
         self.spectrogram_log_num_examples = max(1, getattr(training_cfg, 'spectrogram_log_num_examples', 1)) if training_cfg else 1
         self.spectrogram_log_example_index = getattr(training_cfg, 'spectrogram_log_example_index', None) if training_cfg else None
+        self.spectrogram_reference_subset = getattr(training_cfg, 'spectrogram_reference_subset', 'batch') if training_cfg else 'batch'
+        if isinstance(self.spectrogram_reference_subset, str):
+            self.spectrogram_reference_subset = self.spectrogram_reference_subset.lower()
+        self.spectrogram_reference_index = getattr(training_cfg, 'spectrogram_reference_index', None) if training_cfg else None
         self._last_spectrogram_log_step: Dict[str, int] = {}
         self._spectrogram_example_offset: Dict[str, int] = {}
+        self._spectrogram_reference_sample = None
+        self._spectrogram_reference_initialized = False
+        self._train_dataset_raw = None
+        self._val_dataset_raw = None
         self._spectrogram_logging_disabled_warned = False
         
         # Configure GPUs before any TensorFlow device queries
@@ -687,10 +695,15 @@ class XTTSTrainer:
         # Expose datasets for external training loops (e.g., notebooks)
         self.train_dataset = train_tf_dataset
         self.val_dataset = val_tf_dataset
+        self._train_dataset_raw = train_ljs
+        self._val_dataset_raw = val_ljs
         try:
             self._train_dataset_iter = iter(self.train_dataset)
         except Exception:
             self._train_dataset_iter = None
+
+        self._spectrogram_reference_initialized = False
+        self._load_spectrogram_reference_sample()
         
         return train_tf_dataset, val_tf_dataset
     
@@ -1773,6 +1786,101 @@ class XTTSTrainer:
             return False
         return True
 
+    def _load_spectrogram_reference_sample(self) -> None:
+        if self._spectrogram_reference_initialized:
+            return
+
+        subset = (self.spectrogram_reference_subset or 'batch').lower()
+        self._spectrogram_reference_sample = None
+
+        if subset == 'batch' or self.spectrogram_reference_index is None:
+            self._spectrogram_reference_initialized = True
+            return
+
+        if subset not in ('train', 'val'):
+            self.logger.warning(
+                "Unsupported spectrogram_reference_subset '%s'; falling back to batch samples.",
+                subset
+            )
+            self._spectrogram_reference_initialized = True
+            return
+
+        dataset = self._train_dataset_raw if subset == 'train' else self._val_dataset_raw
+        if dataset is None:
+            self.logger.debug(
+                "Spectrogram reference dataset '%s' not ready; will retry later.",
+                subset
+            )
+            return
+
+        try:
+            dataset_length = len(dataset)
+        except Exception as err:
+            self.logger.debug(f"Could not determine dataset length for spectrogram reference: {err}")
+            self._spectrogram_reference_initialized = True
+            return
+
+        if dataset_length <= 0:
+            self.logger.warning(
+                "Dataset '%s' empty; spectrogram reference logging disabled.",
+                subset
+            )
+            self._spectrogram_reference_initialized = True
+            return
+
+        try:
+            index = int(self.spectrogram_reference_index)
+        except Exception as err:
+            self.logger.warning(f"Invalid spectrogram_reference_index '{self.spectrogram_reference_index}': {err}")
+            self._spectrogram_reference_initialized = True
+            return
+
+        index = max(0, min(index, dataset_length - 1))
+
+        try:
+            item = dataset[index]
+        except Exception as err:
+            self.logger.warning(
+                "Failed to load spectrogram reference sample %s:%d (%s). Disabling fixed logging.",
+                subset,
+                index,
+                err
+            )
+            self._spectrogram_reference_initialized = True
+            return
+
+        text_seq = item.get('text_sequence')
+        mel_spec = item.get('mel_spectrogram')
+        text_len = item.get('text_length')
+        mel_len = item.get('mel_length') or (mel_spec.shape[0] if mel_spec is not None else 0)
+
+        if text_seq is None or mel_spec is None or text_len is None or mel_len is None:
+            self.logger.warning(
+                "Reference sample %s:%d missing required fields; disabling fixed spectrogram logging.",
+                subset,
+                index
+            )
+            self._spectrogram_reference_initialized = True
+            return
+
+        self._spectrogram_reference_sample = {
+            'subset': subset,
+            'index': index,
+            'id': item.get('id'),
+            'text_sequence': np.asarray(text_seq, dtype=np.int32),
+            'mel_spectrogram': np.asarray(mel_spec, dtype=np.float32),
+            'text_length': int(text_len),
+            'mel_length': int(mel_len),
+        }
+        self._spectrogram_reference_initialized = True
+
+    def _get_spectrogram_reference_sample(self) -> Optional[Dict[str, Any]]:
+        if (self.spectrogram_reference_subset or 'batch').lower() == 'batch':
+            return None
+        if not self._spectrogram_reference_initialized or self._spectrogram_reference_sample is None:
+            self._load_spectrogram_reference_sample()
+        return self._spectrogram_reference_sample
+
     @staticmethod
     def _spectrogram_to_image(mel: np.ndarray) -> tf.Tensor:
         mel = np.asarray(mel, dtype=np.float32)
@@ -1817,46 +1925,62 @@ class XTTSTrainer:
         if not self._should_log_spectrogram(step, prefix):
             return
 
-        if not batch_tensors or len(batch_tensors) != 4:
-            return
+        reference_sample = self._get_spectrogram_reference_sample()
+        using_reference = reference_sample is not None
 
-        text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_tensors
-
-        try:
-            text_sequences = self._maybe_merge_distributed(text_sequences)
-            mel_spectrograms = self._maybe_merge_distributed(mel_spectrograms)
-            text_lengths = self._maybe_merge_distributed(text_lengths)
-            mel_lengths = self._maybe_merge_distributed(mel_lengths)
-        except Exception as err:
-            self.logger.debug(f"Spectrogram merge failed at step {step}: {err}")
-            return
-
-        try:
-            text_sequences_np = text_sequences.numpy()
-            mel_spectrograms_np = mel_spectrograms.numpy()
-            text_lengths_np = text_lengths.numpy()
-            mel_lengths_np = mel_lengths.numpy()
-        except Exception as err:
-            self.logger.debug(f"Spectrogram numpy conversion failed at step {step}: {err}")
-            return
-
-        if mel_spectrograms_np.size == 0 or mel_spectrograms_np.shape[0] == 0:
-            return
-
-        batch_size = mel_spectrograms_np.shape[0]
-        if self.spectrogram_log_example_index is not None:
-            idx = int(np.clip(self.spectrogram_log_example_index, 0, batch_size - 1))
-            indices = [idx]
+        if using_reference:
+            text_sequences_np = np.expand_dims(reference_sample['text_sequence'], axis=0)
+            mel_spectrograms_np = np.expand_dims(reference_sample['mel_spectrogram'], axis=0)
+            text_lengths_np = np.array([reference_sample['text_length']], dtype=np.int32)
+            mel_lengths_np = np.array([reference_sample['mel_length']], dtype=np.int32)
+            indices = [int(reference_sample.get('index', 0) or 0)]
         else:
-            num_examples = min(self.spectrogram_log_num_examples, batch_size)
-            start = self._spectrogram_example_offset.get(prefix, 0) % batch_size
-            indices = [(start + i) % batch_size for i in range(num_examples)]
-            self._spectrogram_example_offset[prefix] = start + num_examples
+            if not batch_tensors or len(batch_tensors) != 4:
+                return
 
-        text_sel_np = text_sequences_np[indices]
-        mel_sel_np = mel_spectrograms_np[indices]
-        text_len_sel_np = text_lengths_np[indices]
-        mel_len_sel_np = mel_lengths_np[indices]
+            text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_tensors
+
+            try:
+                text_sequences = self._maybe_merge_distributed(text_sequences)
+                mel_spectrograms = self._maybe_merge_distributed(mel_spectrograms)
+                text_lengths = self._maybe_merge_distributed(text_lengths)
+                mel_lengths = self._maybe_merge_distributed(mel_lengths)
+            except Exception as err:
+                self.logger.debug(f"Spectrogram merge failed at step {step}: {err}")
+                return
+
+            try:
+                text_sequences_np = text_sequences.numpy()
+                mel_spectrograms_np = mel_spectrograms.numpy()
+                text_lengths_np = text_lengths.numpy()
+                mel_lengths_np = mel_lengths.numpy()
+            except Exception as err:
+                self.logger.debug(f"Spectrogram numpy conversion failed at step {step}: {err}")
+                return
+
+            if mel_spectrograms_np.size == 0 or mel_spectrograms_np.shape[0] == 0:
+                return
+
+            batch_size = mel_spectrograms_np.shape[0]
+            if self.spectrogram_log_example_index is not None:
+                idx = int(np.clip(self.spectrogram_log_example_index, 0, batch_size - 1))
+                indices = [idx]
+            else:
+                num_examples = min(self.spectrogram_log_num_examples, batch_size)
+                start = self._spectrogram_example_offset.get(prefix, 0) % batch_size
+                indices = [(start + i) % batch_size for i in range(num_examples)]
+                self._spectrogram_example_offset[prefix] = start + num_examples
+
+            text_sel_np = text_sequences_np[indices]
+            mel_sel_np = mel_spectrograms_np[indices]
+            text_len_sel_np = text_lengths_np[indices]
+            mel_len_sel_np = mel_lengths_np[indices]
+
+        if using_reference:
+            text_sel_np = text_sequences_np
+            mel_sel_np = mel_spectrograms_np
+            text_len_sel_np = text_lengths_np
+            mel_len_sel_np = mel_lengths_np
 
         try:
             text_sel = tf.convert_to_tensor(text_sel_np)
@@ -1937,7 +2061,15 @@ class XTTSTrainer:
         try:
             with self.summary_writer.as_default():
                 for local_idx, source_idx, target_img, pred_img, diff_img, frame_count in image_triplets:
-                    sample_tag = f"{prefix}/spectrogram_{local_idx}"
+                    if using_reference and reference_sample is not None:
+                        ref_id = reference_sample.get('id')
+                        if ref_id is not None:
+                            suffix = f"ref_{ref_id}"
+                        else:
+                            suffix = f"ref_idx{source_idx}"
+                    else:
+                        suffix = str(local_idx)
+                    sample_tag = f"{prefix}/spectrogram_{suffix}"
                     tf.summary.image(f"{sample_tag}/target", target_img, step=step)
                     tf.summary.image(f"{sample_tag}/prediction", pred_img, step=step)
                     tf.summary.image(f"{sample_tag}/abs_diff", diff_img, step=step)
