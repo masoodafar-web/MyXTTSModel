@@ -226,58 +226,29 @@ def get_device() -> str:
         return "CPU"
 
 
-def setup_gpu_strategy(enable_multi_gpu: bool = False):
+def setup_gpu_strategy():
     """
-    Set up GPU distribution strategy for optimal GPU utilization.
-    
-    Args:
-        enable_multi_gpu: Whether to enable MirroredStrategy for multi-GPU training.
-                         If False, uses OneDeviceStrategy even with multiple GPUs.
+    Set up GPU strategy for single GPU or CPU training.
     
     Returns:
-        tf.distribute.Strategy for training
+        tf.distribute.Strategy for training (always default strategy)
     """
     logger = logging.getLogger("MyXTTS")
     gpus = tf.config.list_physical_devices('GPU')
     
     if len(gpus) == 0:
         logger.debug("No GPUs available, using CPU strategy")
-        return tf.distribute.get_strategy()  # Default strategy for CPU
-    elif len(gpus) == 1:
-        # Single GPU: use default (no-op) strategy to avoid replica context requirements
-        logger.debug("Single GPU detected; using default strategy")
-        return tf.distribute.get_strategy()
     else:
-        # Multi-GPU available - check if user wants to enable it
-        if enable_multi_gpu:
-            logger.debug(f"Using multi-GPU strategy with {len(gpus)} GPUs")
-            strategy = tf.distribute.MirroredStrategy()
-            return strategy
-        else:
-            # Multi-GPU disabled: fall back to default (no-op) strategy
-            logger.debug("Multi-GPU disabled; using default strategy")
-            return tf.distribute.get_strategy()
+        logger.debug(f"GPU(s) detected, using default strategy for single GPU training")
+    
+    return tf.distribute.get_strategy()  # Default strategy for single GPU or CPU
 
 
 def ensure_gpu_placement(tensor):
     """
-    Ensure a tensor is placed on GPU when appropriate.
-
-    Strategy-aware behavior:
-    - Under MirroredStrategy (multi-GPU), DO NOT force placement; let the
-      strategy handle replica device placement to avoid cross-device copies.
-    - Otherwise (single GPU), gently coerce to GPU:0 for better locality.
+    Ensure a tensor is placed on GPU when appropriate for single GPU training.
     """
-    try:
-        strategy = tf.distribute.get_strategy()
-        num_replicas = getattr(strategy, 'num_replicas_in_sync', 1)
-        if num_replicas and num_replicas > 1:
-            # In distributed context: return as-is
-            return tensor
-    except Exception:
-        pass
-
-    # Non-distributed path: move to GPU:0 if available
+    # Move to GPU:0 if available
     if tf.config.list_physical_devices('GPU'):
         with tf.device('/GPU:0'):
             if tensor.dtype == tf.float64:
@@ -289,20 +260,9 @@ def ensure_gpu_placement(tensor):
 def get_device_context():
     """
     Return an appropriate device context manager for ops/variable creation.
-
-    Strategy-aware behavior:
-    - Under MirroredStrategy (multi-GPU), return a no-op context so the
-      strategy can place variables/ops on each replica.
-    - Otherwise, prefer GPU:0 when available, else CPU:0.
+    
+    Prefers GPU:0 when available, otherwise CPU:0.
     """
-    try:
-        strategy = tf.distribute.get_strategy()
-        num_replicas = getattr(strategy, 'num_replicas_in_sync', 1)
-        if num_replicas and num_replicas > 1:
-            return nullcontext()
-    except Exception:
-        pass
-
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         return tf.device('/GPU:0')

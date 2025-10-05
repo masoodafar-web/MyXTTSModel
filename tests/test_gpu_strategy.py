@@ -1,5 +1,5 @@
 """
-Test GPU strategy selection functionality.
+Test GPU strategy selection functionality (single GPU only).
 """
 
 import unittest
@@ -25,7 +25,7 @@ from myxtts.config.config import XTTSConfig, TrainingConfig
 
 
 class TestGPUStrategy(unittest.TestCase):
-    """Test GPU strategy selection based on configuration."""
+    """Test GPU strategy selection (single GPU or CPU only)."""
 
     def setUp(self):
         """Set up test fixtures."""
@@ -38,12 +38,8 @@ class TestGPUStrategy(unittest.TestCase):
         
         # Mock strategies
         self.default_strategy = MagicMock()
-        self.one_device_strategy = MagicMock()
-        self.mirrored_strategy = MagicMock()
         
         self.tf_mock.distribute.get_strategy.return_value = self.default_strategy
-        self.tf_mock.distribute.OneDeviceStrategy.return_value = self.one_device_strategy
-        self.tf_mock.distribute.MirroredStrategy.return_value = self.mirrored_strategy
         
         # Mock device context
         self.tf_mock.device.return_value.__enter__ = MagicMock()
@@ -55,68 +51,38 @@ class TestGPUStrategy(unittest.TestCase):
         self.tf_mock.config.list_physical_devices.return_value = []
         
         # Act
-        strategy = setup_gpu_strategy(enable_multi_gpu=False)
+        strategy = setup_gpu_strategy()
         
         # Assert
         self.assertEqual(strategy, self.default_strategy)
         self.tf_mock.distribute.get_strategy.assert_called_once()
 
-    def test_single_gpu_returns_one_device_strategy(self):
-        """Test that with one GPU, OneDeviceStrategy is returned."""
+    def test_single_gpu_returns_default_strategy(self):
+        """Test that with one GPU, default strategy is returned for single GPU training."""
         # Arrange
         mock_gpu = MagicMock()
         self.tf_mock.config.list_physical_devices.return_value = [mock_gpu]
         
         # Act
-        strategy = setup_gpu_strategy(enable_multi_gpu=False)
+        strategy = setup_gpu_strategy()
         
         # Assert
-        self.assertEqual(strategy, self.one_device_strategy)
-        self.tf_mock.distribute.OneDeviceStrategy.assert_called_with("/gpu:0")
+        self.assertEqual(strategy, self.default_strategy)
+        self.tf_mock.distribute.get_strategy.assert_called_once()
 
-    def test_multi_gpu_with_enable_false_returns_one_device_strategy(self):
-        """Test that with multiple GPUs but multi_gpu=False, OneDeviceStrategy is returned."""
+    def test_multiple_gpus_returns_default_strategy(self):
+        """Test that even with multiple GPUs, default strategy is returned (single GPU training only)."""
         # Arrange
         mock_gpu1 = MagicMock()
         mock_gpu2 = MagicMock()
         self.tf_mock.config.list_physical_devices.return_value = [mock_gpu1, mock_gpu2]
         
         # Act
-        strategy = setup_gpu_strategy(enable_multi_gpu=False)
+        strategy = setup_gpu_strategy()
         
         # Assert
-        self.assertEqual(strategy, self.one_device_strategy)
-        self.tf_mock.distribute.OneDeviceStrategy.assert_called_with("/gpu:0")
-
-    def test_multi_gpu_with_enable_true_returns_mirrored_strategy(self):
-        """Test that with multiple GPUs and multi_gpu=True, MirroredStrategy is returned."""
-        # Arrange
-        mock_gpu1 = MagicMock()
-        mock_gpu2 = MagicMock()
-        self.tf_mock.config.list_physical_devices.return_value = [mock_gpu1, mock_gpu2]
-        
-        # Act
-        strategy = setup_gpu_strategy(enable_multi_gpu=True)
-        
-        # Assert
-        self.assertEqual(strategy, self.mirrored_strategy)
-        self.tf_mock.distribute.MirroredStrategy.assert_called_once()
-
-    def test_training_config_multi_gpu_default_false(self):
-        """Test that TrainingConfig has multi_gpu=False by default."""
-        config = TrainingConfig()
-        self.assertFalse(config.multi_gpu)
-
-    def test_training_config_multi_gpu_can_be_set_true(self):
-        """Test that TrainingConfig multi_gpu can be set to True."""
-        config = TrainingConfig(multi_gpu=True)
-        self.assertTrue(config.multi_gpu)
-
-    def test_xtts_config_preserves_multi_gpu_setting(self):
-        """Test that XTTSConfig preserves multi_gpu setting."""
-        training_config = TrainingConfig(multi_gpu=True)
-        config = XTTSConfig(training=training_config)
-        self.assertTrue(config.training.multi_gpu)
+        self.assertEqual(strategy, self.default_strategy)
+        self.tf_mock.distribute.get_strategy.assert_called_once()
 
 
 if __name__ == '__main__':

@@ -123,7 +123,7 @@ MyXTTSModel/
 ### 🔧 **GPU Optimization**
 - **Advanced GPU Stabilizer**: Consistent 90%+ GPU utilization
 - **Memory Management**: Efficient VRAM usage
-- **Multi-GPU Support**: Distributed training capabilities
+- **Single GPU Training**: Optimized for single GPU or CPU training
 - **Real-time Monitoring**: GPU usage tracking and optimization
 
 ### 📈 **Training Enhancements**

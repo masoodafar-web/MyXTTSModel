@@ -149,35 +149,13 @@ class XTTSTrainer:
         # Memory optimization settings
         self.gradient_accumulation_steps = getattr(config.training, 'gradient_accumulation_steps', 1)
         self.enable_memory_cleanup = getattr(config.training, 'enable_memory_cleanup', True)
-        # Avoid clearing sessions or forcing device ops mid-graph under MirroredStrategy
-        if getattr(config.training, 'multi_gpu', False):
-            self.enable_memory_cleanup = False
-            self.logger.debug("Disabled periodic memory cleanup under MirroredStrategy to avoid graph resets")
 
         if self.gradient_accumulation_steps > 1:
-            # Enable gradient accumulation for both single and multi-GPU training
             self.logger.info(f"Gradient accumulation enabled: {self.gradient_accumulation_steps} steps")
-            if getattr(config.training, 'multi_gpu', False):
-                self.logger.info("Multi-GPU training with gradient accumulation - using per-replica accumulation")
         
-        # Setup distribution strategy based on configuration
-        self.strategy = setup_gpu_strategy(
-            enable_multi_gpu=getattr(config.training, 'multi_gpu', False)
-        )
+        # Setup distribution strategy (single GPU or CPU only)
+        self.strategy = setup_gpu_strategy()
         self.logger.info(f"Using strategy: {type(self.strategy).__name__}")
-
-        if self.device == "GPU":
-            # For multi-GPU, prefer disabling XLA and GPU prefetch for stability
-            if getattr(config.training, 'multi_gpu', False):
-                try:
-                    if getattr(config.data, 'enable_xla', False):
-                        setattr(config.data, 'enable_xla', False)
-                        self.logger.debug("Disabled XLA under MirroredStrategy for stability")
-                    if getattr(config.data, 'prefetch_to_gpu', True):
-                        setattr(config.data, 'prefetch_to_gpu', False)
-                        self.logger.debug("Disabled dataset prefetch_to_gpu under MirroredStrategy")
-                except Exception:
-                    pass
             # Enable/disable mixed precision explicitly
             if getattr(config.data, 'mixed_precision', True):
                 policy = tf.keras.mixed_precision.Policy('mixed_float16')
@@ -209,9 +187,8 @@ class XTTSTrainer:
         # Initialize Advanced GPU Stabilizer for consistent GPU utilization
         # Controlled via command line arguments: --enable-gpu-stabilizer
         self.gpu_stabilizer = None
-        multi_gpu_active = bool(getattr(config.training, 'multi_gpu', False))
         
-        if gpu_stabilizer_enabled and GPU_STABILIZER_AVAILABLE and self.device == "GPU" and not multi_gpu_active:
+        if gpu_stabilizer_enabled and GPU_STABILIZER_AVAILABLE and self.device == "GPU":
             try:
                 self.gpu_stabilizer = AdvancedGPUStabilizer(
                     max_prefetch_batches=32,
@@ -226,8 +203,6 @@ class XTTSTrainer:
         else:
             if not gpu_stabilizer_enabled:
                 self.logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
-            elif multi_gpu_active:
-                self.logger.info("🔴 GPU Stabilizer disabled for multi-GPU training")
             elif self.device != "GPU":
                 self.logger.info("🔴 GPU Stabilizer disabled (GPU not available)")
             else:
@@ -310,14 +285,7 @@ class XTTSTrainer:
                     max_loss_spike_threshold=getattr(config.training, 'max_loss_spike_threshold', 2.0),
                     gradient_norm_threshold=getattr(config.training, 'gradient_norm_threshold', 5.0)
                 )
-                # Under MirroredStrategy, keep the loss path side-effect free and simple
-                try:
-                    if getattr(config.training, 'multi_gpu', False) and isinstance(self.strategy, tf.distribute.MirroredStrategy):
-                        setattr(self.criterion, 'use_adaptive_weights', False)
-                        setattr(self.criterion, 'loss_smoothing_factor', 0.0)
-                        self.logger.debug("Disabled adaptive weights and loss smoothing under MirroredStrategy")
-                except Exception:
-                    pass
+
 
             self.loss_weight_snapshot = self._collect_loss_weights()
             if self.loss_weight_snapshot:
@@ -646,7 +614,6 @@ class XTTSTrainer:
                     use_cache_files = False
 
         # Convert to TensorFlow datasets with optimized settings
-        drop_remainder_flag = bool(getattr(self.config.training, 'multi_gpu', False))
         train_tf_dataset = train_ljs.create_tf_dataset(
             batch_size=self.config.data.batch_size,
             shuffle=True,
@@ -656,7 +623,7 @@ class XTTSTrainer:
             memory_cache=False,
             num_parallel_calls=self.config.data.num_workers,
             buffer_size_multiplier=self.config.data.shuffle_buffer_multiplier,
-            drop_remainder=drop_remainder_flag,
+            drop_remainder=False,
         )
         
         val_tf_dataset = val_ljs.create_tf_dataset(
@@ -668,7 +635,7 @@ class XTTSTrainer:
             memory_cache=True,
             num_parallel_calls=min(self.config.data.num_workers, 4),  # Fewer workers for validation
             buffer_size_multiplier=2,
-            drop_remainder=drop_remainder_flag,
+            drop_remainder=False,
         )
         
         # Optimize datasets, and only distribute when multi-GPU is enabled
@@ -677,16 +644,7 @@ class XTTSTrainer:
             train_tf_dataset = train_tf_dataset.prefetch(AUTOTUNE)
             val_tf_dataset = val_tf_dataset.prefetch(AUTOTUNE)
 
-            should_distribute = bool(getattr(self.config.training, 'multi_gpu', False))
-            if should_distribute and isinstance(self.strategy, tf.distribute.MirroredStrategy):
-                # Distribute only for multi-GPU; OneDeviceStrategy returns a DistributedDataset
-                # that requires strategy.run, which our single-GPU path doesn't use.
-                try:
-                    train_tf_dataset = self.strategy.experimental_distribute_dataset(train_tf_dataset)
-                    val_tf_dataset = self.strategy.experimental_distribute_dataset(val_tf_dataset)
-                    self.logger.debug("Datasets distributed to GPU strategy")
-                except Exception as e:
-                    self.logger.debug(f"Dataset distribution note: {e}")
+            # No dataset distribution needed for single GPU training
         
         # Store sizes and default steps per epoch for scheduler/progress
         self.train_dataset_size = len(train_ljs)
@@ -711,30 +669,6 @@ class XTTSTrainer:
         
         return train_tf_dataset, val_tf_dataset
     
-    @tf.function(jit_compile=False, experimental_relax_shapes=True)
-    def distributed_train_step(self, dist_inputs):
-        """
-        Distributed training step for multi-GPU training.
-        
-        Args:
-            dist_inputs: Distributed input batch
-            
-        Returns:
-            Dictionary with distributed loss values
-        """
-        def train_step_fn(inputs):
-            text_sequences, mel_spectrograms, text_lengths, mel_lengths = inputs
-            return self.train_step(text_sequences, mel_spectrograms, text_lengths, mel_lengths)
-        
-        # Run training step on all replicas
-        per_replica_losses = self.strategy.run(train_step_fn, args=(dist_inputs,))
-        
-        # Reduce losses across replicas
-        return {
-            key: self.strategy.reduce(tf.distribute.ReduceOp.MEAN, values, axis=None)
-            for key, values in per_replica_losses.items()
-        }
-
     def train_step(
         self,
         text_sequences: tf.Tensor,
@@ -754,8 +688,7 @@ class XTTSTrainer:
         Returns:
             Dictionary with loss values
         """
-        # CRITICAL FIX: Wrap entire training step in GPU device context
-        is_multi_strategy = isinstance(self.strategy, tf.distribute.MirroredStrategy)
+        # Wrap entire training step in GPU device context
         with get_device_context():
             # Memory optimization: cap text/mel lengths independently to avoid OOM
             max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
@@ -1478,13 +1411,6 @@ class XTTSTrainer:
     def cleanup_gpu_memory(self):
         """Clean up GPU memory to prevent fragmentation."""
         if self.device == "GPU":
-            # Do not clear session under MirroredStrategy to avoid invalidating graphs
-            try:
-                strategy = tf.distribute.get_strategy()
-                if isinstance(strategy, tf.distribute.MirroredStrategy):
-                    return
-            except Exception:
-                pass
             tf.keras.backend.clear_session()
             import gc
             gc.collect()
@@ -1498,30 +1424,6 @@ class XTTSTrainer:
             except Exception:
                 pass
     
-    @tf.function(jit_compile=False, experimental_relax_shapes=True)
-    def distributed_validation_step(self, dist_inputs):
-        """
-        Distributed validation step for multi-GPU validation.
-        
-        Args:
-            dist_inputs: Distributed input batch
-            
-        Returns:
-            Dictionary with distributed loss values
-        """
-        def validation_step_fn(inputs):
-            text_sequences, mel_spectrograms, text_lengths, mel_lengths = inputs
-            return self.validation_step(text_sequences, mel_spectrograms, text_lengths, mel_lengths)
-        
-        # Run validation step on all replicas
-        per_replica_losses = self.strategy.run(validation_step_fn, args=(dist_inputs,))
-        
-        # Reduce losses across replicas
-        return {
-            key: self.strategy.reduce(tf.distribute.ReduceOp.MEAN, values, axis=None)
-            for key, values in per_replica_losses.items()
-        }
-
     def validation_step(
         self,
         text_sequences: tf.Tensor,

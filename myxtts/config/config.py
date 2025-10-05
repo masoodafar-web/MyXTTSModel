@@ -336,9 +336,8 @@ class TrainingConfig:
     use_wandb: bool = False
     wandb_project: str = "myxtts"
     
-    # Device / distribution
-    multi_gpu: bool = False            # Enable MirroredStrategy when True
-    visible_gpus: Optional[str] = None # e.g., "0" or "0,1"; None = all visible
+    # Device configuration (single GPU or CPU only)
+    # Multi-GPU training is not supported
     
     # Automatic evaluation parameters for checkpoint quality monitoring
     enable_automatic_evaluation: bool = False  # Enable MOSNet, ASR-WER evaluation during training
