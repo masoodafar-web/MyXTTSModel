@@ -853,11 +853,7 @@ def build_config(
         use_wandb=False,
         wandb_project="myxtts",
 
-        multi_gpu=False,
-        visible_gpus=None,
-
-        # multi_gpu=True,
-        # visible_gpus="0,1",
+        # Single GPU training only - multi-GPU not supported
         
         # Automatic evaluation parameters for checkpoint quality monitoring
         enable_automatic_evaluation=enable_automatic_evaluation,
@@ -1485,33 +1481,6 @@ def main():
             logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
         elif not torch.cuda.is_available():
             logger.warning("⚠️  CUDA not available, skipping GPU optimization")
-    # if torch.cuda.is_available() and not multi_gpu_active:
-    #     logger.info("🚀 Initializing Advanced GPU Stabilizer...")
-    #     try:
-    #         from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
-    #         gpu_optimizer = create_advanced_gpu_stabilizer(
-    #             max_prefetch_batches=32,
-    #             num_prefetch_threads=12,
-    #             memory_fraction=0.9,
-    #             enable_memory_pinning=True,
-    #             aggressive_mode=True
-    #         )
-    #         logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
-    #     except ImportError:
-    #         from gpu_utilization_optimizer import create_gpu_optimizer
-    #         gpu_optimizer = create_gpu_optimizer(
-    #             device=device,
-    #             max_prefetch_batches=16,
-    #             enable_async_loading=True,
-    #             memory_fraction=0.85
-    #         )
-    #         logger.info("✅ Basic GPU Optimizer ready (fallback)")
-    # else:
-    #     if multi_gpu_active:
-    #         logger.info("Skipping GPU stabilizer for multi-GPU training")
-    #     elif not torch.cuda.is_available():
-    #         logger.warning("⚠️  CUDA not available, skipping GPU optimization")
-
     # Instantiate model and trainer (optionally resume)
     resume_ckpt: Optional[str] = None
     if args.resume:

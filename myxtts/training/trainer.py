@@ -118,7 +118,6 @@ class XTTSTrainer:
         
         # Configure GPUs before any TensorFlow device queries
         try:
-            vis = getattr(config.training, 'visible_gpus', None)
             memory_fraction = getattr(config.training, 'max_memory_fraction', 0.9)
             memory_limit = None
             
@@ -131,7 +130,7 @@ class XTTSTrainer:
                     memory_limit = int(estimated_memory * memory_fraction)
             
             configure_gpus(
-                vis,
+                visible_gpus=None,  # Single GPU training only
                 memory_growth=True,
                 memory_limit=memory_limit,
                 enable_mixed_precision=getattr(config.data, 'mixed_precision', True),
@@ -156,33 +155,35 @@ class XTTSTrainer:
         # Setup distribution strategy (single GPU or CPU only)
         self.strategy = setup_gpu_strategy()
         self.logger.info(f"Using strategy: {type(self.strategy).__name__}")
-            # Enable/disable mixed precision explicitly
-            if getattr(config.data, 'mixed_precision', True):
-                policy = tf.keras.mixed_precision.Policy('mixed_float16')
-                tf.keras.mixed_precision.set_global_policy(policy)
-                self.logger.debug("Mixed precision enabled")
-            else:
-                tf.keras.mixed_precision.set_global_policy('float32')
-                self.logger.debug("Mixed precision disabled (float32 policy)")
-            # Control XLA compilation explicitly based on config
-            if getattr(config.data, 'enable_xla', False):
-                tf.config.optimizer.set_jit(True)
-                self.logger.debug("XLA compilation enabled")
-            else:
-                try:
-                    tf.config.optimizer.set_jit(False)
-                    self.logger.debug("XLA compilation disabled")
-                except Exception:
-                    pass
-            
-            # Log GPU memory info
+        
+        # Enable/disable mixed precision explicitly
+        if getattr(config.data, 'mixed_precision', True):
+            policy = tf.keras.mixed_precision.Policy('mixed_float16')
+            tf.keras.mixed_precision.set_global_policy(policy)
+            self.logger.debug("Mixed precision enabled")
+        else:
+            tf.keras.mixed_precision.set_global_policy('float32')
+            self.logger.debug("Mixed precision disabled (float32 policy)")
+        
+        # Control XLA compilation explicitly based on config
+        if getattr(config.data, 'enable_xla', False):
+            tf.config.optimizer.set_jit(True)
+            self.logger.debug("XLA compilation enabled")
+        else:
             try:
-                gpus = tf.config.list_physical_devices('GPU')
-                if gpus:
-                    gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
-                    self.logger.info(f"GPU Memory - Current: {gpu_memory['current'] / 1024**3:.1f}GB, Peak: {gpu_memory['peak'] / 1024**3:.1f}GB")
+                tf.config.optimizer.set_jit(False)
+                self.logger.debug("XLA compilation disabled")
             except Exception:
                 pass
+        
+        # Log GPU memory info
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                gpu_memory = tf.config.experimental.get_memory_info('GPU:0')
+                self.logger.info(f"GPU Memory - Current: {gpu_memory['current'] / 1024**3:.1f}GB, Peak: {gpu_memory['peak'] / 1024**3:.1f}GB")
+        except Exception:
+            pass
 
         # Initialize Advanced GPU Stabilizer for consistent GPU utilization
         # Controlled via command line arguments: --enable-gpu-stabilizer
@@ -824,7 +825,7 @@ class XTTSTrainer:
                         raw_total_loss if raw_total_loss is not None else loss,
                         dtype=tf.float32,
                     )
-                    # Pure-TF finite check to be graph-safe under MirroredStrategy
+                    # Pure-TF finite check to be graph-safe
                     finite_raw = tf.reduce_all(tf.math.is_finite(raw_total_tensor))
                     raw_total_tensor = tf.where(
                         finite_raw, raw_total_tensor, tf.cast(loss, tf.float32)
@@ -1518,38 +1519,14 @@ class XTTSTrainer:
         self.logger.info(f"Starting training for {epochs} epochs")
         self.logger.info(f"Current step: {self.current_step}")
 
-        # Optional: one-time warmup for distributed initialization to avoid long first-step stall
+        # Optional: one-time warmup for initialization to avoid long first-step stall
         try:
-            is_multi = (
-                getattr(self.config.training, 'multi_gpu', False)
-                and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-            )
             skip_warmup = os.environ.get("MYXTTS_SKIP_WARMUP", "0") == "1"
             if skip_warmup:
-                self.logger.info("Skipping distributed warmup (MYXTTS_SKIP_WARMUP=1)")
+                self.logger.info("Skipping warmup (MYXTTS_SKIP_WARMUP=1)")
                 self._did_dist_warmup = True
-            elif is_multi and not getattr(self, '_did_dist_warmup', False):
-                self.logger.info("Initializing distributed variables/optimizer (one-time warmup)...")
-                t0 = time.time()
-
-                def _make_dummy(_):
-                    per_replica_bs = max(1, self.config.data.batch_size // self.strategy.num_replicas_in_sync)
-                    text = tf.zeros([per_replica_bs, 8], dtype=tf.int32)
-                    mel = tf.zeros([per_replica_bs, 16, 80], dtype=tf.float32)
-                    text_len = tf.fill([per_replica_bs], 8)
-                    mel_len = tf.fill([per_replica_bs], 16)
-                    return text, mel, text_len, mel_len
-
-                dist_inputs = self.strategy.experimental_distribute_values_from_function(_make_dummy)
-
-                def _warmup_step(inputs):
-                    return self.train_step(*inputs)
-
-                self.strategy.run(_warmup_step, args=(dist_inputs,))
-                self._did_dist_warmup = True
-                self.logger.info("Distributed warmup completed in %.1fs", time.time() - t0)
         except Exception as e:
-            self.logger.debug(f"Distributed warmup note: {e}")
+            self.logger.debug(f"Warmup note: {e}")
 
         try:
             # Determine steps per epoch if not provided
@@ -2079,9 +2056,8 @@ class XTTSTrainer:
         train_losses = {}
         num_batches = 0
         
-        # Setup GPU-stabilized data loading if available (avoid with distributed datasets)
-        use_distributed = getattr(self.config.training, 'multi_gpu', False) and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-        if self.gpu_stabilizer and hasattr(train_dataset, '__iter__') and not use_distributed:
+        # Setup GPU-stabilized data loading if available
+        if self.gpu_stabilizer and hasattr(train_dataset, '__iter__'):
             try:
                 # Create optimized DataLoader wrapper for TensorFlow dataset
                 self.logger.info("🔧 Setting up GPU-stabilized data loading...")
@@ -2136,35 +2112,26 @@ class XTTSTrainer:
                 # Measure model computation time
                 compute_start_time = time.perf_counter()
                 
-                # ENHANCED: Ensure proper device placement and choose correct path
+                # ENHANCED: Ensure proper device placement
                 with get_device_context():
-                    is_multi = (
-                        getattr(self.config.training, 'multi_gpu', False)
-                        and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-                    )
+                    # Single-GPU path: place tensors explicitly on GPU if available
+                    if self.device == "GPU":
+                        text_sequences = ensure_gpu_placement(text_sequences)
+                        mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
+                        text_lengths = ensure_gpu_placement(text_lengths)
+                        mel_lengths = ensure_gpu_placement(mel_lengths)
 
-                    if is_multi:
-                        # For distributed run, pass per-replica inputs directly; do not touch placement/casting here
-                        step_losses = self.distributed_train_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
+                    if self.gradient_accumulation_steps > 1:
+                        # Use gradient accumulation for memory efficiency
+                        step_losses = self.train_step_with_accumulation(
+                            (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
+                            accumulation_steps=self.gradient_accumulation_steps
+                        )
                     else:
-                        # Single-GPU path: place tensors explicitly on GPU if available
-                        if self.device == "GPU":
-                            text_sequences = ensure_gpu_placement(text_sequences)
-                            mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
-                            text_lengths = ensure_gpu_placement(text_lengths)
-                            mel_lengths = ensure_gpu_placement(mel_lengths)
-
-                        if self.gradient_accumulation_steps > 1:
-                            # Use gradient accumulation for memory efficiency
-                            step_losses = self.train_step_with_accumulation(
-                                (text_sequences, mel_spectrograms, text_lengths, mel_lengths),
-                                accumulation_steps=self.gradient_accumulation_steps
-                            )
-                        else:
-                            # Regular step
-                            step_losses = self.train_step(
-                                text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                            )
+                        # Regular step
+                        step_losses = self.train_step(
+                            text_sequences, mel_spectrograms, text_lengths, mel_lengths
+                        )
                 
                 compute_end_time = time.perf_counter()
                 compute_time = compute_end_time - compute_start_time
@@ -2240,16 +2207,10 @@ class XTTSTrainer:
         for batch in tqdm(val_dataset, desc="Validation"):
             text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch
             
-            # Use strategy-backed validation when strategy provides replica context
-            if (
-                getattr(self.config.training, 'multi_gpu', False)
-                and isinstance(self.strategy, tf.distribute.MirroredStrategy)
-            ):
-                step_losses = self.distributed_validation_step((text_sequences, mel_spectrograms, text_lengths, mel_lengths))
-            else:
-                step_losses = self.validation_step(
-                    text_sequences, mel_spectrograms, text_lengths, mel_lengths
-                )
+            # Run validation step
+            step_losses = self.validation_step(
+                text_sequences, mel_spectrograms, text_lengths, mel_lengths
+            )
 
             val_step_index = self.current_step if self.current_step > 0 else getattr(self, '_tb_train_step', 0)
             if val_step_index <= 0:
