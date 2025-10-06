@@ -19,8 +19,7 @@ model:
   decoder_layers: 12
   decoder_heads: 16
   
-  # Vocoder settings - Griffin-Lim for compatibility
-  vocoder_type: "griffin_lim"  # Can be changed to "hifigan" when neural vocoder is available
+  # HiFi-GAN vocoder (always used)
   
   # Mel spectrogram settings
   n_mels: 80
@@ -76,11 +75,10 @@ data:
   prefetch_buffer_size: 8
   shuffle_buffer_multiplier: 20
 
-# Migration path to neural vocoder:
+# Upgrade path for better quality:
 # 1. Train with this configuration
-# 2. Change vocoder_type to "hifigan"
-# 3. Set use_two_stage_training to true
-# 4. Retrain with two-stage approach for best quality
+# 2. Set use_two_stage_training to true
+# 3. Retrain with two-stage approach for best quality
 
 # Usage notes:
 # This configuration ensures compatibility with existing workflows

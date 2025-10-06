@@ -947,8 +947,8 @@ class XTTS(tf.keras.Model):
         if generated_stops is not None:
             results["stop_tokens"] = generated_stops
         
-        # Generate audio using neural vocoder if requested
-        if generate_audio and self.vocoder.vocoder_type != "griffin_lim":
+        # Generate audio using HiFi-GAN vocoder if requested
+        if generate_audio:
             generated_audio = self.vocoder(generated_mel, training=False)
             results["audio_output"] = generated_audio
         

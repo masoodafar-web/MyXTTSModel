@@ -202,9 +202,7 @@ class XTTSInference:
         if style_weights is not None and getattr(self.config.model, 'use_gst', False):
             style_weights_tensor = tf.constant([style_weights], dtype=tf.float32)
         
-        generate_neural_audio = getattr(self.config.model, 'vocoder_type', 'griffin_lim') != "griffin_lim"
-
-        # Generate mel spectrogram (and optional neural audio)
+        # Generate mel spectrogram and audio with HiFi-GAN vocoder
         outputs = self.model.generate(
             text_inputs=text_tensor,
             audio_conditioning=audio_conditioning,
@@ -212,7 +210,7 @@ class XTTSInference:
             style_weights=style_weights_tensor,
             max_length=max_length,
             temperature=temperature,
-            generate_audio=generate_neural_audio
+            generate_audio=True
         )
         
         # Extract generated mel spectrogram
@@ -223,41 +221,26 @@ class XTTSInference:
         if mel_spectrogram.size == 0:
             self.logger.error("Generated mel spectrogram is empty!")
 
-        # Convert mel to waveform using neural vocoder when available
-        if generate_neural_audio and "audio_output" in outputs:
+        # Convert mel to waveform using HiFi-GAN vocoder
+        if "audio_output" in outputs:
             audio_output = outputs["audio_output"].numpy()
+            audio_waveform = audio_output[0, :, 0]
             
-            # Check if vocoder output is valid (not returned mel due to fallback)
-            # If vocoder returned mel (shape [1, time, n_mels]), it means it failed
-            if audio_output.shape[-1] == self.config.model.n_mels:
-                self.logger.warning("Vocoder returned mel spectrogram (fallback), using Griffin-Lim")
+            # Validate audio is not pure noise or silence
+            audio_power = np.mean(np.abs(audio_waveform))
+            if audio_power < 1e-6:
+                self.logger.warning(
+                    f"⚠️ Generated audio has very low power ({audio_power:.2e}). "
+                    "This may indicate untrained vocoder weights. Falling back to Griffin-Lim."
+                )
                 audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
-            else:
-                audio_waveform = audio_output[0, :, 0]
-                
-                # Validate audio is not pure noise or silence
-                audio_power = np.mean(np.abs(audio_waveform))
-                if audio_power < 1e-6:
-                    self.logger.warning(
-                        f"⚠️ Generated audio has very low power ({audio_power:.2e}). "
-                        "This may indicate untrained vocoder weights. Falling back to Griffin-Lim."
-                    )
-                    audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
         else:
-            # Use neural vocoder directly instead of Griffin-Lim fallback
-            vocoder_type = getattr(self.config.model, 'vocoder_type', 'griffin_lim')
-            if vocoder_type != "griffin_lim" and hasattr(self.model, 'vocoder'):
-                # Convert mel spectrogram to proper format and use neural vocoder
+            # Use HiFi-GAN vocoder directly
+            if hasattr(self.model, 'vocoder'):
+                # Convert mel spectrogram to proper format and use vocoder
                 mel_tensor = tf.constant(mel_spectrogram.T[np.newaxis, ...], dtype=tf.float32)  # [1, time, n_mels]
                 audio_tensor = self.model.vocoder(mel_tensor, training=False)
-                
-                # Check if vocoder output is valid
-                audio_output = audio_tensor.numpy()
-                if audio_output.shape[-1] == self.config.model.n_mels:
-                    self.logger.warning("Vocoder returned mel spectrogram (fallback), using Griffin-Lim")
-                    audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
-                else:
-                    audio_waveform = audio_output[0, :, 0]
+                audio_waveform = audio_tensor.numpy()[0, :, 0]
                     
                     # Validate audio quality
                     audio_power = np.mean(np.abs(audio_waveform))
