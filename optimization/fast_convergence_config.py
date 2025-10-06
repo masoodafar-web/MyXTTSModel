@@ -167,7 +167,7 @@ def create_optimized_config() -> Dict[str, Any]:
             'sort_by_length': True,             # Sort for efficient batching
             
             # Preprocessing optimization
-            'preprocessing_mode': 'precompute', # Use precomputed features
+            # On-the-fly processing (no preprocessing required)
             'enable_memory_mapping': True,      # Memory map cache files
             'cache_verification': True,         # Verify cache integrity
             'enable_data_validation': True,     # Validate data quality
@@ -242,14 +242,14 @@ def create_optimization_summary() -> str:
 
 ✅ **2-3x Faster Convergence**: Optimized loss weights and LR scheduling
 ✅ **Stable Training**: Enhanced gradient handling and loss smoothing
-✅ **Better GPU Utilization**: Optimized data pipeline and preprocessing
+✅ **Better GPU Utilization**: Optimized data pipeline with on-the-fly processing
 ✅ **Higher Quality Results**: Improved regularization and monitoring
 ✅ **Automatic Optimization**: Self-adjusting weights and learning rates
 
 ## Usage Instructions 📖
 
 1. **Replace your current config.yaml** with the generated optimized version
-2. **Ensure data preprocessing**: Use 'precompute' mode for best performance
+2. **Ensure data is accessible**: Verify WAV files and CSV metadata are valid
 3. **Monitor training closely**: Watch for improved convergence patterns
 4. **Adjust if needed**: Fine-tune batch size based on your GPU memory
 
@@ -275,7 +275,7 @@ def create_optimization_summary() -> str:
 
 If loss is still slow:
 1. Check GPU utilization (should be >70%)
-2. Verify data preprocessing completed successfully
+2. Verify WAV files and metadata are valid and accessible
 3. Monitor individual loss components
 4. Consider reducing batch size if memory issues occur
 5. Ensure adequate training data quality
@@ -284,7 +284,7 @@ If loss is still slow:
 
 This configuration directly addresses the Persian problem statement by providing:
 - **Faster loss convergence** through optimized weights and scheduling
-- **Proper dataset preparation** with precomputed features and validation
+- **Proper dataset loading** with on-the-fly processing and validation
 - **Improved model performance** with enhanced loss functions and stability
 - **Expected target output** through better regularization and monitoring
 """
@@ -338,7 +338,7 @@ def main():
             print("   • Reduced learning rate (1e-4 → 8e-5) with cosine restarts")
             print("   • Enhanced loss functions (Huber loss, label smoothing)")
             print("   • Improved training stability (gradient clipping, monitoring)")
-            print("   • Optimized data pipeline (precompute, GPU utilization)")
+            print("   • Optimized data pipeline (on-the-fly processing, GPU utilization)")
         
         if args.summary:
             # Generate and save optimization summary
