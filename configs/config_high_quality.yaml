@@ -19,8 +19,7 @@ model:
   decoder_layers: 16
   decoder_heads: 24
   
-  # Neural vocoder settings
-  vocoder_type: "hifigan"
+  # HiFi-GAN vocoder settings
   vocoder_upsample_rates: [8, 8, 2, 2]
   vocoder_upsample_kernel_sizes: [16, 16, 4, 4]
   vocoder_resblock_kernel_sizes: [3, 7, 11]

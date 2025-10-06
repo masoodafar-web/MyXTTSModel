@@ -379,8 +379,7 @@ def create_lightweight_config(base_config) -> Dict:
         'n_mels': 64,               # Reduced from 80
         'hop_length': 512,          # Increased from 256 (less time resolution)
         
-        # Faster vocoder settings
-        'vocoder_type': 'griffin_lim',  # Faster than neural vocoder
+        # Fast decoder settings
         'decoder_strategy': 'non_autoregressive',  # Faster than autoregressive
     })
     

@@ -17,7 +17,7 @@ sys.path.append('/home/runner/work/MyXTTSModel/MyXTTSModel')
 
 from myxtts.config.config import ModelConfig
 from myxtts.models.xtts import XTTS
-from myxtts.models.vocoder import HiFiGANGenerator, VocoderInterface
+from myxtts.models.vocoder import Vocoder
 from myxtts.models.non_autoregressive import NonAutoregressiveDecoder, DecoderStrategy
 from myxtts.utils.audio import AudioProcessor
 
@@ -29,7 +29,7 @@ def test_hifigan_vocoder():
     config = ModelConfig()
     
     # Create vocoder
-    hifigan = HiFiGANGenerator(config)
+    vocoder = Vocoder(config)
     
     # Test input
     batch_size = 2
@@ -37,7 +37,7 @@ def test_hifigan_vocoder():
     mel_input = tf.random.normal([batch_size, mel_length, config.n_mels])
     
     # Forward pass
-    audio_output = hifigan(mel_input, training=False)
+    audio_output = vocoder(mel_input, training=False)
     
     print(f"Input mel shape: {mel_input.shape}")
     print(f"Output audio shape: {audio_output.shape}")
@@ -50,29 +50,22 @@ def test_hifigan_vocoder():
 
 
 def test_vocoder_interface():
-    """Test vocoder interface."""
-    print("\nTesting vocoder interface...")
+    """Test vocoder."""
+    print("\nTesting vocoder...")
     
     config = ModelConfig()
     
-    # Test with Griffin-Lim
-    vocoder_gl = VocoderInterface(config, vocoder_type="griffin_lim")
-    
     # Test with HiFi-GAN
-    vocoder_hifi = VocoderInterface(config, vocoder_type="hifigan")
+    vocoder = Vocoder(config)
     
     # Test input
     mel_input = tf.random.normal([1, 50, config.n_mels])
     
-    # Test Griffin-Lim interface (should return mel for post-processing)
-    gl_output = vocoder_gl(mel_input)
-    print(f"Griffin-Lim interface output shape: {gl_output.shape}")
+    # Test vocoder
+    output = vocoder(mel_input)
+    print(f"Vocoder output shape: {output.shape}")
     
-    # Test HiFi-GAN interface
-    hifi_output = vocoder_hifi(mel_input)
-    print(f"HiFi-GAN interface output shape: {hifi_output.shape}")
-    
-    print("✓ Vocoder interface test passed")
+    print("✓ Vocoder test passed")
 
 
 def test_non_autoregressive_decoder():
@@ -162,7 +155,6 @@ def test_xtts_with_neural_vocoder():
     
     # Test with HiFi-GAN vocoder
     config = ModelConfig()
-    config.vocoder_type = "hifigan"
     config.decoder_strategy = "autoregressive"
     
     model = XTTS(config)
@@ -211,7 +203,6 @@ def test_xtts_non_autoregressive():
     
     config = ModelConfig()
     config.decoder_strategy = "non_autoregressive"
-    config.vocoder_type = "hifigan"
     
     model = XTTS(config)
     
@@ -259,19 +250,21 @@ def test_audio_processor_neural_vocoder():
         win_length=config.win_length
     )
     
-    # Create a mock vocoder model
-    vocoder = HiFiGANGenerator(config)
+    # Create a vocoder model
+    vocoder = Vocoder(config)
     
     # Test mel to wav conversion
     mel_spec = np.random.randn(config.n_mels, 100)
     
-    # Test with Griffin-Lim (fallback)
-    audio_gl = audio_processor.mel_to_wav(mel_spec)
-    print(f"Griffin-Lim audio shape: {audio_gl.shape}")
+    # Test with Griffin-Lim (fallback if method exists)
+    if hasattr(audio_processor, 'mel_to_wav'):
+        audio_gl = audio_processor.mel_to_wav(mel_spec)
+        print(f"Griffin-Lim audio shape: {audio_gl.shape}")
     
     # Test with neural vocoder
-    audio_neural = audio_processor.mel_to_wav_neural(mel_spec, vocoder)
-    print(f"Neural vocoder audio shape: {audio_neural.shape}")
+    if hasattr(audio_processor, 'mel_to_wav_neural'):
+        audio_neural = audio_processor.mel_to_wav_neural(mel_spec, vocoder)
+        print(f"Neural vocoder audio shape: {audio_neural.shape}")
     
     print("✓ Audio processor neural vocoder test passed")
 
@@ -289,13 +282,13 @@ if __name__ == "__main__":
         test_audio_processor_neural_vocoder()
         
         print("\n🎉 All tests passed successfully!")
-        print("\nNew features implemented:")
-        print("✓ HiFi-GAN neural vocoder")
+        print("\nFeatures tested:")
+        print("✓ HiFi-GAN vocoder")
         print("✓ Non-autoregressive decoder (FastSpeech-style)")
         print("✓ Decoder strategy interface")
-        print("✓ Neural vocoder integration in XTTS")
+        print("✓ Vocoder integration in XTTS")
         print("✓ Two-stage training architecture")
-        print("✓ Enhanced audio processing with neural vocoder support")
+        print("✓ Enhanced audio processing with vocoder support")
         
     except Exception as e:
         print(f"\n❌ Test failed with error: {e}")

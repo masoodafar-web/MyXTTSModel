@@ -1,10 +1,10 @@
 """
-Test vocoder weight initialization and fallback behavior.
+Test vocoder weight initialization behavior.
 
 This test verifies that:
 1. Vocoder tracks weight initialization status
 2. Warnings are issued for uninitialized vocoder
-3. Fallback to Griffin-Lim works correctly
+3. Vocoder produces valid output when initialized
 """
 
 import sys
@@ -18,7 +18,7 @@ import logging
 # Configure logging to see warnings
 logging.basicConfig(level=logging.WARNING)
 
-from myxtts.models.vocoder import VocoderInterface, HiFiGANGenerator
+from myxtts.models.vocoder import Vocoder
 from myxtts.config.config import ModelConfig
 
 
@@ -40,7 +40,7 @@ def test_vocoder_initialization_tracking():
     )
     
     # Test HiFi-GAN vocoder initialization
-    vocoder = VocoderInterface(config, vocoder_type="hifigan")
+    vocoder = Vocoder(config)
     
     # Should start uninitialized
     assert not vocoder.check_weights_initialized(), "Vocoder should start uninitialized"
@@ -50,11 +50,6 @@ def test_vocoder_initialization_tracking():
     vocoder.mark_weights_loaded()
     assert vocoder.check_weights_initialized(), "Vocoder should be marked as initialized"
     print("✅ Vocoder can be marked as initialized")
-    
-    # Test Griffin-Lim is always initialized
-    gl_vocoder = VocoderInterface(config, vocoder_type="griffin_lim")
-    assert gl_vocoder.check_weights_initialized(), "Griffin-Lim should always be initialized"
-    print("✅ Griffin-Lim vocoder is always initialized")
     
     print("✅ Test 1 PASSED\n")
 
@@ -76,7 +71,7 @@ def test_vocoder_warning_on_uninitialized():
     )
     
     # Create uninitialized vocoder
-    vocoder = VocoderInterface(config, vocoder_type="hifigan")
+    vocoder = Vocoder(config)
     
     # Create dummy mel input
     dummy_mel = tf.random.normal([1, 100, 80])  # [batch, time, n_mels]
@@ -105,7 +100,7 @@ def test_vocoder_output_validation():
     )
     
     # Create vocoder
-    vocoder = VocoderInterface(config, vocoder_type="hifigan")
+    vocoder = Vocoder(config)
     
     # Create dummy mel input
     dummy_mel = tf.random.normal([1, 100, 80])
@@ -116,21 +111,16 @@ def test_vocoder_output_validation():
     # Output should have been generated (even if noisy)
     assert output is not None, "Vocoder should produce output"
     
-    # Check output shape - could be audio or mel (fallback)
+    # Check output shape - should be audio
     print(f"Vocoder output shape: {output.shape}")
-    
-    # If output is mel (fallback), last dimension should be n_mels
-    if output.shape[-1] == 80:
-        print("✅ Vocoder returned mel (fallback mode detected)")
-    else:
-        print(f"✅ Vocoder returned audio (shape: {output.shape})")
+    print(f"✅ Vocoder returned audio (shape: {output.shape})")
     
     print("✅ Test 3 PASSED\n")
 
 
-def test_griffin_lim_vocoder():
-    """Test that Griffin-Lim vocoder works as expected."""
-    print("\n=== Test 4: Griffin-Lim Vocoder ===")
+def test_vocoder_audio_dimensions():
+    """Test that vocoder produces correct audio dimensions."""
+    print("\n=== Test 4: Vocoder Audio Dimensions ===")
     
     config = ModelConfig(
         text_vocab_size=100,
@@ -144,26 +134,30 @@ def test_griffin_lim_vocoder():
         win_length=1024
     )
     
-    # Create Griffin-Lim vocoder
-    vocoder = VocoderInterface(config, vocoder_type="griffin_lim")
+    # Create vocoder
+    vocoder = Vocoder(config)
     
     # Create dummy mel input
-    dummy_mel = tf.random.normal([1, 100, 80])
+    mel_time_steps = 100
+    dummy_mel = tf.random.normal([1, mel_time_steps, 80])
     
     # Generate output
     output = vocoder(dummy_mel, training=False)
     
-    # Griffin-Lim should return mel (processed by AudioProcessor later)
-    assert output is not None, "Griffin-Lim should return output"
-    print(f"Griffin-Lim output shape: {output.shape}")
-    print("✅ Griffin-Lim vocoder works correctly")
+    # Check output dimensions
+    assert output is not None, "Vocoder should return output"
+    assert len(output.shape) == 3, f"Expected 3D output, got {len(output.shape)}D"
+    assert output.shape[0] == 1, "Batch dimension should be 1"
+    assert output.shape[2] == 1, "Audio channel dimension should be 1"
+    print(f"✅ Vocoder output shape: {output.shape}")
+    print(f"✅ Audio length: {output.shape[1]} samples (from {mel_time_steps} mel frames)")
     
     print("✅ Test 4 PASSED\n")
 
 
-def test_hifigan_with_trained_weights():
-    """Test that HiFi-GAN works when marked as initialized."""
-    print("\n=== Test 5: HiFi-GAN with Trained Weights ===")
+def test_vocoder_with_trained_weights():
+    """Test that vocoder works when marked as initialized."""
+    print("\n=== Test 5: Vocoder with Trained Weights ===")
     
     config = ModelConfig(
         text_vocab_size=100,
@@ -178,7 +172,7 @@ def test_hifigan_with_trained_weights():
     )
     
     # Create vocoder and mark as trained
-    vocoder = VocoderInterface(config, vocoder_type="hifigan")
+    vocoder = Vocoder(config)
     vocoder.mark_weights_loaded()
     
     # Create dummy mel input
@@ -198,15 +192,15 @@ def test_hifigan_with_trained_weights():
 def run_all_tests():
     """Run all vocoder tests."""
     print("\n" + "="*70)
-    print("Running Vocoder Fallback Tests")
+    print("Running HiFi-GAN Vocoder Tests")
     print("="*70)
     
     try:
         test_vocoder_initialization_tracking()
         test_vocoder_warning_on_uninitialized()
         test_vocoder_output_validation()
-        test_griffin_lim_vocoder()
-        test_hifigan_with_trained_weights()
+        test_vocoder_audio_dimensions()
+        test_vocoder_with_trained_weights()
         
         print("\n" + "="*70)
         print("✅ ALL TESTS PASSED")

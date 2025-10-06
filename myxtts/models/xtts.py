@@ -17,7 +17,7 @@ from .layers import (
     FeedForward,
     ConvolutionalLayer
 )
-from .vocoder import VocoderInterface, HiFiGANGenerator
+from .vocoder import Vocoder
 from .non_autoregressive import DecoderStrategy, NonAutoregressiveDecoder
 from .speaker_encoder import PretrainedSpeakerEncoder, ContrastiveSpeakerLoss
 from .diffusion_decoder import DiffusionDecoder
@@ -533,13 +533,8 @@ class XTTS(tf.keras.Model):
             self.mel_decoder = MelDecoder(config, name="mel_decoder")
             self.decoder_strategy = None
         
-        # Neural vocoder interface
-        vocoder_type = getattr(config, 'vocoder_type', 'griffin_lim')
-        self.vocoder = VocoderInterface(
-            config,
-            vocoder_type=vocoder_type,
-            name="vocoder"
-        )
+        # HiFi-GAN vocoder
+        self.vocoder = Vocoder(config, name="vocoder")
     
     def call(
         self,
@@ -952,8 +947,8 @@ class XTTS(tf.keras.Model):
         if generated_stops is not None:
             results["stop_tokens"] = generated_stops
         
-        # Generate audio using neural vocoder if requested
-        if generate_audio and self.vocoder.vocoder_type != "griffin_lim":
+        # Generate audio using HiFi-GAN vocoder if requested
+        if generate_audio:
             generated_audio = self.vocoder(generated_mel, training=False)
             results["audio_output"] = generated_audio
         

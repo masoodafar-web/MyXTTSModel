@@ -22,7 +22,7 @@ sys.path.append(str(Path(__file__).parent))
 
 from myxtts.config.config import ModelConfig
 from myxtts.models.xtts import XTTS
-from myxtts.models.vocoder import HiFiGANGenerator
+from myxtts.models.vocoder import Vocoder
 from myxtts.utils.audio import AudioProcessor
 from myxtts.training.two_stage_trainer import TwoStageTrainer, TwoStageTrainingConfig
 
@@ -38,14 +38,14 @@ def load_config_from_yaml(config_path: str) -> ModelConfig:
 
 
 def example_neural_vocoder_usage():
-    """Demonstrate basic usage with neural vocoder."""
-    print("🎵 Example 1: Neural Vocoder Usage")
+    """Demonstrate basic usage with HiFi-GAN vocoder."""
+    print("🎵 Example 1: HiFi-GAN Vocoder Usage")
     print("=" * 50)
     
     # Load high-quality configuration
     config = load_config_from_yaml('config_high_quality.yaml')
     
-    # Create model with HiFi-GAN vocoder
+    # Create model (uses HiFi-GAN vocoder by default)
     model = XTTS(config)
     
     # Sample text input (dummy token IDs)
@@ -63,7 +63,7 @@ def example_neural_vocoder_usage():
     print(f"Generated mel shape: {outputs['mel_output'].shape}")
     if 'audio_output' in outputs:
         print(f"Generated audio shape: {outputs['audio_output'].shape}")
-        print("✅ Neural vocoder successfully generated audio!")
+        print("✅ HiFi-GAN vocoder successfully generated audio!")
     
     return outputs
 
@@ -103,49 +103,32 @@ def example_fast_inference():
     return outputs
 
 
-def example_compatibility_mode():
-    """Demonstrate compatibility mode with Griffin-Lim."""
-    print("\n🔄 Example 3: Compatibility Mode")
+def example_direct_vocoder_usage():
+    """Demonstrate direct HiFi-GAN vocoder usage."""
+    print("\n🔄 Example 3: Direct Vocoder Usage")
     print("=" * 50)
     
-    # Load compatibility configuration
-    config = load_config_from_yaml('config_compatibility.yaml')
+    # Create vocoder directly
+    config = ModelConfig()
+    vocoder = Vocoder(config)
     
-    # Create model with Griffin-Lim vocoder
-    model = XTTS(config)
+    # Create sample mel spectrogram
+    sample_mel = tf.random.normal([1, 100, 80])
     
-    # Sample inputs
-    text_inputs = tf.constant([[1, 15, 23, 45, 67, 89]], dtype=tf.int32)
+    print(f"Input mel shape: {sample_mel.shape}")
     
-    print(f"Using vocoder: {config.vocoder_type}")
-    print(f"Using decoder strategy: {config.decoder_strategy}")
+    # Generate audio with vocoder
+    audio = vocoder(sample_mel, training=False)
     
-    # Generate (will use Griffin-Lim in post-processing)
-    outputs = model.generate(
-        text_inputs,
-        max_length=60
-    )
+    print(f"Generated audio shape: {audio.shape}")
+    print("✅ Direct vocoder usage completed!")
     
-    print(f"Generated mel shape: {outputs['mel_output'].shape}")
-    print("✅ Compatibility mode generation completed!")
-    
-    # Convert mel to audio using Griffin-Lim (post-processing)
-    audio_processor = AudioProcessor(
-        sample_rate=config.sample_rate,
-        n_mels=config.n_mels,
-        hop_length=config.hop_length
-    )
-    
-    mel_np = outputs['mel_output'].numpy()[0].T  # [n_mels, time]
-    audio = audio_processor.mel_to_wav(mel_np)
-    print(f"Griffin-Lim audio shape: {audio.shape}")
-    
-    return outputs, audio
+    return audio
 
 
-def example_vocoder_comparison():
-    """Compare Griffin-Lim vs Neural Vocoder quality."""
-    print("\n📊 Example 4: Vocoder Quality Comparison")
+def example_vocoder_audio_generation():
+    """Demonstrate HiFi-GAN vocoder audio generation."""
+    print("\n📊 Example 4: HiFi-GAN Audio Generation")
     print("=" * 50)
     
     # Create sample mel spectrogram
@@ -154,31 +137,25 @@ def example_vocoder_comparison():
     
     print(f"Sample mel shape: {sample_mel.shape}")
     
-    # Initialize audio processor
-    audio_processor = AudioProcessor(sample_rate=22050, n_mels=80, hop_length=256)
-    
-    # Griffin-Lim conversion
-    mel_np = sample_mel.numpy()[0].T  # [n_mels, time]
-    gl_audio = audio_processor.mel_to_wav(mel_np, n_iter=60)
-    
-    # Neural vocoder conversion
+    # Create HiFi-GAN vocoder
     config = ModelConfig()
-    hifigan = HiFiGANGenerator(config)
-    neural_audio = hifigan(sample_mel, training=False)
-    neural_audio_np = neural_audio.numpy()[0, :, 0]
+    vocoder = Vocoder(config)
     
-    print(f"Griffin-Lim audio length: {len(gl_audio)} samples")
-    print(f"Neural vocoder audio length: {len(neural_audio_np)} samples")
+    # Generate audio
+    audio = vocoder(sample_mel, training=False)
+    audio_np = audio.numpy()[0, :, 0]
+    
+    print(f"Generated audio length: {len(audio_np)} samples")
     
     # Calculate basic metrics
-    gl_energy = np.mean(gl_audio ** 2)
-    neural_energy = np.mean(neural_audio_np ** 2)
+    energy = np.mean(audio_np ** 2)
+    max_amplitude = np.max(np.abs(audio_np))
     
-    print(f"Griffin-Lim energy: {gl_energy:.6f}")
-    print(f"Neural vocoder energy: {neural_energy:.6f}")
-    print("✅ Vocoder comparison completed!")
+    print(f"Audio energy: {energy:.6f}")
+    print(f"Max amplitude: {max_amplitude:.6f}")
+    print("✅ Audio generation completed!")
     
-    return gl_audio, neural_audio_np
+    return audio_np
 
 
 def example_two_stage_training_setup():
@@ -269,8 +246,8 @@ def main():
         # Run examples
         example_neural_vocoder_usage()
         example_fast_inference()
-        example_compatibility_mode()
-        example_vocoder_comparison()
+        example_direct_vocoder_usage()
+        example_vocoder_audio_generation()
         example_two_stage_training_setup()
         
         # Save examples if requested
@@ -278,11 +255,11 @@ def main():
             save_audio_examples()
         
         print("\n🎉 All examples completed successfully!")
-        print("\nKey improvements achieved:")
-        print("✅ Neural vocoder provides significantly better audio quality")
+        print("\nKey features demonstrated:")
+        print("✅ HiFi-GAN vocoder provides high-quality audio synthesis")
         print("✅ Non-autoregressive decoding enables faster inference")
         print("✅ Two-stage training allows optimized component training")
-        print("✅ Backward compatibility maintained with Griffin-Lim fallback")
+        print("✅ Simple and unified vocoder interface")
         
         print("\nTo save audio examples, run:")
         print("  python example_neural_vocoder_usage.py --save-audio")

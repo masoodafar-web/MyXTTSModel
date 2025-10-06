@@ -630,7 +630,6 @@ def build_config(
     prefetch_to_gpu: Optional[bool] = None,
     shuffle_buffer_multiplier: int = 30,
     decoder_strategy: str = "autoregressive",
-    vocoder_type: str = "griffin_lim",
     model_size: str = "normal",
     use_pretrained_speaker_encoder: Optional[bool] = None,
     pretrained_speaker_encoder_path: Optional[str] = None,
@@ -759,9 +758,8 @@ def build_config(
         gst_enable_speaking_rate_control=True,
         gst_style_loss_weight=gst_style_loss_weight,
 
-        # Decoder / vocoder strategy controls
+        # Decoder strategy control
         decoder_strategy=decoder_strategy,
-        vocoder_type=vocoder_type,
         
         # Duration prediction control (FIXED: disable to avoid optimizer variable mismatch)
         use_duration_predictor=False,  # Disabled to avoid "Unknown variable" optimizer error
@@ -1326,7 +1324,6 @@ def main():
         prefetch_to_gpu=prefetch_to_gpu_override,
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
         decoder_strategy=args.decoder_strategy,
-        vocoder_type=args.vocoder_type,
         model_size=args.model_size,
         use_pretrained_speaker_encoder=use_pretrained_override,
         pretrained_speaker_encoder_path=speaker_encoder_path,
@@ -1398,8 +1395,7 @@ def main():
     logger.info(f"Gradient clip norm: {config.training.gradient_clip_norm}")
     if hasattr(config.model, 'decoder_strategy'):
         logger.info(f"Decoder strategy: {config.model.decoder_strategy}")
-    if hasattr(config.model, 'vocoder_type'):
-        logger.info(f"Vocoder type: {config.model.vocoder_type}")
+    logger.info(f"Vocoder: HiFi-GAN")
     if hasattr(config.training, 'use_adaptive_loss_weights'):
         logger.info(f"Adaptive loss weights: {config.training.use_adaptive_loss_weights}")
     if hasattr(config.training, 'use_label_smoothing'):

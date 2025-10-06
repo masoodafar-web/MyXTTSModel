@@ -16,7 +16,7 @@ import logging
 from dataclasses import dataclass
 
 from ..models.xtts import XTTS
-from ..models.vocoder import HiFiGANGenerator, VocoderLoss
+from ..models.vocoder import Vocoder, VocoderLoss
 from ..config.config import ModelConfig, TrainingConfig
 from ..utils.audio import AudioProcessor
 
@@ -93,12 +93,11 @@ class TwoStageTrainer:
         # Stage 1: Text-to-Mel model (use autoregressive decoder)
         stage1_config = ModelConfig(**self.model_config.__dict__)
         stage1_config.decoder_strategy = "autoregressive"
-        stage1_config.vocoder_type = "griffin_lim"  # No vocoder in stage 1
         
         self.stage1_model = XTTS(stage1_config, name="stage1_xtts")
         
-        # Stage 2: Vocoder model
-        self.vocoder = HiFiGANGenerator(
+        # Stage 2: HiFi-GAN Vocoder model
+        self.vocoder = Vocoder(
             self.model_config,
             upsample_rates=self.model_config.vocoder_upsample_rates,
             upsample_kernel_sizes=self.model_config.vocoder_upsample_kernel_sizes,
@@ -326,7 +325,6 @@ class TwoStageTrainer:
         
         # Create combined model configuration
         combined_config = ModelConfig(**self.model_config.__dict__)
-        combined_config.vocoder_type = "hifigan"
         
         # Create combined model
         combined_model = XTTS(combined_config, name="combined_xtts")

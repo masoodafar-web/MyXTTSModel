@@ -815,8 +815,6 @@ def main():
     # Update configuration with command line arguments
     if args.decoder_strategy:
         config.model.decoder_strategy = args.decoder_strategy
-    if args.vocoder_type:
-        config.model.vocoder_type = args.vocoder_type
         
     # Enhanced voice conditioning settings
     if args.use_pretrained_speaker_encoder:
