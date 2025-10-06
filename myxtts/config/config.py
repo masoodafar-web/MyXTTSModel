@@ -218,9 +218,6 @@ class DataConfig:
     # Data loading extra options
     pin_memory: bool = True
     persistent_workers: bool = True
-
-    # Dataset preprocessing control (default to precompute for GPU optimization)
-    preprocessing_mode: str = "precompute"  # Changed from "auto" - forces cache files for GPU optimization
     
     # Reference audio controls for voice cloning
     reference_audio_length: float = 3.0  # Seconds of reference audio to use for conditioning
@@ -241,11 +238,6 @@ class DataConfig:
             self.noise_mixing_snr_range = [10.0, 30.0]
         if self.supported_languages is None:
             self.supported_languages = ["en", "es", "fr", "de", "it", "pt", "pl", "tr", "ru", "nl", "cs", "ar", "zh", "ja", "hu", "ko"]
-        valid_modes = ["auto", "precompute", "runtime"]
-        if self.preprocessing_mode not in valid_modes:
-            raise ValueError(
-                f"preprocessing_mode must be one of {valid_modes}, got '{self.preprocessing_mode}'"
-            )
 
 
 @dataclass
