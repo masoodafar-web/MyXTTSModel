@@ -3,7 +3,7 @@ Simple, stable loss for emergency debugging.
 
 This module provides a minimal XTTS loss implementation that avoids
 complex smoothing/auxiliary terms to help validate the training loop
-under MirroredStrategy or when diagnosing NaN issues.
+when diagnosing NaN issues.
 """
 
 from typing import Dict, Optional

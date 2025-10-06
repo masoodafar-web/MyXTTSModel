@@ -853,11 +853,7 @@ def build_config(
         use_wandb=False,
         wandb_project="myxtts",
 
-        multi_gpu=False,
-        visible_gpus=None,
-
-        # multi_gpu=True,
-        # visible_gpus="0,1",
+        # Single GPU training only - multi-GPU not supported
         
         # Automatic evaluation parameters for checkpoint quality monitoring
         enable_automatic_evaluation=enable_automatic_evaluation,
@@ -1173,18 +1169,7 @@ def main():
         help="Explicitly disable GPU Stabilizer (default behavior)"
     )
 
-    # Distributed / logging controls
-    parser.add_argument(
-        "--multi-gpu",
-        action="store_true",
-        help="Enable mirrored strategy for multi-GPU training"
-    )
-    parser.add_argument(
-        "--visible-gpus",
-        type=str,
-        default=None,
-        help="Comma separated GPU indices to expose (e.g. 0,1)"
-    )
+    # Logging controls
     parser.add_argument(
         "--tensorboard-log-dir",
         type=str,
@@ -1383,10 +1368,6 @@ def main():
 
     if args.tensorboard_log_dir:
         setattr(config.training, 'tensorboard_log_dir', args.tensorboard_log_dir)
-    if args.multi_gpu:
-        config.training.multi_gpu = True
-    if args.visible_gpus:
-        config.training.visible_gpus = args.visible_gpus
     if args.enable_eager_debug:
         setattr(config.training, 'enable_eager_debug', True)
 
@@ -1459,9 +1440,8 @@ def main():
         sys.exit(1)
     
     gpu_stabilizer_enabled = args.enable_gpu_stabilizer
-    multi_gpu_active = bool(getattr(config.training, 'multi_gpu', False))
     
-    if gpu_stabilizer_enabled and torch.cuda.is_available() and not multi_gpu_active:
+    if gpu_stabilizer_enabled and torch.cuda.is_available():
         logger.info("🚀 Initializing Advanced GPU Stabilizer...")
         try:
             from optimization.advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
@@ -1499,37 +1479,8 @@ def main():
     else:
         if not gpu_stabilizer_enabled:
             logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
-        elif multi_gpu_active:
-            logger.info("🔴 GPU Stabilizer disabled for multi-GPU training")
         elif not torch.cuda.is_available():
             logger.warning("⚠️  CUDA not available, skipping GPU optimization")
-    # if torch.cuda.is_available() and not multi_gpu_active:
-    #     logger.info("🚀 Initializing Advanced GPU Stabilizer...")
-    #     try:
-    #         from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
-    #         gpu_optimizer = create_advanced_gpu_stabilizer(
-    #             max_prefetch_batches=32,
-    #             num_prefetch_threads=12,
-    #             memory_fraction=0.9,
-    #             enable_memory_pinning=True,
-    #             aggressive_mode=True
-    #         )
-    #         logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
-    #     except ImportError:
-    #         from gpu_utilization_optimizer import create_gpu_optimizer
-    #         gpu_optimizer = create_gpu_optimizer(
-    #             device=device,
-    #             max_prefetch_batches=16,
-    #             enable_async_loading=True,
-    #             memory_fraction=0.85
-    #         )
-    #         logger.info("✅ Basic GPU Optimizer ready (fallback)")
-    # else:
-    #     if multi_gpu_active:
-    #         logger.info("Skipping GPU stabilizer for multi-GPU training")
-    #     elif not torch.cuda.is_available():
-    #         logger.warning("⚠️  CUDA not available, skipping GPU optimization")
-
     # Instantiate model and trainer (optionally resume)
     resume_ckpt: Optional[str] = None
     if args.resume:

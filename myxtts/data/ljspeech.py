@@ -1441,10 +1441,8 @@ class LJSpeechDataset:
             
             if use_enhanced_prefetch and bool(getattr(self.config, 'prefetch_to_gpu', True)):
                 gpus = tf.config.list_logical_devices('GPU')
-                # Under multi-GPU (MirroredStrategy), avoid pinning prefetch to GPU:0.
-                # Let the distribution strategy handle input placement.
-                multi_gpu = len(gpus) > 1
-                if gpus and len(gpus) > 0 and not multi_gpu:
+                # Single GPU training only - pin prefetch to GPU:0
+                if gpus and len(gpus) > 0:
                     gpu_device = '/GPU:0'
                     
                     # Intelligent buffer sizing based on hardware and auto-tuning

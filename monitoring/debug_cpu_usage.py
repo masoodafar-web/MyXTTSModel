@@ -142,8 +142,8 @@ def test_model_device_placement():
     print("\n=== Testing Model Device Placement ===")
     
     try:
-        # Setup strategy
-        strategy = setup_gpu_strategy(enable_multi_gpu=False)
+        # Setup strategy (single GPU only)
+        strategy = setup_gpu_strategy()
         print(f"Strategy: {type(strategy).__name__}")
         
         # Create model within strategy scope

@@ -113,7 +113,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         # Use a generous cap so inference up to ~2k frames is unaffected.
         max_seq_len = tf.constant(2048, dtype=tf.int32)
 
-        # Condition evaluates inside the TF graph (works with AutoGraph/MirroredStrategy)
+        # Condition evaluates inside the TF graph (works with AutoGraph)
         truncate_condition = tf.logical_or(
             q_seq_len > max_seq_len,
             k_seq_len > max_seq_len

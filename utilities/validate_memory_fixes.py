@@ -136,10 +136,10 @@ def test_gpu_utils():
         params = list(sig.parameters.keys())
         assert 'memory_limit' in params, "configure_gpus missing memory_limit parameter"
         
-        # Check setup_gpu_strategy has enable_multi_gpu parameter  
+        # Check setup_gpu_strategy has no parameters (single GPU only)
         sig = inspect.signature(setup_gpu_strategy)
         params = list(sig.parameters.keys())
-        assert 'enable_multi_gpu' in params, "setup_gpu_strategy missing enable_multi_gpu parameter"
+        assert len(params) == 0, "setup_gpu_strategy should have no parameters (single GPU only)"
         
         print("✓ GPU utility functions test passed")
         return True
