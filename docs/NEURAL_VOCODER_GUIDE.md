@@ -1,11 +1,11 @@
-# Neural Vocoder and Modern Decoding Usage Guide
+# HiFi-GAN Vocoder and Modern Decoding Usage Guide
 
-This guide demonstrates how to use the new neural vocoder and modern decoding strategies in MyXTTSModel.
+This guide demonstrates how to use the HiFi-GAN vocoder and modern decoding strategies in MyXTTSModel.
 
 ## Key Features
 
-### 1. Neural Vocoder (HiFi-GAN)
-Replaces Griffin-Lim with a neural vocoder for dramatically improved audio quality.
+### 1. HiFi-GAN Vocoder
+High-quality neural vocoder for mel spectrogram to audio conversion with dramatically improved audio quality.
 
 ### 2. Non-Autoregressive Decoder
 FastSpeech-style parallel mel generation for faster inference.
@@ -15,22 +15,21 @@ Separate training for mel generation and audio synthesis.
 
 ## Quick Start
 
-### Basic Usage with Neural Vocoder
+### Basic Usage with HiFi-GAN Vocoder
 
 ```python
 from myxtts.config.config import ModelConfig
 from myxtts.models.xtts import XTTS
 import tensorflow as tf
 
-# Configure model with HiFi-GAN vocoder
+# Configure model (HiFi-GAN vocoder is used by default)
 config = ModelConfig()
-config.vocoder_type = "hifigan"  # Use neural vocoder
 config.decoder_strategy = "autoregressive"  # Use autoregressive decoder
 
 # Create model
 model = XTTS(config)
 
-# Generate text-to-speech with neural vocoder
+# Generate text-to-speech with HiFi-GAN vocoder
 text_inputs = tf.constant([[1, 2, 3, 4, 5]], dtype=tf.int32)
 outputs = model.generate(
     text_inputs,
@@ -48,7 +47,6 @@ generated_audio = outputs["audio_output"]  # [batch, audio_length, 1]
 # Configure for non-autoregressive decoding
 config = ModelConfig()
 config.decoder_strategy = "non_autoregressive"  # FastSpeech-style
-config.vocoder_type = "hifigan"
 
 model = XTTS(config)
 
@@ -96,10 +94,7 @@ combined_model = trainer.create_combined_model()
 ```python
 config = ModelConfig()
 
-# Vocoder type
-config.vocoder_type = "hifigan"  # or "griffin_lim" for fallback
-
-# HiFi-GAN parameters
+# HiFi-GAN vocoder parameters (optional, defaults are set)
 config.vocoder_upsample_rates = [8, 8, 2, 2]
 config.vocoder_upsample_kernel_sizes = [16, 16, 4, 4]
 config.vocoder_resblock_kernel_sizes = [3, 7, 11]
@@ -125,7 +120,7 @@ config.decoder_heads = 24   # More attention heads
 
 ```python
 from myxtts.utils.audio import AudioProcessor
-from myxtts.models.vocoder import HiFiGANGenerator
+from myxtts.models.vocoder import Vocoder
 import numpy as np
 
 # Initialize audio processor
@@ -135,20 +130,20 @@ processor = AudioProcessor(
     hop_length=256
 )
 
-# Create neural vocoder
+# Create HiFi-GAN vocoder
 config = ModelConfig()
-vocoder = HiFiGANGenerator(config)
+vocoder = Vocoder(config)
 
-# Convert mel to audio with neural vocoder
+# Convert mel to audio with HiFi-GAN vocoder
 mel_spectrogram = np.random.randn(80, 100)  # Example mel
 audio = processor.mel_to_wav_neural(mel_spectrogram, vocoder)
 ```
 
-## Performance Comparison
+## Performance
 
-### Quality Improvements
-- **Neural Vocoder vs Griffin-Lim**: ~40% improvement in audio quality metrics
-- **Cleaner output**: Reduced artifacts and smoother audio
+### Quality
+- **High-quality output**: HiFi-GAN produces natural and clear audio
+- **Clean synthesis**: Reduced artifacts and smoother audio
 - **Better high frequencies**: Improved clarity and naturalness
 
 ### Speed Improvements
@@ -172,17 +167,11 @@ stage2_history = trainer.train_stage2(vocoder_dataset)
 
 ### 2. Inference Strategy
 ```python
-# For highest quality: Autoregressive + HiFi-GAN
+# For highest quality: Autoregressive decoder
 config.decoder_strategy = "autoregressive"
-config.vocoder_type = "hifigan"
 
-# For fastest inference: Non-autoregressive + HiFi-GAN
+# For fastest inference: Non-autoregressive decoder
 config.decoder_strategy = "non_autoregressive"
-config.vocoder_type = "hifigan"
-
-# For compatibility: Autoregressive + Griffin-Lim
-config.decoder_strategy = "autoregressive"
-config.vocoder_type = "griffin_lim"
 ```
 
 ### 3. Memory Optimization
@@ -213,7 +202,6 @@ config.enable_mixed_precision = True  # In training config
 ```yaml
 # config_hq.yaml
 decoder_strategy: "autoregressive"
-vocoder_type: "hifigan"
 decoder_dim: 1536
 decoder_layers: 16
 decoder_heads: 24
@@ -224,19 +212,8 @@ vocoder_initial_channel: 512
 ```yaml
 # config_fast.yaml
 decoder_strategy: "non_autoregressive"
-vocoder_type: "hifigan"
 decoder_dim: 1024
 decoder_layers: 12
 decoder_heads: 16
 vocoder_initial_channel: 256
-```
-
-### Compatibility Configuration
-```yaml
-# config_compat.yaml
-decoder_strategy: "autoregressive"
-vocoder_type: "griffin_lim"
-decoder_dim: 1024
-decoder_layers: 12
-decoder_heads: 16
 ```
