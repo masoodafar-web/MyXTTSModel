@@ -11,7 +11,6 @@ BATCH_SIZE=4
 EPOCHS=1
 MODEL_SIZE="tiny"
 OPTIMIZATION_LEVEL="basic"
-ENABLE_GPU_STABILIZER=0
 CUDA_DEVICES="0"
 
 # Function to show usage
@@ -20,8 +19,6 @@ show_usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
     echo "Options:"
-    echo "  --enable-gpu-stabilizer    Enable GPU Stabilizer (default: disabled)"
-    echo "  --disable-gpu-stabilizer   Disable GPU Stabilizer (default)"
     echo "  --batch-size SIZE          Batch size (default: 4)"
     echo "  --epochs NUM               Number of epochs (default: 1)"
     echo "  --model-size SIZE          Model size: tiny, small, normal, big (default: tiny)"
@@ -31,8 +28,7 @@ show_usage() {
     echo "  --help, -h                 Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                                    # Basic training without GPU stabilizer"
-    echo "  $0 --enable-gpu-stabilizer           # Training with GPU stabilizer enabled"
+    echo "  $0                                    # Basic training"
     echo "  $0 --batch-size 8 --model-size small # Larger batch and model"
     echo "  $0 --optimization enhanced            # Enhanced optimization"
     echo ""
@@ -42,14 +38,6 @@ show_usage() {
 RESET_TRAINING=""
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --enable-gpu-stabilizer)
-            ENABLE_GPU_STABILIZER=1
-            shift
-            ;;
-        --disable-gpu-stabilizer)
-            ENABLE_GPU_STABILIZER=0
-            shift
-            ;;
         --batch-size)
             BATCH_SIZE="$2"
             shift 2
@@ -89,7 +77,6 @@ done
 # Display configuration
 echo ""
 echo "📋 Training Configuration:"
-echo "  GPU Stabilizer: $([ $ENABLE_GPU_STABILIZER -eq 1 ] && echo 'ENABLED' || echo 'DISABLED')"
 echo "  Batch Size: $BATCH_SIZE"
 echo "  Epochs: $EPOCHS"
 echo "  Model Size: $MODEL_SIZE"
@@ -110,19 +97,9 @@ fi
 export MYXTTS_SIMPLE_LOSS=1
 export CUDA_VISIBLE_DEVICES=$CUDA_DEVICES
 
-# Prepare GPU stabilizer argument  
-GPU_STABILIZER_ARG=""
-if [ $ENABLE_GPU_STABILIZER -eq 1 ]; then
-    GPU_STABILIZER_ARG="--enable-gpu-stabilizer"
-fi
-
 # Start training
 echo ""
-if [ $ENABLE_GPU_STABILIZER -eq 1 ]; then
-    echo "🚀 Starting training with GPU Stabilizer enabled..."
-else
-    echo "🚀 Starting training with GPU Stabilizer disabled..."
-fi
+echo "🚀 Starting training..."
 echo ""
 
 python3 train_main.py \
@@ -131,7 +108,6 @@ python3 train_main.py \
     --epochs $EPOCHS \
     --optimization-level $OPTIMIZATION_LEVEL \
     --model-size $MODEL_SIZE \
-    $GPU_STABILIZER_ARG \
     $RESET_TRAINING
 
 echo ""

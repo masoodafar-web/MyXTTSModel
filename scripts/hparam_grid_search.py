@@ -33,7 +33,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BASE_ARGS: List[str] = [
     "--optimization-level", "enhanced",
     "--epochs", "200",
-    "--disable-gpu-stabilizer",
 ]
 
 # Hyper-parameter grid; add/remove keys as needed.
