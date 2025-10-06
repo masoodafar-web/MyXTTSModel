@@ -1,8 +1,8 @@
 """
-Neural vocoder implementations for MyXTTS.
+Neural vocoder implementation for MyXTTS.
 
-This module provides neural vocoder implementations including HiFi-GAN
-for high-quality mel spectrogram to audio conversion.
+This module provides HiFi-GAN vocoder for high-quality mel spectrogram 
+to audio conversion.
 """
 
 import tensorflow as tf
@@ -11,9 +11,9 @@ from typing import Dict, List, Optional, Tuple
 from ..config.config import ModelConfig
 
 
-class HiFiGANGenerator(tf.keras.layers.Layer):
+class Vocoder(tf.keras.layers.Layer):
     """
-    HiFi-GAN Generator for high-quality mel-to-audio synthesis.
+    HiFi-GAN vocoder for high-quality mel-to-audio synthesis.
     
     Based on "HiFi-GAN: Generative Adversarial Networks for Efficient and High Fidelity Speech Synthesis"
     https://arxiv.org/abs/2010.05909
@@ -22,15 +22,15 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
     def __init__(
         self,
         config: ModelConfig,
-        upsample_rates: List[int] = [8, 8, 2, 2],
-        upsample_kernel_sizes: List[int] = [16, 16, 4, 4],
-        resblock_kernel_sizes: List[int] = [3, 7, 11],
-        resblock_dilation_sizes: List[List[int]] = [[1, 3, 5], [1, 3, 5], [1, 3, 5]],
-        initial_channel: int = 512,
-        name: str = "hifigan_generator"
+        upsample_rates: List[int] = None,
+        upsample_kernel_sizes: List[int] = None,
+        resblock_kernel_sizes: List[int] = None,
+        resblock_dilation_sizes: List[List[int]] = None,
+        initial_channel: int = None,
+        name: str = "vocoder"
     ):
         """
-        Initialize HiFi-GAN generator.
+        Initialize HiFi-GAN vocoder.
         
         Args:
             config: Model configuration
@@ -44,15 +44,19 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
         super().__init__(name=name)
         
         self.config = config
-        self.upsample_rates = upsample_rates
-        self.upsample_kernel_sizes = upsample_kernel_sizes
-        self.resblock_kernel_sizes = resblock_kernel_sizes
-        self.resblock_dilation_sizes = resblock_dilation_sizes
-        self.initial_channel = initial_channel
+        
+        # Use config values if not provided
+        self.upsample_rates = upsample_rates or getattr(config, 'vocoder_upsample_rates', [8, 8, 2, 2])
+        self.upsample_kernel_sizes = upsample_kernel_sizes or getattr(config, 'vocoder_upsample_kernel_sizes', [16, 16, 4, 4])
+        self.resblock_kernel_sizes = resblock_kernel_sizes or getattr(config, 'vocoder_resblock_kernel_sizes', [3, 7, 11])
+        self.resblock_dilation_sizes = resblock_dilation_sizes or getattr(config, 'vocoder_resblock_dilation_sizes', [[1, 3, 5], [1, 3, 5], [1, 3, 5]])
+        self.initial_channel = initial_channel or getattr(config, 'vocoder_initial_channel', 512)
+        
+        self._weights_initialized = False
         
         # Pre-convolution
         self.pre_conv = tf.keras.layers.Conv1D(
-            initial_channel,
+            self.initial_channel,
             kernel_size=7,
             strides=1,
             padding='same',
@@ -63,8 +67,8 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
         self.upsampling_layers = []
         self.resblocks = []
         
-        channels = initial_channel
-        for i, (rate, kernel_size) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
+        channels = self.initial_channel
+        for i, (rate, kernel_size) in enumerate(zip(self.upsample_rates, self.upsample_kernel_sizes)):
             # Upsampling layer
             channels = channels // 2
             upsample_layer = tf.keras.layers.Conv1DTranspose(
@@ -78,7 +82,7 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
             
             # Residual blocks for this upsampling layer
             layer_resblocks = []
-            for j, (res_kernel_size, dilations) in enumerate(zip(resblock_kernel_sizes, resblock_dilation_sizes)):
+            for j, (res_kernel_size, dilations) in enumerate(zip(self.resblock_kernel_sizes, self.resblock_dilation_sizes)):
                 resblock = ResidualBlock(
                     channels,
                     res_kernel_size,
@@ -101,6 +105,14 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
         # LeakyReLU activation
         self.activation = tf.keras.layers.LeakyReLU(0.1)
     
+    def mark_weights_loaded(self):
+        """Mark that vocoder weights have been loaded from checkpoint."""
+        self._weights_initialized = True
+    
+    def check_weights_initialized(self) -> bool:
+        """Check if vocoder weights are properly initialized."""
+        return self._weights_initialized
+    
     def call(self, mel: tf.Tensor, training: bool = False) -> tf.Tensor:
         """
         Forward pass.
@@ -112,6 +124,16 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
         Returns:
             Audio waveform [batch, time * hop_length, 1]
         """
+        # Warn if vocoder weights may not be initialized
+        if not training and not self._weights_initialized:
+            import logging
+            logger = logging.getLogger("MyXTTS.Vocoder")
+            logger.warning(
+                "⚠️ HiFi-GAN vocoder weights may not be properly initialized! "
+                "This will produce noise instead of speech. "
+                "Make sure to load a trained checkpoint with vocoder weights."
+            )
+        
         # Pre-convolution
         x = self.pre_conv(mel)
         x = self.activation(x)
@@ -132,6 +154,18 @@ class HiFiGANGenerator(tf.keras.layers.Layer):
         
         # Post-convolution
         audio = self.post_conv(x)
+        
+        # Validate output is not all zeros or NaNs
+        if not training:
+            # Check for problematic output
+            audio_mean = tf.reduce_mean(tf.abs(audio))
+            if tf.math.is_nan(audio_mean) or audio_mean < 1e-8:
+                import logging
+                logger = logging.getLogger("MyXTTS.Vocoder")
+                logger.error(
+                    "❌ Vocoder produced invalid output (NaN or near-zero). "
+                    "This indicates the vocoder is not properly trained."
+                )
         
         return audio
 
@@ -196,102 +230,10 @@ class ResidualBlock(tf.keras.layers.Layer):
         return x + residual
 
 
-class VocoderInterface(tf.keras.layers.Layer):
-    """
-    Interface for different vocoder implementations.
-    
-    Provides a unified interface for switching between different vocoders
-    (Griffin-Lim, HiFi-GAN, BigVGAN, etc.)
-    """
-    
-    def __init__(
-        self,
-        config: ModelConfig,
-        vocoder_type: str = "hifigan",
-        name: str = "vocoder"
-    ):
-        """
-        Initialize vocoder interface.
-        
-        Args:
-            config: Model configuration
-            vocoder_type: Type of vocoder ("griffin_lim", "hifigan")
-            name: Layer name
-        """
-        super().__init__(name=name)
-        
-        self.config = config
-        self.vocoder_type = vocoder_type
-        self._weights_initialized = False
-        
-        # Initialize appropriate vocoder
-        if vocoder_type == "hifigan":
-            self.vocoder = HiFiGANGenerator(config)
-        elif vocoder_type == "griffin_lim":
-            # Keep Griffin-Lim as fallback for backward compatibility
-            self.vocoder = None  # Will use AudioProcessor method
-            self._weights_initialized = True  # Griffin-Lim doesn't need weights
-        else:
-            raise ValueError(f"Unsupported vocoder type: {vocoder_type}")
-    
-    def mark_weights_loaded(self):
-        """Mark that vocoder weights have been loaded from checkpoint."""
-        self._weights_initialized = True
-    
-    def check_weights_initialized(self) -> bool:
-        """Check if vocoder weights are properly initialized."""
-        return self._weights_initialized
-    
-    def call(
-        self,
-        mel: tf.Tensor,
-        training: bool = False
-    ) -> tf.Tensor:
-        """
-        Convert mel spectrogram to audio.
-        
-        Args:
-            mel: Mel spectrogram [batch, time, n_mels]
-            training: Training mode flag
-            
-        Returns:
-            Audio waveform [batch, audio_length, 1]
-        """
-        # Warn if vocoder weights may not be initialized
-        if not training and self.vocoder_type == "hifigan" and not self._weights_initialized:
-            import logging
-            logger = logging.getLogger("MyXTTS.Vocoder")
-            logger.warning(
-                "⚠️ HiFi-GAN vocoder weights may not be properly initialized! "
-                "This will produce noise instead of speech. "
-                "Make sure to load a trained checkpoint with vocoder weights."
-            )
-        
-        if self.vocoder_type == "hifigan":
-            audio = self.vocoder(mel, training=training)
-            
-            # Validate output is not all zeros or NaNs
-            if not training:
-                # Check for problematic output
-                audio_mean = tf.reduce_mean(tf.abs(audio))
-                if tf.math.is_nan(audio_mean) or audio_mean < 1e-8:
-                    import logging
-                    logger = logging.getLogger("MyXTTS.Vocoder")
-                    logger.error(
-                        "❌ Vocoder produced invalid output (NaN or near-zero). "
-                        "This indicates the vocoder is not properly trained. "
-                        "Falling back to returning mel spectrogram for Griffin-Lim conversion."
-                    )
-                    # Return mel for fallback processing
-                    return mel
-            
-            return audio
-        elif self.vocoder_type == "griffin_lim":
-            # For Griffin-Lim, we'll need to handle this in audio processor
-            # This is a placeholder - actual Griffin-Lim conversion happens in post-processing
-            return mel  # Return mel for now, will be converted later
-        else:
-            raise ValueError(f"Unsupported vocoder type: {self.vocoder_type}")
+# Backward compatibility aliases
+HiFiGANGenerator = Vocoder
+VocoderInterface = Vocoder
+
 
 
 class VocoderLoss(tf.keras.layers.Layer):

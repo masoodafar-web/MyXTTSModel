@@ -56,8 +56,7 @@ class ModelConfig:
     diffusion_beta_schedule: str = "cosine"  # "linear" or "cosine"
     enable_diffusion_inference: bool = True  # Enable diffusion during inference
     
-    # Neural vocoder settings
-    vocoder_type: str = "hifigan"  # "hifigan", "bigvgan", "griffin_lim" (fallback)
+    # HiFi-GAN vocoder settings
     vocoder_upsample_rates: List[int] = None  # Will be set in __post_init__
     vocoder_upsample_kernel_sizes: List[int] = None  # Will be set in __post_init__
     vocoder_resblock_kernel_sizes: List[int] = None  # Will be set in __post_init__
