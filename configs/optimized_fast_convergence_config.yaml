@@ -84,7 +84,6 @@ data:
   max_mel_frames: 800
   max_text_length: 180
   pad_to_multiple: 8
-  preprocessing_mode: precompute
   enable_memory_mapping: true
   cache_verification: true
   pin_memory: true

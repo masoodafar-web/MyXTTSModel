@@ -23,7 +23,6 @@ data:
   pin_memory: true
   prefetch_buffer_size: 12
   prefetch_to_gpu: true
-  preprocessing_mode: precompute
   sample_rate: 22050
   shuffle_buffer_multiplier: 20
   subset_seed: 42

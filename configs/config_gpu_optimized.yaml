@@ -63,5 +63,3 @@ data:
   mixed_precision: true              # Enable mixed precision for memory efficiency
   pin_memory: true                   # Pin memory for faster GPU transfer
   
-  # Dataset preprocessing control
-  preprocessing_mode: auto           # "auto", "precompute", "runtime"

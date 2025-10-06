@@ -112,7 +112,6 @@ data:
   max_text_length: 180
   pad_to_multiple: 8
   sort_by_length: true
-  preprocessing_mode: precompute
   enable_memory_mapping: true
   cache_verification: true
   enable_data_validation: true

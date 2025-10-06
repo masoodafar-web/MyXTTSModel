@@ -40,7 +40,6 @@ data:
   prefetch_buffer_size: 24
   prefetch_factor: 4
   preload_data: true
-  preprocessing_mode: precompute
   sample_rate: 22050
   shuffle_buffer_multiplier: 36
   win_length: 1024
