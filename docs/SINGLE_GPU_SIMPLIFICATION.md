@@ -51,7 +51,6 @@ This document describes the removal of all multi-GPU and MirroredStrategy suppor
 
 - **Simplified Code**:
   - Removed multi_gpu configuration setting
-  - Removed multi_gpu checks for GPU stabilizer
   - Cleaned up commented multi-GPU code blocks
 
 ### Documentation Changes
@@ -98,9 +97,6 @@ Training is now straightforward with automatic GPU detection:
 ```bash
 # Train on GPU (if available) or CPU
 python train_main.py --config configs/config.yaml
-
-# Enable GPU stabilizer for better utilization
-python train_main.py --enable-gpu-stabilizer
 ```
 
 The system will automatically:

@@ -73,9 +73,8 @@ python3 scripts/quick_param_test.py --plateau-fix
 python3 scripts/quick_param_test.py --gpu-optimize
 ```
 **برای زمانی که**:
-- GPU utilization پایینه
+- میخواید تنظیمات GPU بهینه کنید
 - میخواید سرعت training افزایش پیدا کنه
-- GPU Stabilizer تست کنید
 
 ### 💾 **Memory Safe** (8 دقیقه)
 ```bash
@@ -164,7 +163,7 @@ python3 train_main.py --optimization-level plateau_breaker --batch-size 24 --lr 
 python3 scripts/quick_param_test.py --gpu-optimize
 
 # نتیجه احتمالی  
-python3 train_main.py --enable-gpu-stabilizer --optimization-level enhanced --batch-size 32
+python3 train_main.py --optimization-level enhanced --batch-size 32
 ```
 
 ### **مشکل: Out of Memory**
@@ -182,7 +181,7 @@ python3 train_main.py --model-size tiny --batch-size 4 --optimization-level basi
 python3 utilities/benchmark_hyperparameters.py --quick-test
 
 # نتیجه احتمالی
-python3 train_main.py --model-size normal --optimization-level enhanced --enable-gpu-stabilizer
+python3 train_main.py --model-size normal --optimization-level enhanced
 ```
 
 ## 📝 Step-by-Step Workflow
@@ -251,7 +250,6 @@ Model Size: normal
 Optimization Level: enhanced  
 Learning Rate: 2e-5 to 5e-5
 Batch Size: 32-48
-GPU Stabilizer: enabled
 Expected Loss: 2.0-2.3
 Expected Speed: 25-35 sps
 Expected GPU Usage: 85-95%
@@ -263,7 +261,6 @@ Model Size: small
 Optimization Level: enhanced
 Learning Rate: 2e-5 to 3e-5  
 Batch Size: 16-24
-GPU Stabilizer: enabled
 Expected Loss: 2.2-2.5
 Expected Speed: 20-30 sps
 Expected GPU Usage: 80-90%

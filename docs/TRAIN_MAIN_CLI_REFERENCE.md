@@ -83,8 +83,6 @@ are optional; defaults appear in parentheses.
 ## Logging & Diagnostics
 - `--simple-loss`
   - Replace the full loss with a minimal stabilised loss (debug only).
-- `--enable-gpu-stabilizer` / `--disable-gpu-stabilizer`
-  - Force usage of the Advanced GPU stabiliser (default disabled).
 - `--multi-gpu`
   - Enable `tf.distribute.MirroredStrategy` and multi-GPU support.
 - `--visible-gpus STRING`
