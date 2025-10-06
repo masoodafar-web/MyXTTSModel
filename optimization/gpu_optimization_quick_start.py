@@ -34,19 +34,16 @@ def main():
     print()
     
     print("Option 2: Use command line with optimizations (recommended)")
-    print("   python trainTestFile.py --mode train \\")
-    print("       --preprocessing-mode precompute \\")
+    print("   python train_main.py --train-data ./data/ljspeech \\")
     print("       --batch-size 48 \\")
     print("       --num-workers 16 \\")
     print("       --prefetch-buffer-size 12")
     print()
     
     print("Option 3: Create custom GPU-optimized config")
-    print("   python trainTestFile.py --mode create-config \\")
-    print("       --output my_gpu_config.yaml \\")
+    print("   python train_main.py --train-data ./data/ljspeech \\")
     print("       --batch-size 48 \\") 
-    print("       --num-workers 16 \\")
-    print("       --preprocessing-mode precompute")
+    print("       --num-workers 16")
     print()
     
     print("🔧 TESTING & VALIDATION:")
@@ -68,9 +65,9 @@ def main():
     print()
     
     print("🛠️ TROUBLESHOOTING:")
-    print("   • Low GPU utilization? Use --preprocessing-mode precompute")
+    print("   • Low GPU utilization? Increase --batch-size and --num-workers")
     print("   • Memory errors? Reduce --batch-size or --max-mel-frames")
-    print("   • Python errors? Disable TF-native: --disable-tf-native-loading")
+    print("   • Data loading issues? Verify WAV files and CSV metadata are valid")
     print()
     
     print("📚 DETAILED DOCUMENTATION:")

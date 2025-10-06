@@ -31,7 +31,7 @@ Use the timeline as a compass; the sections below expand each arrow into concret
 ## Stage 0 – Dataset Files on Disk
 - **Where:** `data/` (custom) or the standard LJSpeech folder; metadata in `metadata_train.csv`, `metadata_eval.csv`.
 - **Metadata columns:** sample identifier, relative wav path, raw transcription, normalized transcription, optional duration.
-- **Audio format expectation:** mono 22.05 kHz WAV; MyXTTS converts any other sample rate during preprocessing.
+- **Audio format expectation:** mono 22.05 kHz WAV; MyXTTS converts any other sample rate on-the-fly during training.
 - **Text encoding:** ASCII/UTF-8; later normalised via cleaner list in `DataConfig.text_cleaners` (defaults: `english_cleaners`).
 
 ---
@@ -48,26 +48,25 @@ Use the timeline as a compass; the sections below expand each arrow into concret
 
 ---
 
-## Stage 2 – Heavy-Lifting Precomputation
-**Key methods:** `precompute_mels`, `precompute_tokens`, `verify_and_fix_cache`, `filter_items_by_cache`
+## Stage 2 – On-the-Fly Processing (No Preprocessing)
+**Key methods:** `_load_sample`, `_load_tokens_optimized`
 
-- Triggered from `XTTSTrainer.prepare_datasets` depending on `DataConfig.preprocessing_mode` (`precompute`, `runtime`, or `auto`).
-- For mel caches: each item loads the wav, normalizes if requested, converts to mel via `AudioProcessor.wav_to_mel` and stores `float32[time, 80]` at `processed/mels_*/<sample-id>.npy`.
-- For token caches: `TextProcessor.text_to_sequence` generates `int` ids saved at `processed/tokens_*/<sample-id>.npy`.
-- `verify_and_fix_cache` catches corrupt files, automatically re-generating them.
-- `filter_items_by_cache` removes rows that lack valid cached data, preventing runtime failures.
+- All data processing is now done on-the-fly during training (no preprocessing or caching to disk).
+- For mel spectrograms: each item loads the wav, normalizes if requested, converts to mel via `AudioProcessor.wav_to_mel` in real-time.
+- For tokens: `TextProcessor.text_to_sequence` generates token ids on-demand with in-memory caching only.
+- No disk caching or preprocessing steps are required - training works directly with raw WAV + CSV files.
 
-**Outputs of Stage 2:** matched `.npy` files for tokens/mels, along with curated lists of valid sample indices.
+**Outputs of Stage 2:** In-memory processed samples ready for training batches.
 
 ---
 
 ## Stage 3 – Building the `tf.data` Pipeline
-**Function:** `LJSpeechDataset.create_tf_dataset` (`myxtts/data/ljspeech.py:769`)
+**Function:** `LJSpeechDataset.create_tf_dataset` (`myxtts/data/ljspeech.py`)
 
-1. **Source tensors:** `tf.data.Dataset.from_tensor_slices` pairs token paths, mel paths, optional audio paths, normalised text.
+1. **Source tensors:** `tf.data.Dataset.from_tensor_slices` creates dataset from sample indices.
 2. **Shuffle early:** buffer size uses `batch_size * buffer_size_multiplier` (with caps) for better randomness.
-3. **Parallel map:** `_load_from_cache_optimized` uses `tf.numpy_function` to load `.npy` files concurrently (`num_parallel_calls=tf.data.AUTOTUNE`). Shapes are explicitly set to keep graph tracing stable.
-4. **Length capping:** `_cap_lengths` enforces `DataConfig.max_mel_frames` if present.
+3. **Parallel map:** `_load_sample_tf` uses `tf.numpy_function` to load and process samples on-the-fly concurrently (`num_parallel_calls=tf.data.AUTOTUNE`). Shapes are explicitly set to keep graph tracing stable.
+4. **Length capping:** Applied during sample loading to enforce `DataConfig.max_mel_frames` and `max_text_tokens` if present.
 5. **Filtering:** `dataset.filter` removes zero-length sequences early.
 6. **Padding + batching:** `padded_batch` yields `[B, Tmax_txt]`, `[B, Tmax_mel, 80]`, `[B]`, `[B]`.
 7. **Repeat & prefetch:** controlled by `repeat`, `prefetch_buffer_size`, and optional `tf.data.experimental.prefetch_to_device('/GPU:0', buffer_size=...)` when `prefetch_to_gpu=True`.
@@ -219,11 +218,11 @@ If `ModelConfig.use_voice_conditioning=False`, this entire stage is skipped and 
 ---
 
 ## Debug Checklist (Quick Reminders)
-- **Cache integrity:** run `precompute_*` and check `verify_and_fix_cache` before long runs.
+- **Data loading:** all processing is on-the-fly; ensure WAV files and CSV metadata are valid and accessible.
 - **Shape mismatches:** compare dataset output shapes with `ModelConfig.n_mels`, `max_text_length`, `max_attention_sequence_length`.
 - **Voice conditioning:** either supply `audio_conditioning` every batch or set `use_voice_conditioning=False`.
 - **OOM mitigation:** tighten `max_mel_frames`, reduce batch size, or bump `gradient_accumulation_steps`.
-- **Gradient spikes:** watch `gradient_norm` metric; if it explodes, inspect latest batches for very long sequences or corrupted mel files.
+- **Gradient spikes:** watch `gradient_norm` metric; if it explodes, inspect latest batches for very long sequences or corrupted audio files.
 
 ---
 

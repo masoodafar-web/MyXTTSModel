@@ -134,17 +134,16 @@ class LJSpeechDataset:
         # Set metadata file path and wav directory based on subset and configuration
         self.metadata_file, self.wavs_dir = self._get_metadata_and_wavs_path(subset)
         
-        # Processed data paths
+        # Processed data paths (only for splits and symbol map)
         self.processed_dir = self.data_path / "processed"
         self.splits_file = self.processed_dir / "splits.json"
-        # Mel cache directory (depends on audio settings to avoid mismatch)
-        self.mel_cache_dir = self.processed_dir / f"mels_sr{self.config.sample_rate}_n{self.audio_processor.n_mels}_hop{self.audio_processor.hop_length}"
+        # Symbol map path for phoneme consistency
         tokenizer_tag = 'custom'
         phon_tag = 'ph' if getattr(config, 'use_phonemes', False) else 'noph'
         blank_tag = 'blank' if getattr(config, 'add_blank', True) else 'noblank'
         lang_tag = getattr(config, 'language', 'xx')
-        self.tokens_cache_dir = self.processed_dir / f"tokens_{tokenizer_tag}_{phon_tag}_{blank_tag}_{lang_tag}"
-        self.symbol_map_path = self.tokens_cache_dir / "symbols.json"
+        symbol_dir = self.processed_dir / f"tokens_{tokenizer_tag}_{phon_tag}_{blank_tag}_{lang_tag}"
+        self.symbol_map_path = symbol_dir / "symbols.json"
 
         # Load dataset
         self._prepare_dataset()
@@ -195,9 +194,6 @@ class LJSpeechDataset:
             
             self.splits = self._load_splits()
             self.items = self.splits[self.subset]
-        
-        # Ensure caches reflect current text/audio configuration
-        self._ensure_cache_alignment()
 
         print(f"Loaded {len(self.items)} items for {subset} subset")
 
@@ -212,46 +208,14 @@ class LJSpeechDataset:
             # Fall back to direct save if atomic replace fails
             np.save(path, array)
 
-    def _load_mel_with_mmap(self, cache_path: Path) -> Optional[np.ndarray]:
-        """Load mel spectrogram using memory mapping for faster I/O."""
-        cache_key = str(cache_path)
 
-        with self._cache_lock:
-            # Check if already in memory-mapped cache
-            if cache_key in self._mel_mmap_cache:
-                try:
-                    # Create a copy of the memory-mapped data
-                    return np.array(self._mel_mmap_cache[cache_key])
-                except (ValueError, OSError):
-                    # Memory map might be invalid, remove from cache
-                    del self._mel_mmap_cache[cache_key]
 
-            # Try to create new memory map
-            try:
-                if cache_path.exists() and os.path.getsize(cache_path) > 0:
-                    # Load as memory map for faster access
-                    mmap_array = np.load(cache_path, mmap_mode='r', allow_pickle=False)
-                    if mmap_array.ndim == 2 and mmap_array.shape[1] == self.audio_processor.n_mels:
-                        self._mel_mmap_cache[cache_key] = mmap_array
-                        self.profiler.record_cache_hit()
-                        return np.array(mmap_array)  # Copy to avoid mmap issues
-                    else:
-                        self.profiler.record_cache_error()
-                        return None
-                else:
-                    self.profiler.record_cache_miss()
-                    return None
-            except Exception:
-                self.profiler.record_cache_error()
-                return None
-
-    def _load_tokens_optimized(self, cache_path: Path, text_normalized: str, cache_key: str) -> np.ndarray:
+    def _load_tokens_optimized(self, text_normalized: str, cache_key: str) -> np.ndarray:
         """
-        Load tokens with optimized caching strategy.
+        Load tokens with in-memory caching only (on-the-fly processing).
         
         Args:
-            cache_path: Path to cached tokens
-            text_normalized: Normalized text for fallback tokenization
+            text_normalized: Normalized text for tokenization
             cache_key: Cache key for in-memory storage
             
         Returns:
@@ -263,44 +227,16 @@ class LJSpeechDataset:
                 self.profiler.record_cache_hit()
                 return self._text_cache[cache_key]
             
-            # Try disk cache
-            if cache_path.exists() and os.path.getsize(cache_path) > 0:
-                try:
-                    with self.profiler.profile_operation("token_disk_load"):
-                        text_sequence = np.load(cache_path, allow_pickle=False)
-                        if text_sequence.ndim == 1:
-                            self._text_cache[cache_key] = text_sequence
-                            self.profiler.record_cache_hit()
-                            return text_sequence
-                except Exception:
-                    pass
-            
-            # Fallback to tokenization
+            # Tokenize on-the-fly
             self.profiler.record_cache_miss()
             with self.profiler.profile_operation("tokenization"):
                 text_sequence = self.text_processor.text_to_sequence(text_normalized)
                 text_sequence = np.array(text_sequence, dtype=np.int32)
             
-            # Cache the result
+            # Cache the result in memory only
             self._text_cache[cache_key] = text_sequence
-            try:
-                with self.profiler.profile_operation("token_disk_save"):
-                    self._save_npy_atomic(cache_path, text_sequence)
-            except Exception:
-                pass  # Non-critical if save fails
             
             return text_sequence
-
-    def _alternate_token_cache_dir(self) -> Optional[Path]:
-        """Return the counterpart cache directory for phoneme/non-phoneme tokens."""
-        name = self.tokens_cache_dir.name
-        if "_ph_" in name:
-            alt_name = name.replace("_ph_", "_noph_", 1)
-        elif "_noph_" in name:
-            alt_name = name.replace("_noph_", "_ph_", 1)
-        else:
-            return None
-        return self.tokens_cache_dir.parent / alt_name
 
     def _build_symbol_map(self) -> List[str]:
         """Generate a deterministic phoneme symbol map and persist it."""
@@ -319,7 +255,7 @@ class LJSpeechDataset:
         symbols = list(temp_processor.symbols)
 
         try:
-            self.tokens_cache_dir.mkdir(parents=True, exist_ok=True)
+            self.symbol_map_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self.symbol_map_path, 'w', encoding='utf-8') as f:
                 json.dump(symbols, f, ensure_ascii=False, indent=2)
         except Exception as exc:
@@ -327,256 +263,6 @@ class LJSpeechDataset:
 
         return symbols
 
-    def _ensure_cache_alignment(self) -> None:
-        """Validate caches for the current configuration and refresh when requested."""
-        # Allow pure runtime loading when requested
-        preprocessing_mode = getattr(self.config, 'preprocessing_mode', 'precompute')
-        if preprocessing_mode == 'runtime':
-            return
-
-        try:
-            self.tokens_cache_dir.mkdir(parents=True, exist_ok=True)
-            self.mel_cache_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
-
-        token_cache_files = next(self.tokens_cache_dir.glob("*.npy"), None)
-        if token_cache_files is None:
-            alt_dir = self._alternate_token_cache_dir()
-            if alt_dir and alt_dir.exists() and next(alt_dir.glob("*.npy"), None) is not None:
-                print(
-                    f"[Cache Notice] Token cache '{self.tokens_cache_dir.name}' is empty while '{alt_dir.name}' has files. "
-                    "use_phonemes probably changed; rebuilding tokens for the new setting."
-                )
-            if getattr(self.config, 'auto_rebuild_token_cache', True):
-                self.precompute_tokens(overwrite=False)
-            else:
-                print(
-                    f"[Cache Notice] Token cache '{self.tokens_cache_dir}' is empty. "
-                    "Run dataset.precompute_tokens() or remove stale caches to avoid on-the-fly recomputation."
-                )
-
-        mel_cache_files = next(self.mel_cache_dir.glob("*.npy"), None)
-        if mel_cache_files is None:
-            if getattr(self.config, 'auto_rebuild_mel_cache', False):
-                print(f"[Cache Notice] Mel cache '{self.mel_cache_dir}' is empty; rebuilding now.")
-                self.precompute_mels(overwrite=False)
-            else:
-                print(
-                    f"[Cache Notice] Mel cache '{self.mel_cache_dir}' is empty. "
-                    "Use dataset.precompute_mels() to avoid runtime cache misses."
-                )
-
-    def precompute_mels(self, num_workers: int = 1, overwrite: bool = False) -> None:
-        """Precompute and cache mel spectrograms to disk to remove CPU bottleneck.
-
-        Creates numpy files in `processed/mels_.../ID.npy` where each file is
-        shaped [time, n_mels]. Subsequent loads reuse these files.
-
-        Args:
-            num_workers: Placeholder for future parallelism (currently sequential)
-            overwrite: Recompute even if cache file exists
-        """
-        self.mel_cache_dir.mkdir(parents=True, exist_ok=True)
-
-        print(f"Precomputing mel spectrograms to {self.mel_cache_dir} (overwrite={overwrite})...")
-        to_process = []
-        for idx in range(len(self.metadata)):
-            row = self.metadata.iloc[idx]
-            cache_path = self.mel_cache_dir / f"{row['id']}.npy"
-            if overwrite or (not cache_path.exists()):
-                to_process.append((row['id'], row['audio_path']))
-
-        if not to_process:
-            print("All mel spectrograms already cached.")
-            return
-
-        if num_workers and num_workers > 1:
-            # Parallel precompute using thread pool
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            def _worker(sample_id: str, audio_path: str):
-                audio = self.audio_processor.load_audio(audio_path)
-                if self.config.normalize_audio:
-                    audio = self.audio_processor.preprocess_audio(audio)
-                mel = self.audio_processor.wav_to_mel(audio).T
-                self._save_npy_atomic(self.mel_cache_dir / f"{sample_id}.npy", mel)
-
-            errors = 0
-            with ThreadPoolExecutor(max_workers=num_workers) as ex:
-                futures = {ex.submit(_worker, sid, ap): sid for sid, ap in to_process}
-                for fut in tqdm(as_completed(futures), total=len(futures), desc=f"Caching mels [{self.subset}]"):
-                    try:
-                        fut.result()
-                    except Exception as e:
-                        errors += 1
-            if errors:
-                print(f"Completed with {errors} error(s)")
-        else:
-            # Sequential precompute
-            for sample_id, audio_path in tqdm(to_process, desc=f"Caching mels [{self.subset}]"):
-                try:
-                    audio = self.audio_processor.load_audio(audio_path)
-                    if self.config.normalize_audio:
-                        audio = self.audio_processor.preprocess_audio(audio)
-                    mel = self.audio_processor.wav_to_mel(audio).T  # [time, n_mels]
-                    self._save_npy_atomic(self.mel_cache_dir / f"{sample_id}.npy", mel)
-                except Exception as e:
-                    print(f"Failed to cache {sample_id}: {e}")
-
-    def precompute_tokens(self, num_workers: int = 1, overwrite: bool = False) -> None:
-        """Precompute and cache tokenized text sequences to disk.
-
-        Creates numpy files in `processed/tokens_.../ID.npy` containing int32
-        arrays of token IDs.
-
-        Args:
-            num_workers: Number of parallel workers (threads)
-            overwrite: Recompute even if cache file exists
-        """
-        self.tokens_cache_dir.mkdir(parents=True, exist_ok=True)
-
-        to_process = []
-        for idx in range(len(self.metadata)):
-            row = self.metadata.iloc[idx]
-            cache_path = self.tokens_cache_dir / f"{row['id']}.npy"
-            if overwrite or (not cache_path.exists()):
-                text_norm = str(row['normalized_transcription'])
-                to_process.append((row['id'], text_norm))
-
-        if not to_process:
-            return
-
-        def _encode_and_save(sample_id: str, text_norm: str):
-            seq = self.text_processor.text_to_sequence(text_norm)
-            arr = np.array(seq, dtype=np.int32)
-            self._save_npy_atomic(self.tokens_cache_dir / f"{sample_id}.npy", arr)
-
-        if num_workers and num_workers > 1:
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            with ThreadPoolExecutor(max_workers=num_workers) as ex:
-                futures = {ex.submit(_encode_and_save, sid, txt): sid for sid, txt in to_process}
-                for _ in tqdm(as_completed(futures), total=len(futures), desc=f"Caching tokens [{self.subset}]"):
-                    pass
-        else:
-            for sid, txt in tqdm(to_process, desc=f"Caching tokens [{self.subset}]"):
-                try:
-                    _encode_and_save(sid, txt)
-                except Exception as e:
-                    print(f"Failed to cache tokens for {sid}: {e}")
-
-    def verify_and_fix_cache(self, fix: bool = True, max_errors: int = 20) -> Dict[str, int]:
-        """Verify cache files are readable and have valid shapes; optionally fix.
-
-        Args:
-            fix: If True, try to rebuild invalid/missing caches in-place
-            max_errors: Max number of errors to log in detail
-
-        Returns:
-            Dict with counts: {checked, fixed, failed}
-        """
-        if self.use_custom_metadata:
-            indices = list(range(len(self.metadata)))
-        else:
-            indices = list(self.items)
-
-        errors_logged = 0
-        fixed = 0
-        failed = 0
-        for i in indices:
-            row = self.metadata.iloc[i]
-            sid = str(row['id'])
-            tok_path = self.tokens_cache_dir / f"{sid}.npy"
-            mel_path = self.mel_cache_dir / f"{sid}.npy"
-
-            # Verify tokens
-            tokens_ok = False
-            if tok_path.exists() and os.path.getsize(tok_path) > 0:
-                try:
-                    toks = np.load(tok_path, allow_pickle=False)
-                    tokens_ok = toks.ndim == 1
-                except Exception:
-                    tokens_ok = False
-            if not tokens_ok:
-                if fix:
-                    try:
-                        seq = self.text_processor.text_to_sequence(str(row['normalized_transcription']))
-                        arr = np.array(seq, dtype=np.int32)
-                        self._save_npy_atomic(tok_path, arr)
-                        tokens_ok = True
-                        fixed += 1
-                    except Exception as e:
-                        failed += 1
-                        if errors_logged < max_errors:
-                            print(f"Token cache fix failed for {sid}: {e}")
-                            errors_logged += 1
-                else:
-                    failed += 1
-                    if errors_logged < max_errors:
-                        print(f"Invalid token cache: {tok_path}")
-                        errors_logged += 1
-
-            # Verify mels
-            mel_ok = False
-            if mel_path.exists() and os.path.getsize(mel_path) > 0:
-                try:
-                    mel = np.load(mel_path, allow_pickle=False)
-                    mel_ok = mel.ndim == 2 and mel.shape[1] == self.audio_processor.n_mels
-                except Exception:
-                    mel_ok = False
-            if not mel_ok:
-                if fix:
-                    try:
-                        audio = self.audio_processor.load_audio(str(row['audio_path']))
-                        if self.config.normalize_audio:
-                            audio = self.audio_processor.preprocess_audio(audio)
-                        mel = self.audio_processor.wav_to_mel(audio).T
-                        self._save_npy_atomic(mel_path, mel)
-                        mel_ok = True
-                        fixed += 1
-                    except Exception as e:
-                        failed += 1
-                        if errors_logged < max_errors:
-                            print(f"Mel cache fix failed for {sid}: {e}")
-                            errors_logged += 1
-                else:
-                    failed += 1
-                    if errors_logged < max_errors:
-                        print(f"Invalid mel cache: {mel_path}")
-                        errors_logged += 1
-
-        return {"checked": len(indices), "fixed": fixed, "failed": failed}
-
-    def filter_items_by_cache(self) -> int:
-        """Filter dataset items to those with valid cache files.
-
-        Returns:
-            Number of remaining items after filtering
-        """
-        if self.use_custom_metadata:
-            selected_indices = list(range(len(self.metadata)))
-        else:
-            selected_indices = list(self.items)
-
-        valid = []
-        for i in selected_indices:
-            row = self.metadata.iloc[i]
-            sid = str(row['id'])
-            tok_path = self.tokens_cache_dir / f"{sid}.npy"
-            mel_path = self.mel_cache_dir / f"{sid}.npy"
-            if tok_path.exists() and mel_path.exists() and os.path.getsize(tok_path) > 0 and os.path.getsize(mel_path) > 0:
-                valid.append(i)
-
-        if not valid:
-            print("Warning: No valid cached items found; falling back to original selection")
-            return len(selected_indices)
-
-        if self.use_custom_metadata:
-            self._custom_index_map = valid
-        else:
-            self.items = valid
-        return len(valid)
-    
     def _get_metadata_and_wavs_path(self, subset: str) -> Tuple[Path, Path]:
         """
         Get metadata file path and wav directory based on subset and configuration.
@@ -1140,46 +826,27 @@ class LJSpeechDataset:
             # Apply phone-level normalization if enabled
             text_normalized = self._apply_phone_level_normalization(text_normalized, detected_language)
             
-            # Process text with optimized cache loading
+            # Process text with in-memory caching only (on-the-fly processing)
             cache_key = str(row['id'])
-            tokens_cache_path = self.tokens_cache_dir / f"{cache_key}.npy"
             
             with self.profiler.profile_operation("text_processing"):
-                text_sequence = self._load_tokens_optimized(
-                    tokens_cache_path, text_normalized, cache_key
-                )
+                text_sequence = self._load_tokens_optimized(text_normalized, cache_key)
             
             # Get audio path
             audio_path = row['audio_path']
             
-            # Load mel spectrogram with optimized caching
-            mel_cache_path = self.mel_cache_dir / f"{row['id']}.npy"
-            mel_spec = None
-            audio = None
-            
-            with self.profiler.profile_operation("mel_loading"):
-                mel_spec = self._load_mel_with_mmap(mel_cache_path)
-            
-            # Fallback to audio processing if cache miss
-            if mel_spec is None:
-                with self.profiler.profile_operation("mel_computation"):
-                    # Load audio only if needed
-                    audio = self.audio_processor.load_audio(audio_path)
-                    if self.config.normalize_audio:
-                        audio = self.audio_processor.preprocess_audio(audio)
-                    
-                    # Apply audio augmentations during training
-                    if self.subset == "train":
-                        audio = self._apply_pitch_shift(audio)
-                        audio = self._apply_noise_mixing(audio)
-                    
-                    mel_spec = self.audio_processor.wav_to_mel(audio).T  # [time, n_mels]
-                    
-                    # Cache the computed mel spectrogram
-                    try:
-                        self._save_npy_atomic(mel_cache_path, mel_spec)
-                    except Exception:
-                        pass  # Non-critical if save fails
+            # Process audio on-the-fly (no disk caching)
+            with self.profiler.profile_operation("mel_computation"):
+                audio = self.audio_processor.load_audio(audio_path)
+                if self.config.normalize_audio:
+                    audio = self.audio_processor.preprocess_audio(audio)
+                
+                # Apply audio augmentations during training
+                if self.subset == "train":
+                    audio = self._apply_pitch_shift(audio)
+                    audio = self._apply_noise_mixing(audio)
+                
+                mel_spec = self.audio_processor.wav_to_mel(audio).T  # [time, n_mels]
         
         return {
             "id": row['id'],
@@ -1217,21 +884,19 @@ class LJSpeechDataset:
         shuffle: bool = True,
         repeat: bool = True,
         prefetch: bool = True,
-        use_cache_files: bool = True,
         memory_cache: bool = False,
         num_parallel_calls: Optional[int] = None,
         buffer_size_multiplier: int = 10,
         drop_remainder: bool = False,
     ) -> tf.data.Dataset:
         """
-        Create optimized TensorFlow dataset with minimal CPU overhead.
+        Create optimized TensorFlow dataset with on-the-fly processing.
         
         Args:
             batch_size: Batch size (uses config if None)
             shuffle: Whether to shuffle dataset
             repeat: Whether to repeat dataset
             prefetch: Whether to prefetch data
-            use_cache_files: Whether to use cached files for faster loading
             memory_cache: Whether to cache data in memory
             num_parallel_calls: Number of parallel calls for map operations
             buffer_size_multiplier: Multiplier for shuffle buffer size
@@ -1245,153 +910,64 @@ class LJSpeechDataset:
         if num_parallel_calls is None:
             num_parallel_calls = min(self.config.num_workers * 2, tf.data.AUTOTUNE)
         
-        # CRITICAL GPU OPTIMIZATION: Always use cache files for maximum GPU utilization
-        # The else branch with py_function was causing the 4% GPU utilization issue
-        if use_cache_files or getattr(self.config, 'use_tf_native_loading', True):
-            # Force cache files usage when TF-native loading is enabled for GPU optimization
-            # Build lists of cache file paths for current subset
-            if self.use_custom_metadata and self._custom_index_map is not None:
-                selected_indices = list(self._custom_index_map)
-            elif self.use_custom_metadata:
-                selected_indices = list(range(len(self.metadata)))
-            else:
-                selected_indices = list(self.items)
-
-            token_paths = []
-            mel_paths = []
-            audio_paths = []
-            norm_texts = []
-            for i in selected_indices:
-                row = self.metadata.iloc[i]
-                sid = str(row['id'])
-                token_paths.append(str(self.tokens_cache_dir / f"{sid}.npy"))
-                mel_paths.append(str(self.mel_cache_dir / f"{sid}.npy"))
-                audio_paths.append(str(row['audio_path']))
-                norm_texts.append(str(row['normalized_transcription']))
-
-            # Create dataset from file paths
-            ds = tf.data.Dataset.from_tensor_slices((token_paths, mel_paths, audio_paths, norm_texts))
-
-            # Shuffle early for better randomization
-            if shuffle:
-                shuffle_buffer_size = min(len(token_paths), max(1000, batch_size * buffer_size_multiplier))
-                ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
-
-            # Optimized loading using numpy to respect real .npy headers while staying inside tf.data
-            max_tokens = int(getattr(self.config, 'max_text_tokens', 0) or 0)
-
-            def _load_from_cache_numpy(tok_path, mel_path):
-                tok_path = tok_path.decode('utf-8')
-                mel_path = mel_path.decode('utf-8')
-                try:
-                    if os.path.exists(tok_path):
-                        tokens = np.load(tok_path)
-                    else:
-                        tokens = np.zeros([1], dtype=np.int32)
-                    if os.path.exists(mel_path):
-                        mel = np.load(mel_path)
-                    else:
-                        mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
-                except Exception:
-                    tokens = np.zeros([1], dtype=np.int32)
-                    mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
-                if max_tokens > 0 and tokens.shape[0] > max_tokens:
-                    tokens = tokens[:max_tokens]
-                # Return scalar lengths to simplify batching and distribution
-                text_len = np.int32(tokens.shape[0])
-
-                mel_frames_cap = getattr(self.config, 'max_mel_frames', None)
-                if mel_frames_cap and mel.shape[0] > mel_frames_cap:
-                    mel = mel[:mel_frames_cap]
-                mel_len = np.int32(mel.shape[0])
-                return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
-
-            def _load_from_cache_optimized(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor,
-                                          audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
-                tokens, mel, text_len, mel_len = tf.numpy_function(
-                    func=_load_from_cache_numpy,
-                    inp=[tok_path_t, mel_path_t],
-                    Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
-                )
-                tokens.set_shape([None])
-                mel.set_shape([None, self.audio_processor.n_mels])
-                text_len.set_shape([])
-                mel_len.set_shape([])
-                # Already scalar lengths; return as-is
-                return tokens, mel, text_len, mel_len
-
-            # Map with parallel processing
-            dataset = ds.map(
-                _load_from_cache_optimized, 
-                num_parallel_calls=tf.data.AUTOTUNE,
-                deterministic=False  # Allow non-deterministic for better performance
-            )
-
-            # Optionally cap mel frames length to avoid OOM
-            max_frames = getattr(self.config, 'max_mel_frames', None)
-            if max_frames and max_frames > 0:
-                def _cap_lengths(text_seq, mel_spec, text_len, mel_len):
-                    new_mel = mel_spec[:max_frames]
-                    new_mel_len = tf.minimum(mel_len, tf.constant(max_frames, dtype=mel_len.dtype))
-                    return text_seq, new_mel, text_len, new_mel_len
-                dataset = dataset.map(_cap_lengths, num_parallel_calls=tf.data.AUTOTUNE)
-            
+        # On-the-fly processing: Load audio and text directly
+        if self.use_custom_metadata and self._custom_index_map is not None:
+            selected_indices = list(self._custom_index_map)
+        elif self.use_custom_metadata:
+            selected_indices = list(range(len(self.metadata)))
         else:
-            # CRITICAL GPU FIX: Instead of falling back to slow py_function, warn and use TF-native
-            import logging
-            logger = logging.getLogger("MyXTTS")
-            logger.warning("Cache files not found but using TF-native loading for GPU optimization. "
-                          "Run precompute_mels() and precompute_tokens() first for best performance.")
+            selected_indices = list(self.items)
+
+        # Create dataset from indices
+        ds = tf.data.Dataset.from_tensor_slices(selected_indices)
+
+        # Shuffle early for better randomization
+        if shuffle:
+            shuffle_buffer_size = min(len(selected_indices), max(1000, batch_size * buffer_size_multiplier))
+            ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
+
+        # On-the-fly loading using py_function
+        max_tokens = int(getattr(self.config, 'max_text_tokens', 0) or 0)
+        max_frames = getattr(self.config, 'max_mel_frames', None)
+
+        def _load_sample_numpy(idx):
+            """Load sample on-the-fly with numpy."""
+            idx_val = int(idx)
+            sample = self._load_sample(idx_val)
             
-            # Use same TF-native approach even without cache files (will create dummy data for missing files)
-            if self.use_custom_metadata and self._custom_index_map is not None:
-                selected_indices = list(self._custom_index_map)
-            elif self.use_custom_metadata:
-                selected_indices = list(range(len(self.metadata)))
-            else:
-                selected_indices = list(self.items)
-
-            token_paths = []
-            mel_paths = []
-            audio_paths = []
-            norm_texts = []
+            tokens = sample['text_sequence'].astype(np.int32)
+            mel = sample['mel_spectrogram'].astype(np.float32)
             
-            for i in selected_indices:
-                row = self.metadata.iloc[i]
-                sid = str(row['id'])
-                tok_path = str(self.tokens_cache_dir / f"{sid}.npy")
-                mel_path = str(self.mel_cache_dir / f"{sid}.npy")
-                audio_path = str(row['audio_path'])
-                norm_text = str(row['normalized_text'])
-                
-                token_paths.append(tok_path)
-                mel_paths.append(mel_path)
-                audio_paths.append(audio_path) 
-                norm_texts.append(norm_text)
+            # Apply length caps if configured
+            if max_tokens > 0 and tokens.shape[0] > max_tokens:
+                tokens = tokens[:max_tokens]
+            if max_frames and mel.shape[0] > max_frames:
+                mel = mel[:max_frames]
+            
+            text_len = np.int32(tokens.shape[0])
+            mel_len = np.int32(mel.shape[0])
+            
+            return tokens, mel, text_len, mel_len
 
-            # Create dataset from paths
-            ds = tf.data.Dataset.from_tensor_slices((token_paths, mel_paths, audio_paths, norm_texts))
-
-            # Shuffle early for better randomization
-            if shuffle:
-                shuffle_buffer_size = min(len(token_paths), max(1000, batch_size * buffer_size_multiplier))
-                ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
-
-            # Use the same TF-native loading function
-            dataset = ds.map(
-                _load_from_cache_optimized, 
-                num_parallel_calls=num_parallel_calls,
-                deterministic=False  # Allow non-deterministic for better performance
+        def _load_sample_tf(idx_t: tf.Tensor):
+            """TensorFlow wrapper for on-the-fly loading."""
+            tokens, mel, text_len, mel_len = tf.numpy_function(
+                func=_load_sample_numpy,
+                inp=[idx_t],
+                Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
             )
+            tokens.set_shape([None])
+            mel.set_shape([None, self.audio_processor.n_mels])
+            text_len.set_shape([])
+            mel_len.set_shape([])
+            return tokens, mel, text_len, mel_len
 
-            # Optionally cap mel frames length to avoid OOM
-            max_frames = getattr(self.config, 'max_mel_frames', None)
-            if max_frames and max_frames > 0:
-                def _cap_lengths(text_seq, mel_spec, text_len, mel_len):
-                    new_mel = mel_spec[:max_frames]
-                    new_mel_len = tf.minimum(mel_len, tf.constant(max_frames, dtype=mel_len.dtype))
-                    return text_seq, new_mel, text_len, new_mel_len
-                dataset = dataset.map(_cap_lengths, num_parallel_calls=tf.data.AUTOTUNE)
+        # Map with parallel processing
+        dataset = ds.map(
+            _load_sample_tf,
+            num_parallel_calls=num_parallel_calls,
+            deterministic=False  # Allow non-deterministic for better performance
+        )
 
         # Apply memory caching if requested (use sparingly as it consumes RAM)
         if memory_cache:

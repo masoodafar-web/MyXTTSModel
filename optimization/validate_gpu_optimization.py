@@ -63,7 +63,6 @@ def validate_configuration_defaults():
         ("TF Native Loading", config.use_tf_native_loading, True),
         ("Enhanced GPU Prefetch", config.enhanced_gpu_prefetch, True), 
         ("CPU-GPU Overlap", config.optimize_cpu_gpu_overlap, True),
-        ("Preprocessing Mode", config.preprocessing_mode, "precompute"),
         ("Large Batch Size", config.batch_size >= 32, True),
         ("Sufficient Workers", config.num_workers >= 8, True),
         ("XLA Compilation", config.enable_xla, True),
@@ -90,13 +89,12 @@ def check_data_pipeline_structure():
         # Import the dataset class to ensure it loads correctly
         from myxtts.data.ljspeech import LJSpeechDataset
         
-        # Check if the class has the optimized methods
+        # Check if the class has the required methods
         methods = dir(LJSpeechDataset)
         
         required_methods = [
             'create_tf_dataset',
-            'precompute_mels', 
-            'precompute_tokens',
+            '_load_sample',
         ]
         
         missing_methods = [m for m in required_methods if m not in methods]
@@ -185,12 +183,12 @@ def main():
         print("   ✅ Expected: 4% → 70-90% GPU utilization")
         
         print("\n📋 IMMEDIATE USAGE:")
-        print("   python trainTestFile.py --mode train --data-path ./data/ljspeech")
-        print("   # Uses precompute mode and optimized settings by default")
+        print("   python train_main.py --train-data ./data/ljspeech")
+        print("   # Uses on-the-fly processing with optimized settings")
         
         print("\n🔧 For maximum performance:")
-        print("   1. Run: dataset.precompute_mels() and dataset.precompute_tokens()")
-        print("   2. Use: --batch-size 48 --num-workers 16")
+        print("   1. Use: --batch-size 48 --num-workers 16")
+        print("   2. Ensure: WAV files are accessible and CSV metadata is valid")
         print("   3. Monitor: GPU utilization should be 70-90%")
         
     else:
