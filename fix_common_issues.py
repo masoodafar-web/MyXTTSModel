@@ -79,7 +79,6 @@ export TF_ENABLE_GPU_GARBAGE_COLLECTION=1
 python3 train_main.py \\
     --model-size normal \\
     --optimization-level enhanced \\
-    --enable-gpu-stabilizer \\
     --batch-size 24 \\
     --epochs 100 \\
     "$@"

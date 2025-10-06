@@ -53,7 +53,7 @@ function start_training() {
     fi
     
     # Default training command
-    CMD="python3 train_main.py --model-size normal --optimization-level enhanced --disable-gpu-stabilizer --batch-size 32"
+    CMD="python3 train_main.py --model-size normal --optimization-level enhanced --batch-size 32"
     
     echo "Command: $CMD"
     echo "Starting in 3 seconds... (Ctrl+C to cancel)"

@@ -608,16 +608,11 @@ class HyperparameterBenchmark:
         
         # Plot 2: GPU Utilization vs Batch Size
         plt.subplot(2, 2, 2)
-        for gpu_stab in [True, False]:
-            data = df[df['batch_size'].notna()]
-            if gpu_stab:
-                # Note: We need to add gpu_stabilizer to the DataFrame
-                plt.scatter(data['batch_size'], data['gpu_utilization'], 
-                           label=f'GPU Stabilizer: {gpu_stab}', alpha=0.7)
+        data = df[df['batch_size'].notna()]
+        plt.scatter(data['batch_size'], data['gpu_utilization'], alpha=0.7)
         plt.xlabel('Batch Size')
         plt.ylabel('GPU Utilization (%)')
         plt.title('GPU Utilization vs Batch Size')
-        plt.legend()
         
         # Plot 3: Training Speed vs Model Size
         plt.subplot(2, 2, 3)
@@ -807,7 +802,6 @@ def create_quick_benchmark_config() -> BenchmarkConfig:
         optimization_levels=["enhanced", "plateau_breaker"],
         learning_rates=[1.5e-5, 2e-5, 5e-5],
         batch_sizes=[4, 8, 16],
-        gpu_stabilizer_options=[True, False],
         mel_loss_weights=[2.0, 2.5],
         kl_loss_weights=[1.2, 1.5],
         test_epochs=5,
