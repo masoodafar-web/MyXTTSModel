@@ -884,21 +884,19 @@ class LJSpeechDataset:
         shuffle: bool = True,
         repeat: bool = True,
         prefetch: bool = True,
-        use_cache_files: bool = True,
         memory_cache: bool = False,
         num_parallel_calls: Optional[int] = None,
         buffer_size_multiplier: int = 10,
         drop_remainder: bool = False,
     ) -> tf.data.Dataset:
         """
-        Create optimized TensorFlow dataset with minimal CPU overhead.
+        Create optimized TensorFlow dataset with on-the-fly processing.
         
         Args:
             batch_size: Batch size (uses config if None)
             shuffle: Whether to shuffle dataset
             repeat: Whether to repeat dataset
             prefetch: Whether to prefetch data
-            use_cache_files: Whether to use cached files for faster loading
             memory_cache: Whether to cache data in memory
             num_parallel_calls: Number of parallel calls for map operations
             buffer_size_multiplier: Multiplier for shuffle buffer size
@@ -912,153 +910,64 @@ class LJSpeechDataset:
         if num_parallel_calls is None:
             num_parallel_calls = min(self.config.num_workers * 2, tf.data.AUTOTUNE)
         
-        # CRITICAL GPU OPTIMIZATION: Always use cache files for maximum GPU utilization
-        # The else branch with py_function was causing the 4% GPU utilization issue
-        if use_cache_files or getattr(self.config, 'use_tf_native_loading', True):
-            # Force cache files usage when TF-native loading is enabled for GPU optimization
-            # Build lists of cache file paths for current subset
-            if self.use_custom_metadata and self._custom_index_map is not None:
-                selected_indices = list(self._custom_index_map)
-            elif self.use_custom_metadata:
-                selected_indices = list(range(len(self.metadata)))
-            else:
-                selected_indices = list(self.items)
-
-            token_paths = []
-            mel_paths = []
-            audio_paths = []
-            norm_texts = []
-            for i in selected_indices:
-                row = self.metadata.iloc[i]
-                sid = str(row['id'])
-                token_paths.append(str(self.tokens_cache_dir / f"{sid}.npy"))
-                mel_paths.append(str(self.mel_cache_dir / f"{sid}.npy"))
-                audio_paths.append(str(row['audio_path']))
-                norm_texts.append(str(row['normalized_transcription']))
-
-            # Create dataset from file paths
-            ds = tf.data.Dataset.from_tensor_slices((token_paths, mel_paths, audio_paths, norm_texts))
-
-            # Shuffle early for better randomization
-            if shuffle:
-                shuffle_buffer_size = min(len(token_paths), max(1000, batch_size * buffer_size_multiplier))
-                ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
-
-            # Optimized loading using numpy to respect real .npy headers while staying inside tf.data
-            max_tokens = int(getattr(self.config, 'max_text_tokens', 0) or 0)
-
-            def _load_from_cache_numpy(tok_path, mel_path):
-                tok_path = tok_path.decode('utf-8')
-                mel_path = mel_path.decode('utf-8')
-                try:
-                    if os.path.exists(tok_path):
-                        tokens = np.load(tok_path)
-                    else:
-                        tokens = np.zeros([1], dtype=np.int32)
-                    if os.path.exists(mel_path):
-                        mel = np.load(mel_path)
-                    else:
-                        mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
-                except Exception:
-                    tokens = np.zeros([1], dtype=np.int32)
-                    mel = np.zeros([1, self.audio_processor.n_mels], dtype=np.float32)
-                if max_tokens > 0 and tokens.shape[0] > max_tokens:
-                    tokens = tokens[:max_tokens]
-                # Return scalar lengths to simplify batching and distribution
-                text_len = np.int32(tokens.shape[0])
-
-                mel_frames_cap = getattr(self.config, 'max_mel_frames', None)
-                if mel_frames_cap and mel.shape[0] > mel_frames_cap:
-                    mel = mel[:mel_frames_cap]
-                mel_len = np.int32(mel.shape[0])
-                return tokens.astype(np.int32), mel.astype(np.float32), text_len, mel_len
-
-            def _load_from_cache_optimized(tok_path_t: tf.Tensor, mel_path_t: tf.Tensor,
-                                          audio_path_t: tf.Tensor, norm_text_t: tf.Tensor):
-                tokens, mel, text_len, mel_len = tf.numpy_function(
-                    func=_load_from_cache_numpy,
-                    inp=[tok_path_t, mel_path_t],
-                    Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
-                )
-                tokens.set_shape([None])
-                mel.set_shape([None, self.audio_processor.n_mels])
-                text_len.set_shape([])
-                mel_len.set_shape([])
-                # Already scalar lengths; return as-is
-                return tokens, mel, text_len, mel_len
-
-            # Map with parallel processing
-            dataset = ds.map(
-                _load_from_cache_optimized, 
-                num_parallel_calls=tf.data.AUTOTUNE,
-                deterministic=False  # Allow non-deterministic for better performance
-            )
-
-            # Optionally cap mel frames length to avoid OOM
-            max_frames = getattr(self.config, 'max_mel_frames', None)
-            if max_frames and max_frames > 0:
-                def _cap_lengths(text_seq, mel_spec, text_len, mel_len):
-                    new_mel = mel_spec[:max_frames]
-                    new_mel_len = tf.minimum(mel_len, tf.constant(max_frames, dtype=mel_len.dtype))
-                    return text_seq, new_mel, text_len, new_mel_len
-                dataset = dataset.map(_cap_lengths, num_parallel_calls=tf.data.AUTOTUNE)
-            
+        # On-the-fly processing: Load audio and text directly
+        if self.use_custom_metadata and self._custom_index_map is not None:
+            selected_indices = list(self._custom_index_map)
+        elif self.use_custom_metadata:
+            selected_indices = list(range(len(self.metadata)))
         else:
-            # CRITICAL GPU FIX: Instead of falling back to slow py_function, warn and use TF-native
-            import logging
-            logger = logging.getLogger("MyXTTS")
-            logger.warning("Cache files not found but using TF-native loading for GPU optimization. "
-                          "Run precompute_mels() and precompute_tokens() first for best performance.")
+            selected_indices = list(self.items)
+
+        # Create dataset from indices
+        ds = tf.data.Dataset.from_tensor_slices(selected_indices)
+
+        # Shuffle early for better randomization
+        if shuffle:
+            shuffle_buffer_size = min(len(selected_indices), max(1000, batch_size * buffer_size_multiplier))
+            ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
+
+        # On-the-fly loading using py_function
+        max_tokens = int(getattr(self.config, 'max_text_tokens', 0) or 0)
+        max_frames = getattr(self.config, 'max_mel_frames', None)
+
+        def _load_sample_numpy(idx):
+            """Load sample on-the-fly with numpy."""
+            idx_val = int(idx)
+            sample = self._load_sample(idx_val)
             
-            # Use same TF-native approach even without cache files (will create dummy data for missing files)
-            if self.use_custom_metadata and self._custom_index_map is not None:
-                selected_indices = list(self._custom_index_map)
-            elif self.use_custom_metadata:
-                selected_indices = list(range(len(self.metadata)))
-            else:
-                selected_indices = list(self.items)
-
-            token_paths = []
-            mel_paths = []
-            audio_paths = []
-            norm_texts = []
+            tokens = sample['text_sequence'].astype(np.int32)
+            mel = sample['mel_spectrogram'].astype(np.float32)
             
-            for i in selected_indices:
-                row = self.metadata.iloc[i]
-                sid = str(row['id'])
-                tok_path = str(self.tokens_cache_dir / f"{sid}.npy")
-                mel_path = str(self.mel_cache_dir / f"{sid}.npy")
-                audio_path = str(row['audio_path'])
-                norm_text = str(row['normalized_text'])
-                
-                token_paths.append(tok_path)
-                mel_paths.append(mel_path)
-                audio_paths.append(audio_path) 
-                norm_texts.append(norm_text)
+            # Apply length caps if configured
+            if max_tokens > 0 and tokens.shape[0] > max_tokens:
+                tokens = tokens[:max_tokens]
+            if max_frames and mel.shape[0] > max_frames:
+                mel = mel[:max_frames]
+            
+            text_len = np.int32(tokens.shape[0])
+            mel_len = np.int32(mel.shape[0])
+            
+            return tokens, mel, text_len, mel_len
 
-            # Create dataset from paths
-            ds = tf.data.Dataset.from_tensor_slices((token_paths, mel_paths, audio_paths, norm_texts))
-
-            # Shuffle early for better randomization
-            if shuffle:
-                shuffle_buffer_size = min(len(token_paths), max(1000, batch_size * buffer_size_multiplier))
-                ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
-
-            # Use the same TF-native loading function
-            dataset = ds.map(
-                _load_from_cache_optimized, 
-                num_parallel_calls=num_parallel_calls,
-                deterministic=False  # Allow non-deterministic for better performance
+        def _load_sample_tf(idx_t: tf.Tensor):
+            """TensorFlow wrapper for on-the-fly loading."""
+            tokens, mel, text_len, mel_len = tf.numpy_function(
+                func=_load_sample_numpy,
+                inp=[idx_t],
+                Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
             )
+            tokens.set_shape([None])
+            mel.set_shape([None, self.audio_processor.n_mels])
+            text_len.set_shape([])
+            mel_len.set_shape([])
+            return tokens, mel, text_len, mel_len
 
-            # Optionally cap mel frames length to avoid OOM
-            max_frames = getattr(self.config, 'max_mel_frames', None)
-            if max_frames and max_frames > 0:
-                def _cap_lengths(text_seq, mel_spec, text_len, mel_len):
-                    new_mel = mel_spec[:max_frames]
-                    new_mel_len = tf.minimum(mel_len, tf.constant(max_frames, dtype=mel_len.dtype))
-                    return text_seq, new_mel, text_len, new_mel_len
-                dataset = dataset.map(_cap_lengths, num_parallel_calls=tf.data.AUTOTUNE)
+        # Map with parallel processing
+        dataset = ds.map(
+            _load_sample_tf,
+            num_parallel_calls=num_parallel_calls,
+            deterministic=False  # Allow non-deterministic for better performance
+        )
 
         # Apply memory caching if requested (use sparingly as it consumes RAM)
         if memory_cache:

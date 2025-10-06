@@ -629,7 +629,6 @@ def build_config(
     prefetch_buffer_size: int = 12,
     prefetch_to_gpu: Optional[bool] = None,
     shuffle_buffer_multiplier: int = 30,
-    preprocessing_mode: str = "runtime",
     decoder_strategy: str = "autoregressive",
     vocoder_type: str = "griffin_lim",
     model_size: str = "normal",
@@ -926,8 +925,7 @@ def build_config(
         # multiprocessing_context='spawn',  # Handled by DataLoader
         # prefetch_factor=6,  # Handled by DataLoader
 
-        # Preprocessing/caching
-        preprocessing_mode=preprocessing_mode,
+        # GPU optimization
         use_tf_native_loading=True,
         enhanced_gpu_prefetch=True,
         optimize_cpu_gpu_overlap=True,
@@ -987,12 +985,6 @@ def main():
         help="Disable prefetching data onto GPU"
     )
     parser.set_defaults(prefetch_to_gpu=None)
-    parser.add_argument(
-        "--preprocessing-mode",
-        choices=["auto", "precompute", "runtime"],
-        default="runtime",
-        help="Dataset preprocessing mode (default: runtime for on-the-fly processing)",
-    )
     parser.add_argument(
         "--model-size",
         choices=sorted(MODEL_SIZE_PRESETS.keys()),
@@ -1333,7 +1325,6 @@ def main():
         prefetch_buffer_size=prefetch_buffer_size,
         prefetch_to_gpu=prefetch_to_gpu_override,
         shuffle_buffer_multiplier=shuffle_buffer_multiplier,
-        preprocessing_mode=args.preprocessing_mode,
         decoder_strategy=args.decoder_strategy,
         vocoder_type=args.vocoder_type,
         model_size=args.model_size,
@@ -1360,7 +1351,6 @@ def main():
 
     # Apply optimization level
     config = apply_optimization_level(config, args.optimization_level, args)
-    config.data.preprocessing_mode = args.preprocessing_mode
 
     # Apply fast convergence config if requested
     if args.apply_fast_convergence:
