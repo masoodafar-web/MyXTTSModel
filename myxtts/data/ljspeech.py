@@ -878,6 +878,21 @@ class LJSpeechDataset:
         """Get text vocabulary size."""
         return self.text_processor.get_vocab_size()
     
+    def _load_sample(self, idx: int) -> Dict[str, any]:
+        """
+        Load a single sample by index.
+        
+        This method is used by the TensorFlow data pipeline for on-the-fly loading.
+        It wraps the __getitem__ method to provide a consistent interface.
+        
+        Args:
+            idx: Sample index
+            
+        Returns:
+            Dictionary containing sample data (text_sequence, mel_spectrogram, etc.)
+        """
+        return self.__getitem__(idx)
+    
     def create_tf_dataset(
         self,
         batch_size: Optional[int] = None,
