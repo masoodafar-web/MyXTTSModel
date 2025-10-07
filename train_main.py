@@ -121,18 +121,6 @@ python3 train_main.py --model-size normal --batch-size 32 --optimization-level e
 # Big model (maximum quality, requires high-end GPU)
 python3 train_main.py --model-size big --batch-size 8 --optimization-level enhanced
 
-GPU STABILIZER CONTROL:
------------------------
-# Enable GPU Stabilizer for consistent utilization (shows optimization logs)
-python3 train_main.py --enable-gpu-stabilizer --batch-size 32
-
-# Disable GPU Stabilizer for clean training (default, no extra logs)
-python3 train_main.py --disable-gpu-stabilizer --batch-size 32
-
-# Use control script for easy management
-bash train_control.sh --enable-gpu-stabilizer --batch-size 32
-bash breakthrough_training.sh  # For plateau breaking
-
 ADVANCED VOICE CLONING:
 -----------------------
 # Enable Global Style Tokens for prosody control
@@ -199,7 +187,6 @@ python3 train_main.py \
     --gst-num-style-tokens 12 \
     --batch-size 32 \
     --epochs 500 \
-    --enable-gpu-stabilizer \
     --enable-evaluation \
     --evaluation-interval 50
 
@@ -209,8 +196,7 @@ python3 train_main.py \
     --apply-fast-convergence \
     --model-size small \
     --batch-size 48 \
-    --lr 6e-5 \
-    --enable-gpu-stabilizer
+    --lr 6e-5
 
 # Production deployment preparation
 python3 train_main.py \
@@ -226,13 +212,12 @@ python3 train_main.py \
     --optimization-level plateau_breaker \
     --batch-size 24 \
     --lr 1.5e-5 \
-    --enable-gpu-stabilizer \
     --epochs 100
 
 CONVENIENCE SCRIPTS:
 --------------------
 # Use pre-configured scripts for common scenarios
-bash train_control.sh --enable-gpu-stabilizer --batch-size 32
+bash train_control.sh --batch-size 32
 bash breakthrough_training.sh  # Automatic plateau breaking
 python3 loss_breakthrough_config.py  # Configuration helper
 
@@ -1146,18 +1131,6 @@ def main():
         action="store_true",
         help="Use a minimal, stable loss function to debug training stalls"
     )
-    
-    # GPU Stabilizer control
-    parser.add_argument(
-        "--enable-gpu-stabilizer",
-        action="store_true",
-        help="Enable Advanced GPU Stabilizer for consistent GPU utilization"
-    )
-    parser.add_argument(
-        "--disable-gpu-stabilizer",
-        action="store_true",
-        help="Explicitly disable GPU Stabilizer (default behavior)"
-    )
 
     # Logging controls
     parser.add_argument(
@@ -1415,58 +1388,6 @@ def main():
         except Exception as e:
             logger.warning(f"Could not initialize enhanced training monitor: {e}")
 
-    # Initialize Advanced GPU Stabilizer for consistent GPU utilization
-    # Can be controlled via command line arguments: --enable-gpu-stabilizer or --disable-gpu-stabilizer
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    gpu_optimizer = None
-    
-    # Determine GPU stabilizer state from command line arguments
-    if args.enable_gpu_stabilizer and args.disable_gpu_stabilizer:
-        logger.error("❌ Cannot use both --enable-gpu-stabilizer and --disable-gpu-stabilizer")
-        sys.exit(1)
-    
-    gpu_stabilizer_enabled = args.enable_gpu_stabilizer
-    
-    if gpu_stabilizer_enabled and torch.cuda.is_available():
-        logger.info("🚀 Initializing Advanced GPU Stabilizer...")
-        try:
-            from optimization.advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
-            gpu_optimizer = create_advanced_gpu_stabilizer(
-                max_prefetch_batches=32,
-                num_prefetch_threads=12,
-                memory_fraction=0.9,
-                enable_memory_pinning=True,
-                aggressive_mode=True
-            )
-            logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
-        except ImportError:
-            try:
-                from advanced_gpu_stabilizer import create_advanced_gpu_stabilizer
-                gpu_optimizer = create_advanced_gpu_stabilizer(
-                    max_prefetch_batches=32,
-                    num_prefetch_threads=12,
-                    memory_fraction=0.9,
-                    enable_memory_pinning=True,
-                    aggressive_mode=True
-                )
-                logger.info("✅ Advanced GPU Stabilizer ready for consistent GPU utilization")
-            except ImportError:
-                try:
-                    gpu_optimizer = create_gpu_optimizer(
-                        device=device,
-                        max_prefetch_batches=16,
-                        enable_async_loading=True,
-                        memory_fraction=0.85
-                    )
-                    logger.info("✅ Basic GPU Optimizer ready (fallback)")
-                except Exception as e:
-                    logger.warning(f"Could not initialize GPU optimizers: {e}")
-                    gpu_optimizer = None
-    else:
-        if not gpu_stabilizer_enabled:
-            logger.info("🔴 GPU Stabilizer disabled (use --enable-gpu-stabilizer to enable)")
-        elif not torch.cuda.is_available():
-            logger.warning("⚠️  CUDA not available, skipping GPU optimization")
     # Instantiate model and trainer (optionally resume)
     resume_ckpt: Optional[str] = None
     if args.resume:
@@ -1482,7 +1403,7 @@ def main():
         else:
             logger.info("No existing checkpoint found, starting fresh")
 
-    trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt, gpu_stabilizer_enabled=gpu_stabilizer_enabled)
+    trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt)
     
     # Fix optimizer variable mismatch issue
     try:
@@ -1501,16 +1422,8 @@ def main():
         val_data_path=args.val_data,
     )
     
-    # GPU stabilizer is now integrated into the trainer itself
-    # No need for manual DataLoader optimization here
-    if gpu_optimizer:
-        logger.info("✅ Advanced GPU Stabilizer will be used during training for consistent utilization")
-
-    # Train with GPU utilization monitoring
-    if gpu_optimizer:
-        logger.info("🚀 Starting optimized training with improved convergence and GPU utilization...")
-    else:
-        logger.info("🚀 Starting optimized training with improved convergence...")
+    # Train with standard GPU usage
+    logger.info("🚀 Starting training with improved convergence...")
     
     if gpu_optimizer:
         # Enhanced training with GPU monitoring

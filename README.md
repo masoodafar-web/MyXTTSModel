@@ -15,8 +15,8 @@ pip install -r requirements.txt
 # Basic training
 python3 train_main.py --train-data ../dataset/dataset_train --val-data ../dataset/dataset_eval
 
-# Advanced training with GPU stabilizer
-python3 train_main.py --optimization-level enhanced --enable-gpu-stabilizer
+# Advanced training with optimizations
+python3 train_main.py --optimization-level enhanced
 ```
 
 ## 📁 Project Structure
@@ -47,7 +47,6 @@ MyXTTSModel/
 │   └── config_plateau_breaker.yaml  # Plateau breaking config
 │
 ├── 🔧 optimization/         # Optimization modules
-│   ├── advanced_gpu_stabilizer.py     # GPU utilization optimizer
 │   ├── enhanced_training_monitor.py   # Training monitoring
 │   ├── fast_convergence_config.py     # Fast convergence optimizations
 │   ├── loss_breakthrough_config.py    # Loss plateau solutions
@@ -121,10 +120,8 @@ MyXTTSModel/
 - **Plateau Breaker**: Special config for stuck loss (around 2.5)
 
 ### 🔧 **GPU Optimization**
-- **Advanced GPU Stabilizer**: Consistent 90%+ GPU utilization
 - **Memory Management**: Efficient VRAM usage
 - **Single GPU Training**: Optimized for single GPU or CPU training
-- **Real-time Monitoring**: GPU usage tracking and optimization
 
 ### 📈 **Training Enhancements**
 - **Fast Convergence**: 2-3x faster loss convergence
@@ -143,7 +140,6 @@ python3 train_main.py --model-size tiny --batch-size 4 --epochs 10
 python3 train_main.py \
     --model-size normal \
     --optimization-level enhanced \
-    --enable-gpu-stabilizer \
     --batch-size 32 \
     --epochs 500
 ```
@@ -183,10 +179,6 @@ python3 train_main.py \
 - **`--optimization-level enhanced`**: Recommended optimizations
 - **`--optimization-level experimental`**: Latest features
 - **`--optimization-level plateau_breaker`**: For stuck loss around 2.5
-
-### GPU Stabilizer Control
-- **`--enable-gpu-stabilizer`**: Enable GPU optimization with logs
-- **`--disable-gpu-stabilizer`**: Clean training without extra logs
 
 ### Model Sizes
 - **`--model-size tiny`**: Fast training, lower quality (256/768 dims)

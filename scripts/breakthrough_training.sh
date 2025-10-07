@@ -16,7 +16,6 @@ python3 train_main.py \
     --batch-size 24 \
     --epochs 50 \
     --lr 1.5e-5 \
-    --enable-gpu-stabilizer \
     --train-data ../dataset/dataset_train \
     --val-data ../dataset/dataset_eval
 

@@ -36,9 +36,8 @@ SCENARIOS = {
     ],
     
     'gpu_optimize': [
-        {'name': 'GPU Stabilizer ON', 'args': ['--model-size', 'small', '--optimization-level', 'enhanced', '--enable-gpu-stabilizer', '--batch-size', '32', '--epochs', '4']},
-        {'name': 'GPU Stabilizer OFF', 'args': ['--model-size', 'small', '--optimization-level', 'enhanced', '--disable-gpu-stabilizer', '--batch-size', '32', '--epochs', '4']},
-        {'name': 'Large Batch + GPU', 'args': ['--model-size', 'normal', '--optimization-level', 'enhanced', '--enable-gpu-stabilizer', '--batch-size', '48', '--epochs', '3']},
+        {'name': 'Standard Training', 'args': ['--model-size', 'small', '--optimization-level', 'enhanced', '--batch-size', '32', '--epochs', '4']},
+        {'name': 'Large Batch', 'args': ['--model-size', 'normal', '--optimization-level', 'enhanced', '--batch-size', '48', '--epochs', '3']},
     ],
     
     'memory_safe': [

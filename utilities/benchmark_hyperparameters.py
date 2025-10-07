@@ -126,9 +126,6 @@ class BenchmarkConfig:
     # Batch sizes to test
     batch_sizes: List[int] = None
     
-    # GPU stabilizer options
-    gpu_stabilizer_options: List[bool] = None
-    
     # Loss weight combinations
     mel_loss_weights: List[float] = None
     kl_loss_weights: List[float] = None
@@ -155,8 +152,6 @@ class BenchmarkConfig:
             self.learning_rates = [1e-5, 2e-5, 5e-5, 8e-5, 1e-4]
         if self.batch_sizes is None:
             self.batch_sizes = [4, 8, 16, 24, 32]
-        if self.gpu_stabilizer_options is None:
-            self.gpu_stabilizer_options = [True, False]
         if self.mel_loss_weights is None:
             self.mel_loss_weights = [1.5, 2.0, 2.5, 3.0]
         if self.kl_loss_weights is None:
@@ -236,7 +231,6 @@ class HyperparameterBenchmark:
                     'optimization_level': 'enhanced',
                     'learning_rate': 2e-5,
                     'batch_size': 8,
-                    'gpu_stabilizer': True,
                     'mel_loss_weight': 2.0,
                     'kl_loss_weight': 1.2
                 },
@@ -245,7 +239,6 @@ class HyperparameterBenchmark:
                     'optimization_level': 'plateau_breaker',
                     'learning_rate': 1.5e-5,
                     'batch_size': 4,
-                    'gpu_stabilizer': True,
                     'mel_loss_weight': 2.0,
                     'kl_loss_weight': 1.2
                 },
@@ -254,7 +247,6 @@ class HyperparameterBenchmark:
                     'optimization_level': 'enhanced',
                     'learning_rate': 5e-5,
                     'batch_size': 16,
-                    'gpu_stabilizer': False,
                     'mel_loss_weight': 2.5,
                     'kl_loss_weight': 1.5
                 }
@@ -268,7 +260,6 @@ class HyperparameterBenchmark:
             'optimization_level': self.config.optimization_levels,
             'learning_rate': self.config.learning_rates,
             'batch_size': self.config.batch_sizes,
-            'gpu_stabilizer': self.config.gpu_stabilizer_options,
             'mel_loss_weight': self.config.mel_loss_weights,
             'kl_loss_weight': self.config.kl_loss_weights
         }
@@ -338,12 +329,6 @@ class HyperparameterBenchmark:
             '--epochs', str(self.config.test_epochs),
             '--checkpoint-dir', f"{self.output_dir}/temp_checkpoint_{hash(str(params))}",
         ]
-        
-        # Add GPU stabilizer option
-        if params['gpu_stabilizer']:
-            cmd.append('--enable-gpu-stabilizer')
-        else:
-            cmd.append('--disable-gpu-stabilizer')
         
         # Create temporary config for this test
         temp_config = self._create_temp_config(params)
@@ -546,7 +531,6 @@ class HyperparameterBenchmark:
                 'optimization_level': r.config['optimization_level'],
                 'learning_rate': r.config['learning_rate'],
                 'batch_size': r.config['batch_size'],
-                'gpu_stabilizer': r.config['gpu_stabilizer'],
                 'mel_loss_weight': r.config['mel_loss_weight'],
                 'kl_loss_weight': r.config['kl_loss_weight'],
                 'final_loss': r.final_loss,
@@ -624,16 +608,11 @@ class HyperparameterBenchmark:
         
         # Plot 2: GPU Utilization vs Batch Size
         plt.subplot(2, 2, 2)
-        for gpu_stab in [True, False]:
-            data = df[df['batch_size'].notna()]
-            if gpu_stab:
-                # Note: We need to add gpu_stabilizer to the DataFrame
-                plt.scatter(data['batch_size'], data['gpu_utilization'], 
-                           label=f'GPU Stabilizer: {gpu_stab}', alpha=0.7)
+        data = df[df['batch_size'].notna()]
+        plt.scatter(data['batch_size'], data['gpu_utilization'], alpha=0.7)
         plt.xlabel('Batch Size')
         plt.ylabel('GPU Utilization (%)')
         plt.title('GPU Utilization vs Batch Size')
-        plt.legend()
         
         # Plot 3: Training Speed vs Model Size
         plt.subplot(2, 2, 3)
@@ -688,7 +667,6 @@ Model Size: {best_overall.config['model_size']}
 Optimization Level: {best_overall.config['optimization_level']}
 Learning Rate: {best_overall.config['learning_rate']}
 Batch Size: {best_overall.config['batch_size']}
-GPU Stabilizer: {best_overall.config['gpu_stabilizer']}
 Mel Loss Weight: {best_overall.config['mel_loss_weight']}
 KL Loss Weight: {best_overall.config['kl_loss_weight']}
 
@@ -752,20 +730,7 @@ Training Speed: {best_gpu.training_speed:.1f} samples/sec
         
         report += """
 
-### GPU Stabilizer Impact:
 """
-        
-        # Analyze GPU stabilizer impact
-        with_gpu = [r for r in successful_results if r.config['gpu_stabilizer']]
-        without_gpu = [r for r in successful_results if not r.config['gpu_stabilizer']]
-        
-        if with_gpu and without_gpu:
-            gpu_enabled_util = np.mean([r.gpu_utilization for r in with_gpu])
-            gpu_disabled_util = np.mean([r.gpu_utilization for r in without_gpu])
-            report += f"""
-- **With GPU Stabilizer**: Avg GPU Utilization={gpu_enabled_util:.1f}%
-- **Without GPU Stabilizer**: Avg GPU Utilization={gpu_disabled_util:.1f}%
-- **Improvement**: {gpu_enabled_util - gpu_disabled_util:.1f}% higher utilization"""
         
         report += f"""
 
@@ -777,8 +742,7 @@ python3 train_main.py \\
     --model-size {best_loss.config['model_size']} \\
     --optimization-level {best_loss.config['optimization_level']} \\
     --lr {best_loss.config['learning_rate']} \\
-    --batch-size {best_loss.config['batch_size']} \\
-    {'--enable-gpu-stabilizer' if best_loss.config['gpu_stabilizer'] else '--disable-gpu-stabilizer'}
+    --batch-size {best_loss.config['batch_size']}
 ```
 
 ### For Maximum Speed:
@@ -787,8 +751,7 @@ python3 train_main.py \\
     --model-size {best_speed.config['model_size']} \\
     --optimization-level {best_speed.config['optimization_level']} \\
     --lr {best_speed.config['learning_rate']} \\
-    --batch-size {best_speed.config['batch_size']} \\
-    {'--enable-gpu-stabilizer' if best_speed.config['gpu_stabilizer'] else '--disable-gpu-stabilizer'}
+    --batch-size {best_speed.config['batch_size']}
 ```
 
 ### For Balanced Performance (Best Overall):
@@ -797,8 +760,7 @@ python3 train_main.py \\
     --model-size {best_overall.config['model_size']} \\
     --optimization-level {best_overall.config['optimization_level']} \\
     --lr {best_overall.config['learning_rate']} \\
-    --batch-size {best_overall.config['batch_size']} \\
-    {'--enable-gpu-stabilizer' if best_overall.config['gpu_stabilizer'] else '--disable-gpu-stabilizer'}
+    --batch-size {best_overall.config['batch_size']}
 ```
 
 ## 📋 Failed Configurations
@@ -840,7 +802,6 @@ def create_quick_benchmark_config() -> BenchmarkConfig:
         optimization_levels=["enhanced", "plateau_breaker"],
         learning_rates=[1.5e-5, 2e-5, 5e-5],
         batch_sizes=[4, 8, 16],
-        gpu_stabilizer_options=[True, False],
         mel_loss_weights=[2.0, 2.5],
         kl_loss_weights=[1.2, 1.5],
         test_epochs=5,
