@@ -24,80 +24,44 @@ python3 train_main.py --optimization-level enhanced
 ```
 MyXTTSModel/
 ├── 📜 Core Files
-│   ├── train_main.py          # Main training script with comprehensive options
+│   ├── train_main.py          # Main training script
 │   ├── inference_main.py      # Inference and voice cloning script
-│   ├── setup.py              # Package setup and installation
-│   └── requirements.txt      # Python dependencies
+│   ├── fixed_inference.py     # Fixed inference implementation
+│   ├── manage.sh              # Project management script
+│   ├── setup.py               # Package setup and installation
+│   └── requirements.txt       # Python dependencies
 │
-├── 🧠 myxtts/               # Core model package
-│   ├── config/              # Configuration classes
-│   ├── models/              # XTTS model implementations
-│   ├── training/            # Training classes and utilities
-│   └── utils/               # Common utilities
+├── 🧠 myxtts/                 # Core model package
+│   ├── config/                # Configuration classes
+│   ├── models/                # XTTS model implementations
+│   ├── training/              # Training classes and utilities
+│   └── utils/                 # Common utilities
 │
-├── 📋 scripts/              # Training and utility scripts
-│   ├── train_control.sh     # Training control script
-│   ├── breakthrough_training.sh  # Plateau breakthrough script
-│   └── quick_restart.sh     # Quick restart utility
+├── ⚙️ configs/                # Configuration files
+│   ├── config.yaml            # Main configuration
+│   └── example_config.yaml    # Example configuration
 │
-├── ⚙️ configs/              # Configuration files
-│   ├── config.yaml          # Main configuration
-│   ├── config_enhanced.yaml # Enhanced optimization config
-│   ├── config_gpu_optimized.yaml  # GPU-optimized settings
-│   └── config_plateau_breaker.yaml  # Plateau breaking config
+├── 📋 scripts/                # Utility scripts
+│   ├── install_dependencies.sh   # Dependency installation
+│   ├── quick_restart.sh          # Quick restart utility
+│   └── train_gpu_optimized.sh    # GPU-optimized training
 │
-├── 🔧 optimization/         # Optimization modules
-│   ├── enhanced_training_monitor.py   # Training monitoring
-│   ├── fast_convergence_config.py     # Fast convergence optimizations
-│   ├── loss_breakthrough_config.py    # Loss plateau solutions
-│   └── gpu_utilization_optimizer.py   # GPU utilization tools
+├── 🛠️ utilities/              # Utility scripts
+│   ├── memory_optimizer.py    # Memory optimization tools
+│   ├── evaluate_tts.py        # TTS quality evaluation
+│   └── optimize_model.py      # Model optimization for deployment
 │
-├── 📊 monitoring/           # Monitoring and debugging
-│   ├── monitor_gpu_live.py  # Real-time GPU monitoring
-│   ├── monitor_training.py  # Training process monitoring
-│   └── debug_cpu_usage.py   # CPU usage debugging
+├── 📘 examples/               # Usage examples and demos
+│   └── Various usage examples
 │
-├── 🛠️ utilities/            # Utility scripts
-│   ├── memory_optimizer.py  # Memory optimization tools
-│   ├── evaluate_tts.py      # TTS quality evaluation
-│   ├── optimize_model.py    # Model optimization for deployment
-│   └── validate_*.py        # Various validation scripts
+├── 🧪 tests/                  # Test suite
+│   └── Comprehensive test files
 │
-├── 📘 examples/             # Usage examples and demos
-│   ├── demo_enhanced_features.py    # Enhanced features demo
-│   ├── example_usage.py             # Basic usage examples
-│   ├── usage_examples_enhanced.py   # Advanced usage examples
-│   └── gradient_fix_usage_example.py  # Gradient fix examples
+├── 📓 notebooks/              # Jupyter notebooks
+│   └── Training and evaluation notebooks
 │
-├── 🧪 tests/               # Test suite
-│   ├── test_basic_functionality.py   # Basic functionality tests
-│   ├── test_enhanced_model.py        # Enhanced model tests
-│   ├── test_gpu_optimization.py      # GPU optimization tests
-│   └── test_*.py                     # Various component tests
-│
-├── 📓 notebooks/           # Jupyter notebooks
-│   ├── MyXTTSTrain.ipynb             # Main training notebook
-│   ├── evaluation_and_optimization_demo.ipynb  # Evaluation demo
-│   └── *.ipynb                       # Additional notebooks
-│
-├── 📋 reports/             # Training reports and logs
-│   ├── gpu_training_analysis_*.json  # GPU training analysis
-│   ├── training.log                  # Training logs
-│   └── *.json                        # Various reports
-│
-├── 🎨 assets/              # Media assets
-│   ├── speaker.wav                   # Reference audio files
-│   ├── gpu_utilization_comparison.png  # Visualization assets
-│   └── *.png                         # Additional media
-│
-├── 📤 outputs/             # Generated outputs
-│   └── inference_outputs/            # Inference results
-│
-├── 📚 docs/                # Documentation
-│   ├── ADVANCED_MEMORY_OPTIMIZATION_GUIDE.md
-│   ├── GPU_UTILIZATION_FIX_GUIDE.md
-│   ├── PLATEAU_BREAKTHROUGH_GUIDE.md
-│   └── *.md                          # Additional documentation
+├── 📚 docs/                   # Documentation
+│   └── Technical documentation
 │
 └── 🗃️ data/               # Data directories
     ├── checkpointsmain/             # Training checkpoints
@@ -144,14 +108,7 @@ python3 train_main.py \
     --epochs 500
 ```
 
-### Plateau Breakthrough
-```bash
-# When loss gets stuck around 2.5
-python3 train_main.py --optimization-level plateau_breaker --batch-size 24
 
-# Or use the convenience script
-bash scripts/breakthrough_training.sh
-```
 
 ### Advanced Voice Cloning
 ```bash
@@ -175,10 +132,8 @@ python3 train_main.py \
 ## 🔧 Configuration
 
 ### Optimization Levels
-- **`--optimization-level basic`**: Conservative, stable settings
-- **`--optimization-level enhanced`**: Recommended optimizations
-- **`--optimization-level experimental`**: Latest features
-- **`--optimization-level plateau_breaker`**: For stuck loss around 2.5
+- **`--optimization-level basic`**: Conservative, stable settings for compatibility
+- **`--optimization-level enhanced`**: Recommended optimizations (default)
 
 ### Model Sizes
 - **`--model-size tiny`**: Fast training, lower quality (256/768 dims)
@@ -186,24 +141,12 @@ python3 train_main.py \
 - **`--model-size normal`**: High quality, default (512/1536 dims)
 - **`--model-size big`**: Maximum quality (768/2048 dims)
 
-## 📊 Monitoring and Debugging
-
-### Real-time Monitoring
-```bash
-# GPU utilization monitoring
-python3 monitoring/monitor_gpu_live.py
-
-# Training process monitoring
-python3 monitoring/monitor_training.py
-```
+## 📊 Monitoring and Validation
 
 ### Validation and Testing
 ```bash
 # Validate model functionality
 python3 utilities/validate_enhancements.py
-
-# Test GPU optimization
-python3 utilities/validate_gpu_optimization.py
 
 # Memory optimization testing
 python3 utilities/validate_memory_fixes.py

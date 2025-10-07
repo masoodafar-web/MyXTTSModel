@@ -313,16 +313,10 @@ except ImportError:
                     'description': 'Entry-level GPU (<10GB)'
                 }
 
-try:
-    from optimization.gpu_utilization_optimizer import GPUUtilizationOptimizer, create_gpu_optimizer
-except ImportError:
-    try:
-        from gpu_utilization_optimizer import GPUUtilizationOptimizer, create_gpu_optimizer
-    except ImportError:
-        # Fallback: no GPU optimizer available
-        GPUUtilizationOptimizer = None
-        def create_gpu_optimizer(*args, **kwargs):
-            return None
+# GPU optimizer removed as part of simplification
+GPUUtilizationOptimizer = None
+def create_gpu_optimizer(*args, **kwargs):
+    return None
 
 
 # Presets to quickly scale the architecture while keeping components balanced
@@ -401,35 +395,21 @@ MODEL_SIZE_PRESETS = {
     },
 }
 
-# Import optimization modules for model improvements
-try:
-    from optimization.fast_convergence_config import create_optimized_config
-    from optimization.enhanced_loss_config import FastConvergenceOptimizer
-    from optimization.enhanced_training_monitor import EnhancedTrainingMonitor
-    OPTIMIZATION_MODULES_AVAILABLE = True
-except ImportError:
-    try:
-        from fast_convergence_config import create_optimized_config
-        from enhanced_loss_config import FastConvergenceOptimizer
-        from enhanced_training_monitor import EnhancedTrainingMonitor
-        OPTIMIZATION_MODULES_AVAILABLE = True
-    except ImportError as e:
-        OPTIMIZATION_MODULES_AVAILABLE = False
-        print(f"Warning: Optimization modules not available: {e}")
-        
-        # Create fallback classes
-        class FastConvergenceOptimizer:
-            def create_enhanced_training_config(self):
-                return {}
-        
-        class EnhancedTrainingMonitor:
-            def __init__(self, *args, **kwargs):
-                pass
-            def generate_training_report(self, *args, **kwargs):
-                pass
-        
-        def create_optimized_config():
-            return {'training': {}}
+# Optimization modules removed as part of project simplification
+OPTIMIZATION_MODULES_AVAILABLE = False
+
+class FastConvergenceOptimizer:
+    def create_enhanced_training_config(self):
+        return {}
+
+class EnhancedTrainingMonitor:
+    def __init__(self, *args, **kwargs):
+        pass
+    def generate_training_report(self, *args, **kwargs):
+        pass
+
+def create_optimized_config():
+    return {'training': {}}
 
 # Import new evaluation and optimization features
 try:
@@ -493,109 +473,34 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
         logger.info(f"   • Huber loss: {config.training.use_huber_loss}")
         return config
     
-    elif level == "plateau_breaker":
-        # SPECIAL CONFIGURATION FOR BREAKING LOSS PLATEAU
-        logger.info("🚀 Applying PLATEAU BREAKER optimization (for stuck loss)")
-        
-        # 1. Reduce learning rate for better convergence
-        config.training.learning_rate = 1.5e-5  # Reduced from 8e-5
-        
-        # 2. More aggressive scheduler settings
+    else:
+        # Unknown optimization level - use enhanced as fallback
+        logger.warning(f"Unknown optimization level '{level}'")
+        logger.info("Using enhanced optimization level as fallback")
         config.training.scheduler = "cosine"
         config.training.cosine_restarts = True
         config.training.scheduler_params = {
-            "min_learning_rate": 5e-7,  # Lower for fine-tuning
-            "restart_period": 100,      # More frequent restarts
-            "restart_mult": 1.2         # Gradual period increase
+            "min_learning_rate": 1e-7,
+            "restart_period": 8000,
+            "restart_mult": 0.8,
         }
-        
-        # 3. Rebalance loss components
-        config.training.mel_loss_weight = 2.0      # Reduced from 2.5
-        config.training.kl_loss_weight = 1.2       # Reduced from 1.8
-        
-        # 4. Tighter gradient control
-        config.training.gradient_clip_norm = 0.3   # Stricter clipping
-        config.training.weight_decay = 2e-7        # Reduced regularization
-        
-        # 5. Enable advanced features
-        config.training.use_adaptive_loss_weights = True
-        config.training.use_label_smoothing = True
-        config.training.use_huber_loss = True
-        
-        logger.info("🔧 PLATEAU BREAKER settings applied:")
-        logger.info(f"   • Learning rate: {config.training.learning_rate} (reduced)")
-        logger.info(f"   • Mel loss weight: {config.training.mel_loss_weight} (rebalanced)")
-        logger.info(f"   • KL loss weight: {config.training.kl_loss_weight} (rebalanced)")
-        logger.info(f"   • Gradient clip: {config.training.gradient_clip_norm} (stricter)")
-        logger.info(f"   • Scheduler restarts: every {config.training.scheduler_params['restart_period']} epochs")
-        logger.info("   • Expected: Loss should break below 2.5 within 10-20 epochs")
-        return config
-    
-    elif level == "experimental" and OPTIMIZATION_MODULES_AVAILABLE:
-        # Apply bleeding-edge optimizations from optimization modules
-        try:
-            optimizer = FastConvergenceOptimizer()
-            enhanced_config = optimizer.create_enhanced_training_config()
-            
-            # Apply experimental enhancements
-            for key, value in enhanced_config.items():
-                if hasattr(config.training, key):
-                    setattr(config.training, key, value)
-                    
-            logger.info("✅ Applied EXPERIMENTAL optimization level")
-            logger.info("Advanced features applied:")
-            logger.info("   • Dynamic loss scaling")
-            logger.info("   • Enhanced gradient monitoring")
-            logger.info("   • Advanced loss functions")
-            logger.info("   • Convergence tracking")
-            
-        except Exception as e:
-            logger.warning(f"Could not apply experimental optimizations: {e}")
-            logger.info("Falling back to enhanced optimization level")
-            
-        return config
-    
-    else:
-        logger.warning(f"Unknown optimization level '{level}' or modules unavailable")
-        logger.info("Using enhanced optimization level as fallback")
         return config
 
 
 def apply_fast_convergence_config(config: XTTSConfig) -> XTTSConfig:
     """
-    Apply fast convergence optimizations from the fast_convergence_config module.
+    Fast convergence optimization has been removed for simplification.
+    This function now does nothing and returns the config unchanged.
     
     Args:
         config: Base configuration
         
     Returns:
-        Configuration with fast convergence optimizations
+        Configuration unchanged
     """
     logger = setup_logging()
-    
-    if not OPTIMIZATION_MODULES_AVAILABLE:
-        logger.warning("Fast convergence config module not available")
-        return config
-    
-    try:
-        # Get optimized configuration
-        optimized = create_optimized_config()
-        training_opts = optimized['training']
-        
-        # Apply training optimizations
-        for key, value in training_opts.items():
-            if hasattr(config.training, key):
-                setattr(config.training, key, value)
-        
-        logger.info("✅ Applied fast convergence optimizations")
-        logger.info(f"   • Learning rate: {config.training.learning_rate}")
-        logger.info(f"   • Loss weights optimized for convergence")
-        logger.info(f"   • Advanced scheduler with restarts")
-        logger.info(f"   • Enhanced loss stability features")
-        
-    except Exception as e:
-        logger.error(f"Failed to apply fast convergence config: {e}")
-    
+    logger.warning("Fast convergence config has been removed for simplification")
+    logger.info("Use --optimization-level enhanced for recommended settings")
     return config
 
 
