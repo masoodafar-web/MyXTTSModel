@@ -64,11 +64,27 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         """
         super().__init__(name=name)
         
-        assert d_model % num_heads == 0
-        
         self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads
+
+        if d_model % self.num_heads != 0:
+            # Find largest divisor of d_model not exceeding requested head count
+            divisor = None
+            for candidate in range(min(self.num_heads, self.d_model), 0, -1):
+                if self.d_model % candidate == 0:
+                    divisor = candidate
+                    break
+            if divisor is None:
+                divisor = 1
+            if divisor != self.num_heads:
+                warnings.warn(
+                    f"Adjusting num_heads from {self.num_heads} to {divisor} "
+                    f"to evenly divide d_model={self.d_model}.",
+                    RuntimeWarning
+                )
+            self.num_heads = divisor
+        
+        self.d_k = self.d_model // self.num_heads
         
         # Linear projections
         self.wq = tf.keras.layers.Dense(d_model, name="query_projection")

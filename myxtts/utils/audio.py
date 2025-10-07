@@ -83,11 +83,20 @@ class AudioProcessor:
         self.enable_loudness_normalization = enable_loudness_normalization
         self.target_loudness_lufs = target_loudness_lufs
         self.enable_vad = enable_vad
+        self._vad_sample_rate_disabled = False
         
         # Initialize Silero VAD model
         self.vad_model = None
         if self.enable_vad:
-            self._init_vad_model()
+            if not self._is_vad_sample_rate_supported(self.sample_rate):
+                print(
+                    "Warning: Silero VAD supports only 8000 Hz or multiples of "
+                    "16000 Hz sample rates. Disabling VAD for this AudioProcessor."
+                )
+                self.enable_vad = False
+                self._vad_sample_rate_disabled = True
+            else:
+                self._init_vad_model()
         
         # Initialize mel filter bank
         self.mel_filters = librosa.filters.mel(
@@ -100,6 +109,12 @@ class AudioProcessor:
         
         # Also initialize mel_basis for backward compatibility
         self.mel_basis = self.mel_filters
+    
+    @staticmethod
+    def _is_vad_sample_rate_supported(sample_rate: int) -> bool:
+        if sample_rate == 8000:
+            return True
+        return sample_rate >= 16000 and sample_rate % 16000 == 0
     
     def _init_vad_model(self):
         """Initialize Silero VAD model."""
@@ -135,16 +150,21 @@ class AudioProcessor:
         Returns:
             Audio with silence segments removed
         """
-        if not self.enable_vad or self.vad_model is None or not TORCH_AVAILABLE:
+        if (
+            not self.enable_vad
+            or self.vad_model is None
+            or not TORCH_AVAILABLE
+            or self._vad_sample_rate_disabled
+        ):
             return audio
         
         try:
-            # Convert to torch tensor
-            audio_tensor = torch.from_numpy(audio).float()
+            audio_tensor = torch.from_numpy(
+                np.ascontiguousarray(audio)
+            ).float()
             
-            # Get speech timestamps
             speech_timestamps = self.get_speech_timestamps(
-                audio_tensor, 
+                audio_tensor,
                 self.vad_model,
                 sampling_rate=self.sample_rate
             )
@@ -155,17 +175,32 @@ class AudioProcessor:
             
             # Concatenate speech segments
             speech_segments = []
+            sample_rate_scale = 1
+            if self.sample_rate > 16000 and self.sample_rate % 16000 == 0:
+                sample_rate_scale = self.sample_rate // 16000
             for segment in speech_timestamps:
-                start = segment['start']
-                end = segment['end']
-                speech_segments.append(audio[start:end])
+                start = int(segment['start']) * sample_rate_scale
+                end = int(segment['end']) * sample_rate_scale
+                start = max(0, min(len(audio), start))
+                end = max(start, min(len(audio), end))
+
+                if end > start:
+                    speech_segments.append(audio[start:end])
             
             if speech_segments:
                 return np.concatenate(speech_segments)
             else:
                 return audio
-                
         except Exception as e:
+            msg = str(e).lower()
+            if "silero vad models support" in msg:
+                print(
+                    "Warning: Silero VAD sample rate mismatch detected during processing. "
+                    "Disabling VAD for this session; audio will pass through untrimmed."
+                )
+                self._vad_sample_rate_disabled = True
+                self.enable_vad = False
+                return audio
             print(f"Warning: VAD processing failed: {e}")
             return audio
     

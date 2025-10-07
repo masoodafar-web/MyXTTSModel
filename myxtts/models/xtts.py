@@ -846,12 +846,23 @@ class XTTS(tf.keras.Model):
         if self.gst is not None:
             # Use reference_mel for prosody extraction, fallback to audio_conditioning
             prosody_reference = reference_mel if reference_mel is not None else audio_conditioning
-            
-            style_embedding, _ = self.gst(
-                reference_mel=prosody_reference,
-                style_weights=style_weights,
-                training=False
-            )
+
+            if prosody_reference is None and style_weights is None:
+                neutral_weights = tf.ones(
+                    [batch_size, self.config.gst_num_style_tokens],
+                    dtype=tf.float32
+                ) / float(self.config.gst_num_style_tokens)
+                style_embedding, _ = self.gst(
+                    reference_mel=None,
+                    style_weights=neutral_weights,
+                    training=False
+                )
+            else:
+                style_embedding, _ = self.gst(
+                    reference_mel=prosody_reference,
+                    style_weights=style_weights,
+                    training=False
+                )
         
         # Generate mel spectrograms using appropriate strategy
         if self.decoder_strategy is not None and getattr(self.config, 'decoder_strategy', '') == 'non_autoregressive':

@@ -1207,7 +1207,10 @@ class XTTSTrainer:
                             ]) / tf.cast(len(aux_reg_vars), tf.float32)
                             loss += aux_reg_weight * aux_reg_value
 
-                    scaled_loss = raw_total_tensor / accumulation_steps
+                    accum_steps_tensor = tf.cast(
+                        tf.convert_to_tensor(accumulation_steps), raw_total_tensor.dtype
+                    )
+                    scaled_loss = raw_total_tensor / accum_steps_tensor
                 
                 grads = tape.gradient(scaled_loss, self.model.trainable_variables)
                 
@@ -2225,6 +2228,10 @@ class XTTSTrainer:
 
     def load_checkpoint(self, checkpoint_path: str):
         """Load a checkpoint from a file base or directory path used by this project."""
+        if not checkpoint_path:
+            self.logger.warning("No checkpoint provided. Skipping load and continuing with current weights.")
+            return None
+
         base = checkpoint_path
         for suffix in ("_model.weights.h5", "_optimizer.pkl", "_metadata.json"):
             if base.endswith(suffix):

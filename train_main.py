@@ -1416,6 +1416,27 @@ def main():
     except Exception as e:
         logger.warning(f"Could not recreate optimizer: {e}")
 
+    gpu_optimizer = None
+    if (
+        OPTIMIZATION_MODULES_AVAILABLE
+        and args.optimization_level in {"enhanced", "experimental", "plateau_breaker"}
+        and torch.cuda.is_available()
+    ):
+        try:
+            try:
+                device_index = torch.cuda.current_device()
+            except Exception:
+                device_index = 0
+            device = torch.device(f"cuda:{device_index}")
+            gpu_optimizer = create_gpu_optimizer(device=device)
+            if gpu_optimizer:
+                logger.info("✅ GPU optimization helper initialized")
+            else:
+                logger.info("GPU optimization helper not available (create_gpu_optimizer returned None)")
+        except Exception as e:
+            logger.warning(f"Could not initialize GPU optimizer: {e}")
+            gpu_optimizer = None
+
     # Prepare datasets (will precompute caches when configured)
     train_ds, val_ds = trainer.prepare_datasets(
         train_data_path=args.train_data,

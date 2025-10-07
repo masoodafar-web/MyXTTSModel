@@ -241,15 +241,15 @@ class XTTSInference:
                 mel_tensor = tf.constant(mel_spectrogram.T[np.newaxis, ...], dtype=tf.float32)  # [1, time, n_mels]
                 audio_tensor = self.model.vocoder(mel_tensor, training=False)
                 audio_waveform = audio_tensor.numpy()[0, :, 0]
-                    
-                    # Validate audio quality
-                    audio_power = np.mean(np.abs(audio_waveform))
-                    if audio_power < 1e-6:
-                        self.logger.warning(
-                            f"⚠️ Generated audio has very low power ({audio_power:.2e}). "
-                            "Falling back to Griffin-Lim algorithm."
-                        )
-                        audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
+                
+                # Validate audio quality
+                audio_power = np.mean(np.abs(audio_waveform))
+                if audio_power < 1e-6:
+                    self.logger.warning(
+                        f"⚠️ Generated audio has very low power ({audio_power:.2e}). "
+                        "Falling back to Griffin-Lim algorithm."
+                    )
+                    audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
             else:
                 # Fallback to Griffin-Lim only when neural vocoder is not available
                 audio_waveform = self.audio_processor.mel_to_wav(mel_spectrogram.T)
