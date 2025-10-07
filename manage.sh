@@ -95,13 +95,8 @@ function test_model() {
 
 function analyze_quality() {
     echo -e "${BLUE}📊 Analyzing Model Quality...${NC}"
-    
-    if [ -f "archive/debug_scripts/advanced_spectral_analysis.py" ]; then
-        python3 archive/debug_scripts/advanced_spectral_analysis.py
-        echo -e "${GREEN}✅ Quality analysis completed${NC}"
-    else
-        echo -e "${RED}❌ Analysis script not found${NC}"
-    fi
+    echo -e "${YELLOW}⚠️  Quality analysis tools have been removed for project simplification${NC}"
+    echo -e "${BLUE}💡 You can use utilities/evaluate_tts.py for basic quality evaluation${NC}"
 }
 
 function clean_project() {
