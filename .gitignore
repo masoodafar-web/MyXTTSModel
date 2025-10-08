@@ -222,3 +222,11 @@ wandb/
 *.json
 models/
 experiments/=*
+
+# TensorFlow autograph generated files
+tmp_runtime/
+
+# Analysis and temporary files
+spectral_analysis*.png
+spectral_analysis*.npy
+*_analysis*.npy
