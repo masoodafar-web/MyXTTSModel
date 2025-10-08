@@ -21,8 +21,9 @@ training:
   optimizer: adamw
   scheduler: noam
   
-  # Fixed loss weights for proper convergence (addresses Persian issue: "لاس سه رقمیه")
-  mel_loss_weight: 10.0        # Increased to emphasize mel learning and fix spectral quality
+  # Balanced loss weights for proper convergence (addresses Persian issue: "لاس سه رقمیه")
+  # Safe range per LOSS_FIX_GUIDE.md: mel_loss_weight 1.0-5.0
+  mel_loss_weight: 2.5         # Balanced weight for stable mel learning
   kl_loss_weight: 1.0
   
   # Training stability improvements  

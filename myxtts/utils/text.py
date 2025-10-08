@@ -8,9 +8,13 @@ functions compatible with multilingual text-to-speech synthesis.
 import re
 import string
 import unicodedata
+import logging
 from typing import List, Dict, Optional, Tuple
 import numpy as np
 from unidecode import unidecode
+
+# Setup logging
+logger = logging.getLogger(__name__)
 
 try:
     from phonemizer import phonemize
@@ -215,6 +219,10 @@ class TextProcessor:
         self.tokenizer_model = tokenizer_model
         self.phoneme_language_override = phoneme_language
         self.allow_symbol_growth = allow_symbol_growth or custom_symbols is None
+        
+        # Track phonemizer failures for debugging
+        self._phonemizer_failure_count = 0
+        self._phonemizer_failure_samples = []
 
         if self.tokenizer_type == "nllb":
             # Initialize NLLB tokenizer
@@ -255,7 +263,7 @@ class TextProcessor:
             if cleaner_name in text_cleaners:
                 text = text_cleaners[cleaner_name](text)
             else:
-                print(f"Warning: Unknown cleaner '{cleaner_name}'")
+                logger.warning(f"Unknown cleaner '{cleaner_name}'")
         
         return text
     
@@ -273,11 +281,70 @@ class TextProcessor:
             return text
 
         try:
-            phonemes = self.phonemizer.phonemize([text], strip=True)[0]
+            # Handle empty text edge case
+            if not text or not text.strip():
+                return text
+            
+            # Phonemize and handle empty results
+            phoneme_result = self.phonemizer.phonemize([text], strip=True)
+            
+            # Check if result is empty or invalid
+            if not phoneme_result or len(phoneme_result) == 0:
+                self._log_phonemizer_failure(text, "empty result")
+                return text
+            
+            phonemes = phoneme_result[0]
+            
+            # Ensure we got a valid phoneme string
+            if not phonemes or not isinstance(phonemes, str):
+                self._log_phonemizer_failure(text, "invalid result type")
+                return text
+                
             return phonemes
-        except Exception as e:
-            print(f"Warning: Phonemization failed: {e}")
+        except IndexError as e:
+            self._log_phonemizer_failure(text, f"list index out of range: {e}")
             return text
+        except Exception as e:
+            self._log_phonemizer_failure(text, f"{type(e).__name__}: {e}")
+            return text
+    
+    def _log_phonemizer_failure(self, text: str, reason: str) -> None:
+        """
+        Log phonemizer failure with sample text for debugging.
+        
+        Args:
+            text: The text that failed to phonemize
+            reason: The reason for failure
+        """
+        self._phonemizer_failure_count += 1
+        
+        # Store first few failure samples for debugging
+        if len(self._phonemizer_failure_samples) < 5:
+            self._phonemizer_failure_samples.append({
+                'text': text[:100],  # Store first 100 chars
+                'reason': reason,
+                'language': self.language
+            })
+        
+        # Log with varying verbosity based on failure count
+        if self._phonemizer_failure_count <= 10:
+            # Log first 10 failures with full details
+            logger.warning(f"Phonemization failed ({reason}) for text: '{text[:50]}...', using character-level fallback")
+        elif self._phonemizer_failure_count % 100 == 0:
+            # Log every 100th failure as summary
+            logger.warning(f"Phonemization failures: {self._phonemizer_failure_count} total. Check phonemizer configuration.")
+    
+    def get_phonemizer_stats(self) -> Dict[str, any]:
+        """
+        Get phonemizer failure statistics for debugging.
+        
+        Returns:
+            Dictionary with failure count and sample failures
+        """
+        return {
+            'failure_count': self._phonemizer_failure_count,
+            'failure_samples': self._phonemizer_failure_samples
+        }
 
     def update_language(self, language: str) -> None:
         """Update processor language and reinitialise phonemizer if required."""
@@ -371,10 +438,10 @@ class TextProcessor:
                 if char not in self.symbol_to_id:
                     if self.tokenizer_type == "custom" and self.use_phonemes:
                         if not self._ensure_symbol(char):
-                            print(f"Warning: Unknown character '{char}' (ord: {ord(char)}) discarded (symbol map fixed)")
+                            logger.debug(f"Unknown character '{char}' (ord: {ord(char)}) discarded (symbol map fixed)")
                             continue
                     else:
-                        print(f"Warning: Unknown character '{char}' (ord: {ord(char)})")
+                        logger.debug(f"Unknown character '{char}' (ord: {ord(char)})")
                         continue
 
                 sequence.append(self.symbol_to_id[char])

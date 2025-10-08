@@ -693,9 +693,10 @@ def build_config(
         scheduler="noam",   # Will be updated to cosine_with_restarts via optimization level
         scheduler_params={},
 
-        # Fixed loss weights for proper convergence (addresses "لاس سه رقمیه" issue)
-        mel_loss_weight=10.0,   # Increased to emphasize mel learning and fix spectral quality
-        kl_loss_weight=1.8,     # Increased from 1.0 for regularization
+        # Balanced loss weights for proper convergence (addresses "لاس سه رقمیه" issue)
+        # Safe range per LOSS_FIX_GUIDE.md: mel_loss_weight 1.0-5.0
+        mel_loss_weight=2.5,    # Balanced weight for stable mel learning and loss < 8
+        kl_loss_weight=1.0,     # Standard KL weight for regularization
         duration_loss_weight=0.8,  # Moderate duration loss
         pitch_loss_weight=0.12,
         energy_loss_weight=0.12,
