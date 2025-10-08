@@ -13,7 +13,10 @@ from typing import Dict, Optional, Tuple, Any
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
-import wandb
+try:
+    import wandb
+except ImportError:
+    wandb = None  # Optional dependency
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for server environments
 import matplotlib.pyplot as plt

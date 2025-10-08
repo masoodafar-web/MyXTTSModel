@@ -20,7 +20,10 @@ from .layers import (
 from .vocoder import Vocoder
 from .non_autoregressive import DecoderStrategy, NonAutoregressiveDecoder
 from .speaker_encoder import PretrainedSpeakerEncoder, ContrastiveSpeakerLoss
-from .diffusion_decoder import DiffusionDecoder
+try:
+    from .diffusion_decoder import DiffusionDecoder
+except ImportError:
+    DiffusionDecoder = None  # Optional feature
 from .gst import GlobalStyleToken, ProsodyPredictor
 from ..config.config import ModelConfig
 
@@ -526,6 +529,8 @@ class XTTS(tf.keras.Model):
             )
         elif decoder_strategy == 'diffusion':
             # Diffusion-based decoder for enhanced quality
+            if DiffusionDecoder is None:
+                raise ImportError("DiffusionDecoder not available. Please install diffusion decoder module.")
             self.diffusion_decoder = DiffusionDecoder(config, name="diffusion_decoder")
             self.decoder_strategy = None
         else:
