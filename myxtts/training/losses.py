@@ -401,7 +401,7 @@ class XTTSLoss(tf.keras.losses.Loss):
     
     def __init__(
         self,
-        mel_loss_weight: float = 10.0,  # Increased to emphasize mel learning
+        mel_loss_weight: float = 2.5,  # Balanced weight for stable mel learning (safe range: 1.0-5.0)
         stop_loss_weight: float = 1.0,
         attention_loss_weight: float = 0.1,  # Enabled with small weight for gradual alignment learning
         duration_loss_weight: float = 0.1,   # Enabled: model now returns duration predictions
@@ -720,13 +720,19 @@ class XTTSLoss(tf.keras.losses.Loss):
         ratio = current_mel_loss / (self.running_mel_loss + 1e-8)
         
         # Smooth adaptation - don't make dramatic changes
+        # Tighter bounds to prevent excessive mel loss weight amplification
         adaptation_factor = tf.clip_by_value(
             0.5 + 0.5 * tf.tanh(ratio - 1.0), 
-            0.7,  # Minimum 70% of base weight
-            1.3   # Maximum 130% of base weight
+            0.8,  # Minimum 80% of base weight (tightened from 70%)
+            1.2   # Maximum 120% of base weight (tightened from 130%)
         )
         
-        return base_weight * adaptation_factor
+        adaptive_weight = base_weight * adaptation_factor
+        
+        # Additional safety: ensure adaptive weight stays within safe range (1.0-5.0)
+        adaptive_weight = tf.clip_by_value(adaptive_weight, 1.0, 5.0)
+        
+        return adaptive_weight
     
     def _apply_loss_smoothing(self, current_loss: tf.Tensor) -> tf.Tensor:
         """
