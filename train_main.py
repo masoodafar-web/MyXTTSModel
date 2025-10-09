@@ -456,21 +456,56 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
     
     elif level == "enhanced":
         # Enhanced optimizations - apply cosine restarts scheduler
+        # Model-size-aware adjustments for better convergence
+        model_size = getattr(args, 'model_size', 'normal').lower()
+        
+        # Adjust learning rate and gradient clipping based on model size
+        if model_size == "tiny":
+            # Tiny models need more careful optimization due to limited capacity
+            config.training.learning_rate = 3e-5  # Reduced from default 1e-4
+            config.training.gradient_clip_norm = 0.5  # Tighter clipping
+            config.training.mel_loss_weight = 2.0  # Slightly reduced for better balance
+            restart_period = 6000  # Shorter restart period for faster exploration
+            logger.info("📊 Applied tiny model adjustments:")
+            logger.info("   • Learning rate reduced to 3e-5 (from 1e-4)")
+            logger.info("   • Gradient clip tightened to 0.5 (from 1.0)")
+            logger.info("   • Mel loss weight reduced to 2.0 (from 2.5)")
+        elif model_size == "small":
+            config.training.learning_rate = 5e-5  # Slightly reduced
+            config.training.gradient_clip_norm = 0.7
+            restart_period = 7000
+        else:
+            # Normal and big models use more aggressive settings
+            config.training.learning_rate = 8e-5  # Slightly reduced from default
+            config.training.gradient_clip_norm = 0.8
+            restart_period = 8000
+        
         config.training.scheduler = "cosine"  # Use cosine scheduler
         config.training.cosine_restarts = True
         config.training.scheduler_params = {
             "min_learning_rate": 1e-7,
-            "restart_period": 8000,
+            "restart_period": restart_period,
             "restart_mult": 0.8,
         }
+        
         logger.info("✅ Applied ENHANCED optimization level (recommended optimizations)")
         logger.info("Key improvements:")
+        logger.info(f"   • Model size: {model_size}")
         logger.info(f"   • Learning rate: {config.training.learning_rate}")
+        logger.info(f"   • Gradient clip norm: {config.training.gradient_clip_norm}")
         logger.info(f"   • Mel loss weight: {config.training.mel_loss_weight}")
-        logger.info(f"   • Scheduler: {config.training.scheduler} with restarts")
+        logger.info(f"   • Scheduler: {config.training.scheduler} with restarts (period={restart_period})")
         logger.info(f"   • Adaptive loss weights: {config.training.use_adaptive_loss_weights}")
         logger.info(f"   • Label smoothing: {config.training.use_label_smoothing}")
         logger.info(f"   • Huber loss: {config.training.use_huber_loss}")
+        
+        # Warning for suboptimal configurations
+        batch_size = getattr(args, 'batch_size', 32)
+        if model_size == "tiny" and batch_size > 16:
+            logger.warning("⚠️  WARNING: Batch size %d may be too large for tiny model", batch_size)
+            logger.warning("   Recommendation: Try --batch-size 8 or --batch-size 16 for better convergence")
+            logger.warning("   Large batch sizes can cause loss plateaus with small models")
+        
         return config
     
     elif level == "plateau_breaker":
@@ -523,6 +558,58 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
             "restart_mult": 0.8,
         }
         return config
+
+
+def log_plateau_recommendations(model_size: str, optimization_level: str, batch_size: int, logger) -> None:
+    """
+    Log recommendations for dealing with loss plateaus based on current configuration.
+    
+    Args:
+        model_size: Model size preset being used
+        optimization_level: Current optimization level
+        batch_size: Current batch size
+        logger: Logger instance
+    """
+    logger.info("\n" + "="*70)
+    logger.info("📋 PLATEAU PREVENTION & TROUBLESHOOTING GUIDE")
+    logger.info("="*70)
+    
+    if model_size == "tiny":
+        logger.info("\n🔍 TINY MODEL OPTIMIZATION TIPS:")
+        logger.info("   • Tiny models have limited capacity and may plateau due to underfitting")
+        logger.info("   • If loss plateaus at ~2.8 or higher:")
+        logger.info("     - Try smaller batch size: --batch-size 8 or 16")
+        logger.info("     - Consider upgrading to: --model-size small")
+        logger.info("     - Use plateau_breaker if stuck: --optimization-level plateau_breaker")
+    
+    if optimization_level == "enhanced" and model_size in ["tiny", "small"]:
+        logger.info("\n⚙️  CURRENT CONFIGURATION:")
+        logger.info(f"   • Model: {model_size} | Optimization: {optimization_level} | Batch: {batch_size}")
+        if batch_size > 16 and model_size == "tiny":
+            logger.info("   ⚠️  Large batch size detected with tiny model!")
+            logger.info("   • This can cause loss plateaus and slow convergence")
+            logger.info("   • Recommendation: Reduce to --batch-size 8 or 16")
+    
+    logger.info("\n🎯 IF LOSS PLATEAUS (stuck at same value for 5+ epochs):")
+    logger.info("   1. Try plateau_breaker level:")
+    logger.info("      python3 train_main.py --optimization-level plateau_breaker --batch-size 24")
+    logger.info("   2. Or adjust parameters manually:")
+    logger.info("      python3 train_main.py --lr 1.5e-5 --batch-size 16")
+    logger.info("   3. Check model capacity:")
+    logger.info("      • If tiny: upgrade to --model-size small")
+    logger.info("      • Monitor individual loss components in logs")
+    
+    logger.info("\n📊 MONITOR THESE METRICS:")
+    logger.info("   • Total loss, mel_loss, stop_loss trends")
+    logger.info("   • Gradient norms (should be stable, not spiking)")
+    logger.info("   • Learning rate schedule (check cosine restarts)")
+    logger.info("   • Look for loss component imbalances")
+    
+    logger.info("\n📚 DOCUMENTATION:")
+    logger.info("   • docs/LOSS_PLATEAU_SOLUTION_2.7.md - Plateau solutions")
+    logger.info("   • docs/PLATEAU_BREAKTHROUGH_GUIDE.md - Technical guide")
+    logger.info("   • docs/HYPERPARAMETER_BENCHMARKING_GUIDE.md - Tuning guide")
+    logger.info("="*70 + "\n")
 
 
 def apply_fast_convergence_config(config: XTTSConfig) -> XTTSConfig:
@@ -1320,6 +1407,9 @@ def main():
     if hasattr(config.training, 'use_huber_loss'):
         logger.info(f"Huber loss: {config.training.use_huber_loss}")
     logger.info("=====================================")
+    
+    # Log plateau prevention and troubleshooting recommendations
+    log_plateau_recommendations(args.model_size, args.optimization_level, args.batch_size, logger)
 
     # Initialize enhanced training monitor if available
     training_monitor = None
