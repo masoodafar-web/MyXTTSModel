@@ -56,7 +56,7 @@ def diagnose_retracing(config_path: str, num_steps: int = 10):
     max_mel_frames = getattr(config.data, 'max_mel_frames', None)
     batch_size = getattr(config.data, 'batch_size', None)
     
-    print(f"  pad_to_fixed_length: {pad_to_fixed})}")
+    print(f"  pad_to_fixed_length: {pad_to_fixed}")
     print(f"  max_text_length: {max_text_len}")
     print(f"  max_mel_frames: {max_mel_frames}")
     print(f"  batch_size: {batch_size}")
