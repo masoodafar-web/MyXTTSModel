@@ -10,11 +10,18 @@ data:
   num_workers: 4
   reference_audio_length: 3.0
   sample_rate: 22050
+  n_mels: 80
   text_cleaners:
   - english_cleaners
   train_split: 0.9
   trim_silence: true
   val_split: 0.1
+  
+  # CRITICAL: Fixed sequence lengths to prevent tf.function retracing
+  # These ensure consistent tensor shapes across all batches for optimal GPU utilization
+  max_text_length: 200         # Maximum text sequence length (padded)
+  max_mel_frames: 800          # Maximum mel spectrogram frames (padded)
+  pad_to_fixed_length: true    # Enable fixed-length padding (recommended)
   # Custom metadata and wav directory options (optional)
   # If both metadata_train_file and metadata_eval_file are set, 
   # they will be used with potentially different wav directories
@@ -31,6 +38,7 @@ model:
   decoder_heads: 16
   decoder_layers: 12
   hop_length: 256
+  max_attention_sequence_length: 200  # Max text length for attention (aligned with data.max_text_length)
   languages:
   - en
   - es
