@@ -473,6 +473,44 @@ def apply_optimization_level(config: XTTSConfig, level: str, args) -> XTTSConfig
         logger.info(f"   • Huber loss: {config.training.use_huber_loss}")
         return config
     
+    elif level == "plateau_breaker":
+        # Plateau breaker optimizations - specifically for breaking through loss plateaus at ~2.5-2.7
+        # Based on analysis in PLATEAU_BREAKTHROUGH_GUIDE.md
+        
+        # Significantly reduce learning rate for finer gradient steps
+        config.training.learning_rate = 1.5e-5  # 80% reduction from typical 8e-5
+        
+        # Rebalance loss weights for better convergence
+        config.training.mel_loss_weight = 2.0   # Reduced from 2.5 for better balance
+        config.training.kl_loss_weight = 1.2    # Reduced from 1.8
+        
+        # Tighten gradient clipping for better control
+        config.training.gradient_clip_norm = 0.3  # More aggressive than default 0.5-0.8
+        
+        # Configure cosine scheduler with longer restart periods
+        config.training.scheduler = "cosine"
+        config.training.cosine_restarts = True
+        config.training.scheduler_params = {
+            "min_learning_rate": 1e-7,
+            "restart_period": 100 * 1000,  # Restart every ~100 epochs (assuming 1000 steps/epoch)
+            "restart_mult": 1.0,           # Keep same period for subsequent restarts
+        }
+        
+        # Ensure stability features are enabled
+        config.training.use_adaptive_loss_weights = True
+        config.training.use_label_smoothing = True
+        config.training.use_huber_loss = True
+        
+        logger.info("✅ Applied PLATEAU_BREAKER optimization level (for breaking loss plateau at ~2.7)")
+        logger.info("Key changes for plateau breakthrough:")
+        logger.info(f"   • Learning rate: {config.training.learning_rate} (80% reduction)")
+        logger.info(f"   • Mel loss weight: {config.training.mel_loss_weight} (rebalanced)")
+        logger.info(f"   • KL loss weight: {config.training.kl_loss_weight} (reduced)")
+        logger.info(f"   • Gradient clip: {config.training.gradient_clip_norm} (tighter control)")
+        logger.info(f"   • Scheduler: cosine with restarts every ~100 epochs")
+        logger.info("Expected: Loss reduction to 2.2-2.3 within 5-10 epochs")
+        return config
+    
     else:
         # Unknown optimization level - use enhanced as fallback
         logger.warning(f"Unknown optimization level '{level}'")

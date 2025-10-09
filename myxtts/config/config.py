@@ -264,7 +264,8 @@ class TrainingConfig:
     scheduler_params: Dict[str, Any] = None
     
     # Loss weights (adjusted for better balance and voice cloning)
-    mel_loss_weight: float = 35.0  # Reduced from 45.0 for better stability
+    # Safe range per LOSS_FIX_GUIDE.md: mel_loss_weight 1.0-5.0
+    mel_loss_weight: float = 2.5  # Balanced weight for stable mel learning (was 35.0, reduced for convergence)
     kl_loss_weight: float = 1.0
     duration_loss_weight: float = 0.1  # Enabled with small weight for stability
     attention_loss_weight: float = 0.02  # Lower weight to prevent attention loss spikes
