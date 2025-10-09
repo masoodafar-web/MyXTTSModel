@@ -665,6 +665,20 @@ class XTTSTrainer:
                 text_lengths = ensure_gpu_placement(text_lengths)
                 mel_lengths = ensure_gpu_placement(mel_lengths)
             
+            # CRITICAL FIX: Use static shapes when available to prevent retracing
+            # Get static shapes from tensor.shape instead of tf.shape() for fixed-length tensors
+            use_static_shapes = getattr(self.config.data, 'pad_to_fixed_length', False)
+            if use_static_shapes:
+                # Use static shape (known at graph compilation time)
+                mel_maxlen = mel_spectrograms.shape[1]
+                text_maxlen = text_sequences.shape[1]
+                mel_bins = mel_spectrograms.shape[2]
+            else:
+                # Fall back to dynamic shape (computed at runtime)
+                mel_maxlen = tf.shape(mel_spectrograms)[1]
+                text_maxlen = tf.shape(text_sequences)[1]
+                mel_bins = tf.shape(mel_spectrograms)[2]
+            
             try:
                 with tf.GradientTape() as tape:
                     # Forward pass
@@ -679,7 +693,7 @@ class XTTSTrainer:
                     # Prepare targets
                     stop_targets = create_stop_targets(
                         mel_lengths, 
-                        tf.shape(mel_spectrograms)[1]
+                        mel_maxlen
                     )
                     
                     y_true = {
@@ -697,20 +711,19 @@ class XTTSTrainer:
                     # Pre-compute masks for later reuse
                     mel_mask = tf.sequence_mask(
                         mel_lengths,
-                        maxlen=tf.shape(mel_spectrograms)[1],
+                        maxlen=mel_maxlen,
                         dtype=tf.float32
                     )
-                    text_len_tensor = tf.shape(text_sequences)[1]
                     text_mask = tf.sequence_mask(
                         text_lengths,
-                        maxlen=text_len_tensor,
+                        maxlen=text_maxlen,
                         dtype=tf.float32
                     )
 
                     def _resize_to_text(sequence: tf.Tensor) -> tf.Tensor:
                         """Resize frame-level sequence [B, T, 1] to text length."""
                         sequence = tf.expand_dims(sequence, axis=2)  # [B, T, 1, 1]
-                        resized = tf.image.resize(sequence, size=[text_len_tensor, 1], method='bilinear')
+                        resized = tf.image.resize(sequence, size=[text_maxlen, 1], method='bilinear')
                         return tf.squeeze(resized, axis=3)  # [B, text_len, 1]
 
                     if "duration_pred" in outputs and outputs["duration_pred"] is not None:
@@ -732,7 +745,6 @@ class XTTSTrainer:
                     frame_energy = tf.reduce_mean(tf.abs(mel_spectrograms), axis=2, keepdims=True)
                     frame_energy *= tf.expand_dims(mel_mask, -1)
 
-                    mel_bins = tf.shape(mel_spectrograms)[2]
                     frame_pitch_idx = tf.cast(
                         tf.argmax(tf.square(mel_spectrograms), axis=2, output_type=tf.int32),
                         tf.float32
@@ -1001,21 +1013,41 @@ class XTTSTrainer:
                     steps_since_last = self.current_step - self._last_retrace_step if self._last_retrace_step >= 0 else 0
                     self._last_retrace_step = self.current_step
                     
-                    # Log tensor shapes for debugging
-                    text_shape = text_sequences.shape
-                    mel_shape = mel_spectrograms.shape
+                    # Log tensor shapes for debugging (both static and dynamic)
+                    text_static_shape = text_sequences.shape
+                    mel_static_shape = mel_spectrograms.shape
+                    text_dynamic_shape = tf.shape(text_sequences)
+                    mel_dynamic_shape = tf.shape(mel_spectrograms)
                     
                     self.logger.warning(
                         f"⚠️  tf.function RETRACING detected at step {self.current_step} "
-                        f"(total retraces: {self._retrace_count}, steps since last: {steps_since_last}) - "
-                        f"text_shape={text_shape}, mel_shape={mel_shape}"
+                        f"(total retraces: {self._retrace_count}, steps since last: {steps_since_last})"
                     )
+                    self.logger.warning(
+                        f"    Static shapes: text={text_static_shape}, mel={mel_static_shape}"
+                    )
+                    self.logger.warning(
+                        f"    Dynamic shapes: text={text_dynamic_shape.numpy().tolist()}, mel={mel_dynamic_shape.numpy().tolist()}"
+                    )
+                    
+                    # Check if fixed padding is enabled
+                    use_fixed_padding = getattr(self.config.data, 'pad_to_fixed_length', False)
+                    if not use_fixed_padding:
+                        self.logger.error(
+                            "❌ CAUSE: pad_to_fixed_length is disabled in config! "
+                            "Enable it to prevent retracing."
+                        )
+                    else:
+                        self.logger.error(
+                            "❌ UNEXPECTED: pad_to_fixed_length is enabled but retracing still occurs! "
+                            "This suggests dynamic shapes are being introduced somewhere else."
+                        )
                     
                     # Log recommendation
                     if self._retrace_count > 5:
                         self.logger.error(
                             "❌ CRITICAL: Excessive retracing detected! "
-                            "Enable pad_to_fixed_length in config to fix this issue."
+                            "This will severely degrade training performance."
                         )
         except Exception as e:
             # Silently fail if introspection not available
@@ -1181,6 +1213,9 @@ class XTTSTrainer:
             mel_spectrograms = mel_spectrograms[:, :max_mel_len, :]
             mel_lengths = tf.minimum(mel_lengths, max_mel_len)
         
+        # CRITICAL FIX: Use static shapes when available
+        use_static_shapes = getattr(self.config.data, 'pad_to_fixed_length', False)
+        
         # Split batch into micro-batches
         micro_batch_size = tf.shape(text_sequences)[0] // accumulation_steps
         if micro_batch_size == 0:
@@ -1214,6 +1249,16 @@ class XTTSTrainer:
                     micro_text_len = ensure_gpu_placement(micro_text_len)
                     micro_mel_len = ensure_gpu_placement(micro_mel_len)
                 
+                # Get shapes (static or dynamic)
+                if use_static_shapes:
+                    mel_maxlen = micro_mel.shape[1]
+                    text_maxlen = micro_text.shape[1]
+                    mel_bins = micro_mel.shape[2]
+                else:
+                    mel_maxlen = tf.shape(micro_mel)[1]
+                    text_maxlen = tf.shape(micro_text)[1]
+                    mel_bins = tf.shape(micro_mel)[2]
+                
                 with tf.GradientTape() as tape:
                     # Forward pass (replicated from train_step)
                     outputs = self.model(
@@ -1225,7 +1270,7 @@ class XTTSTrainer:
                     )
                     stop_targets = create_stop_targets(
                         micro_mel_len,
-                        tf.shape(micro_mel)[1]
+                        mel_maxlen
                     )
                     y_true = {
                         "mel_target": micro_mel,
@@ -1240,19 +1285,18 @@ class XTTSTrainer:
 
                     mel_mask = tf.sequence_mask(
                         micro_mel_len,
-                        maxlen=tf.shape(micro_mel)[1],
+                        maxlen=mel_maxlen,
                         dtype=tf.float32
                     )
-                    text_len_tensor = tf.shape(micro_text)[1]
                     text_mask = tf.sequence_mask(
                         micro_text_len,
-                        maxlen=text_len_tensor,
+                        maxlen=text_maxlen,
                         dtype=tf.float32
                     )
 
                     def _resize_to_text(sequence: tf.Tensor) -> tf.Tensor:
                         sequence = tf.expand_dims(sequence, axis=2)
-                        resized = tf.image.resize(sequence, size=[text_len_tensor, 1], method='bilinear')
+                        resized = tf.image.resize(sequence, size=[text_maxlen, 1], method='bilinear')
                         return tf.squeeze(resized, axis=3)
 
                     if "duration_pred" in outputs and outputs["duration_pred"] is not None:
@@ -1270,7 +1314,6 @@ class XTTSTrainer:
                     frame_energy = tf.reduce_mean(tf.abs(micro_mel), axis=2, keepdims=True)
                     frame_energy *= tf.expand_dims(mel_mask, -1)
 
-                    mel_bins = tf.shape(micro_mel)[2]
                     frame_pitch_idx = tf.cast(
                         tf.argmax(tf.square(micro_mel), axis=2, output_type=tf.int32),
                         tf.float32
@@ -1303,7 +1346,7 @@ class XTTSTrainer:
                         speaking_rate = tf.cast(micro_mel_len, tf.float32) / tf.maximum(
                             tf.cast(micro_text_len, tf.float32), 1.0)
                         speaking_rate = tf.expand_dims(speaking_rate, axis=1)
-                        speaking_rate = tf.tile(speaking_rate, [1, text_len_tensor])
+                        speaking_rate = tf.tile(speaking_rate, [1, text_maxlen])
                         speaking_rate = tf.expand_dims(speaking_rate, axis=-1)
                         speaking_rate *= tf.expand_dims(text_mask, -1)
                         y_pred["prosody_speaking_rate"] = outputs["prosody_speaking_rate"]
@@ -1493,6 +1536,13 @@ class XTTSTrainer:
                 text_lengths = ensure_gpu_placement(text_lengths)
                 mel_lengths = ensure_gpu_placement(mel_lengths)
             
+            # CRITICAL FIX: Use static shapes when available
+            use_static_shapes = getattr(self.config.data, 'pad_to_fixed_length', False)
+            if use_static_shapes:
+                mel_maxlen = mel_spectrograms.shape[1]
+            else:
+                mel_maxlen = tf.shape(mel_spectrograms)[1]
+            
             # Forward pass
             outputs = self.model(
                 text_inputs=text_sequences,
@@ -1505,7 +1555,7 @@ class XTTSTrainer:
             # Prepare targets
             stop_targets = create_stop_targets(
                 mel_lengths,
-                tf.shape(mel_spectrograms)[1]
+                mel_maxlen
             )
             
             y_true = {
