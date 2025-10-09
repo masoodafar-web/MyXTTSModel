@@ -79,9 +79,11 @@ MyXTTSModel/
 
 ### ⚡ **Optimization Levels**
 - **Basic**: Stable, conservative settings
-- **Enhanced**: Recommended optimizations (default)
+- **Enhanced**: Recommended optimizations with model-size-aware tuning (default)
 - **Experimental**: Bleeding-edge features
-- **Plateau Breaker**: Special config for stuck loss (around 2.5)
+- **Plateau Breaker**: Special config for stuck loss (around 2.5-2.8)
+
+> **New in Latest Version**: Enhanced level now automatically adjusts learning rate, gradient clipping, and other parameters based on model size for better convergence and plateau prevention.
 
 ### 🔧 **GPU Optimization**
 - **Memory Management**: Efficient VRAM usage
@@ -133,13 +135,52 @@ python3 train_main.py \
 
 ### Optimization Levels
 - **`--optimization-level basic`**: Conservative, stable settings for compatibility
-- **`--optimization-level enhanced`**: Recommended optimizations (default)
+- **`--optimization-level enhanced`**: Recommended optimizations with model-size-aware tuning (default)
+  - Automatically adjusts learning rate and gradient clipping based on model size
+  - Tiny model: lr=3e-5, clip=0.5 | Small: lr=5e-5, clip=0.7 | Normal/Big: lr=8e-5, clip=0.8
+  - Includes warnings for suboptimal configurations
+- **`--optimization-level plateau_breaker`**: For persistent plateaus at 2.5-2.8
 
 ### Model Sizes
 - **`--model-size tiny`**: Fast training, lower quality (256/768 dims)
+  - Best with: `--batch-size 8` or `16`, `--optimization-level enhanced`
 - **`--model-size small`**: Balanced quality vs speed (384/1024 dims)
+  - Best with: `--batch-size 16`, `--optimization-level enhanced`
 - **`--model-size normal`**: High quality, default (512/1536 dims)
+  - Best with: `--batch-size 32`, `--optimization-level enhanced`
 - **`--model-size big`**: Maximum quality (768/2048 dims)
+  - Best with: `--batch-size 8` or `16`, `--optimization-level enhanced`
+
+## 🔧 Troubleshooting
+
+### Loss Plateau Issues
+
+If your loss plateaus and stops decreasing (e.g., stuck at 2.8):
+
+**For Tiny Model:**
+```bash
+# Option 1: Use recommended batch size (RECOMMENDED)
+python3 train_main.py --model-size tiny --optimization-level enhanced --batch-size 16
+
+# Option 2: Use plateau_breaker if still stuck
+python3 train_main.py --model-size tiny --optimization-level plateau_breaker --batch-size 16
+
+# Option 3: Upgrade to small model for better capacity
+python3 train_main.py --model-size small --optimization-level enhanced --batch-size 16
+```
+
+**Common Causes:**
+- Batch size too large for model size (tiny model with batch_size > 16)
+- Model capacity insufficient (tiny model may underfit)
+- Learning rate too high (now auto-adjusted in enhanced level)
+
+**Solution Path:**
+1. Try with recommended batch size for your model size
+2. If still stuck, use `--optimization-level plateau_breaker`
+3. Consider upgrading to a larger model size
+4. Check training logs for warnings and recommendations
+
+See: `docs/LOSS_PLATEAU_2.8_TINY_ENHANCED_FIX.md` for detailed troubleshooting.
 
 ## 📊 Monitoring and Validation
 
@@ -221,6 +262,8 @@ Comprehensive guides available in the `docs/` directory:
 - **[Advanced Memory Optimization Guide](docs/ADVANCED_MEMORY_OPTIMIZATION_GUIDE.md)**
 - **[GPU Utilization Fix Guide](docs/GPU_UTILIZATION_FIX_GUIDE.md)**
 - **[Plateau Breakthrough Guide](docs/PLATEAU_BREAKTHROUGH_GUIDE.md)**
+- **[Loss Plateau 2.8 Fix](docs/LOSS_PLATEAU_2.8_TINY_ENHANCED_FIX.md)** - Fix for loss plateau with tiny+enhanced
+- **[Loss Plateau 2.7 Solution](docs/LOSS_PLATEAU_SOLUTION_2.7.md)** - Previous plateau fix
 
 ## 🤝 Contributing
 
