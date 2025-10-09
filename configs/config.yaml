@@ -72,12 +72,14 @@ data:
   train_split: 0.9
   val_split: 0.1
   batch_size: 56               # Increased for better GPU utilization
-  num_workers: 18              # Increased for better CPU utilization
+  num_workers: 16              # Increased for better CPU utilization
   
   # GPU optimization settings
-  prefetch_buffer_size: 8      # Increased for better GPU utilization
+  prefetch_buffer_size: 16      # Increased for better GPU utilization
   shuffle_buffer_multiplier: 20
   enable_xla: true             # Enable XLA compilation
   mixed_precision: true        # Enable mixed precision
   pin_memory: true             # Pin memory for faster GPU transfer
+  use_tf_native_loading: true
+  prefetch_to_gpu: true
   

@@ -13,7 +13,7 @@ import urllib.request
 import mmap
 from contextlib import nullcontext
 from pathlib import Path
-from typing import List, Tuple, Dict, Optional, Union
+from typing import List, Tuple, Dict, Optional, Union, Any
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -196,6 +196,9 @@ class LJSpeechDataset:
             self.items = self.splits[self.subset]
 
         print(f"Loaded {len(self.items)} items for {subset} subset")
+        
+        # Cache reused by TF-native pipeline to avoid redundant Python I/O
+        self._tf_native_cache: Optional[Dict[str, Any]] = None
 
     def _save_npy_atomic(self, path: Path, array: np.ndarray) -> None:
         """Safely save numpy array atomically to avoid partial files."""
@@ -779,6 +782,88 @@ class LJSpeechDataset:
             splits = json.load(f)
         return splits
     
+    def _get_dataset_indices(self) -> List[int]:
+        """Return contiguous dataset indices used by tf.data pipelines."""
+        if self.use_custom_metadata:
+            if self._custom_index_map is not None:
+                return list(range(len(self._custom_index_map)))
+            return list(range(len(self.metadata)))
+        return list(range(len(self.items)))
+    
+    def _resolve_metadata_index(self, dataset_idx: int) -> int:
+        """
+        Map dataset index used by pipelines to underlying metadata index.
+        
+        Args:
+            dataset_idx: Index produced by tf.data (0..len(self)-1)
+        
+        Returns:
+            Index into self.metadata DataFrame
+        """
+        if self.use_custom_metadata:
+            if self._custom_index_map is not None:
+                return self._custom_index_map[dataset_idx]
+            return dataset_idx
+        return self.items[dataset_idx]
+    
+    def _prepare_text_entry(self, dataset_idx: int, max_tokens: int) -> Tuple[np.ndarray, str]:
+        """
+        Prepare token sequence and audio path without triggering audio loading.
+        
+        Args:
+            dataset_idx: Dataset index (0..len(self)-1)
+            max_tokens: Optional cap on number of text tokens
+        
+        Returns:
+            Tuple of (token_sequence, audio_path)
+        """
+        metadata_idx = self._resolve_metadata_index(dataset_idx)
+        row = self.metadata.iloc[metadata_idx]
+        
+        text = row['transcription']
+        text_normalized = row['normalized_transcription']
+        audio_id = str(row['id'])
+        
+        detected_language = self._detect_language(text, audio_id)
+        text_normalized = self._apply_phone_level_normalization(text_normalized, detected_language)
+        
+        tokens = self._load_tokens_optimized(text_normalized, audio_id)
+        if max_tokens > 0 and tokens.shape[0] > max_tokens:
+            tokens = tokens[:max_tokens]
+        
+        return tokens.astype(np.int32), row['audio_path']
+    
+    def _get_tf_native_cache(self, max_tokens: int) -> Dict[str, Any]:
+        """
+        Build (or reuse) tensors consumed by the TF-native data pipeline.
+        
+        Args:
+            max_tokens: Optional cap on token length used when populating cache
+        
+        Returns:
+            Dictionary containing ragged tokens and audio path tensors
+        """
+        cache_key = (len(self), max_tokens)
+        if self._tf_native_cache and self._tf_native_cache.get("key") == cache_key:
+            return self._tf_native_cache
+        
+        token_sequences: List[np.ndarray] = []
+        audio_paths: List[str] = []
+        for dataset_idx in range(len(self)):
+            tokens, audio_path = self._prepare_text_entry(dataset_idx, max_tokens)
+            token_sequences.append(tokens)
+            audio_paths.append(audio_path)
+        
+        tokens_rt = tf.ragged.constant(token_sequences, dtype=tf.int32)
+        audio_paths_tensor = tf.constant(audio_paths, dtype=tf.string)
+        
+        self._tf_native_cache = {
+            "key": cache_key,
+            "tokens": tokens_rt,
+            "audio_paths": audio_paths_tensor,
+        }
+        return self._tf_native_cache
+    
     def __len__(self) -> int:
         """Get dataset size."""
         if self.use_custom_metadata and self._custom_index_map is not None:
@@ -925,25 +1010,20 @@ class LJSpeechDataset:
         if num_parallel_calls is None:
             num_parallel_calls = min(self.config.num_workers * 2, tf.data.AUTOTUNE)
         
-        # On-the-fly processing: Load audio and text directly
-        if self.use_custom_metadata and self._custom_index_map is not None:
-            selected_indices = list(self._custom_index_map)
-        elif self.use_custom_metadata:
-            selected_indices = list(range(len(self.metadata)))
-        else:
-            selected_indices = list(self.items)
+        # Build contiguous dataset indices so that tf.data pipelines avoid redundant lookups
+        dataset_indices = self._get_dataset_indices()
+        ds = tf.data.Dataset.from_tensor_slices(dataset_indices)
 
-        # Create dataset from indices
-        ds = tf.data.Dataset.from_tensor_slices(selected_indices)
-
-        # Shuffle early for better randomization
-        if shuffle:
-            shuffle_buffer_size = min(len(selected_indices), max(1000, batch_size * buffer_size_multiplier))
+        if shuffle and dataset_indices:
+            shuffle_buffer_size = min(len(dataset_indices), max(1000, batch_size * buffer_size_multiplier))
             ds = ds.shuffle(buffer_size=shuffle_buffer_size, reshuffle_each_iteration=True)
 
         # On-the-fly loading using py_function
         max_tokens = int(getattr(self.config, 'max_text_tokens', 0) or 0)
         max_frames = getattr(self.config, 'max_mel_frames', None)
+        max_audio_length_samples = None
+        if max_frames:
+            max_audio_length_samples = int(max_frames * self.audio_processor.hop_length)
 
         def _load_sample_numpy(idx):
             """Load sample on-the-fly with numpy."""
@@ -996,53 +1076,35 @@ class LJSpeechDataset:
                     fmin=self.audio_processor.fmin,
                     fmax=self.audio_processor.fmax,
                 )
-                
+
+                cache = self._get_tf_native_cache(max_tokens)
+                tokens_rt = cache["tokens"]
+                audio_paths_tensor = cache["audio_paths"]
+
                 def _load_sample_tf_native(idx_t: tf.Tensor):
                     """TensorFlow-native loading (graph-compatible, no CPU bottleneck)."""
-                    # Get sample info from metadata
-                    idx_val = idx_t
-                    
-                    # Load text tokens (still using cached tokens for now)
-                    # In full TF-native implementation, this would also be TF ops
-                    tokens, _, text_len, _ = tf.numpy_function(
-                        func=lambda i: (
-                            self._load_sample(int(i))['text_sequence'].astype(np.int32),
-                            np.zeros((1, 1), dtype=np.float32),  # Dummy
-                            np.int32(len(self._load_sample(int(i))['text_sequence'])),
-                            np.int32(0)  # Dummy
-                        ),
-                        inp=[idx_val],
-                        Tout=(tf.int32, tf.float32, tf.int32, tf.int32)
-                    )
-                    
-                    # Get audio path as string tensor
-                    audio_path = tf.py_function(
-                        func=lambda i: str(self.metadata.iloc[
-                            self._custom_index_map[int(i)] if self._custom_index_map else int(i)
-                        ]['audio_path']),
-                        inp=[idx_val],
-                        Tout=tf.string
-                    )
-                    
-                    # Load audio and compute mel using TF-native ops (GPU-compatible!)
-                    _, mel = tf_loader.load_and_process_audio(audio_path, max_frames)
-                    
-                    # Get mel length
-                    mel_len = tf.shape(mel)[0]
-                    
-                    # Apply length caps if configured
-                    if max_tokens > 0:
-                        tokens = tokens[:max_tokens]
-                        text_len = tf.minimum(text_len, max_tokens)
-                    
-                    # Set shapes for batching
+
+                    tokens = tokens_rt[idx_t]
+                    audio_path = audio_paths_tensor[idx_t]
+
+                    if max_audio_length_samples is None:
+                        _, mel = tf_loader.load_and_process_audio(audio_path)
+                    else:
+                        _, mel = tf_loader.load_and_process_audio(audio_path, max_audio_length_samples)
+
+                    tokens = tf.cast(tokens, tf.int32)
                     tokens.set_shape([None])
+
+                    mel = tf.cast(mel, tf.float32)
+                    if max_frames:
+                        mel = mel[:max_frames]
                     mel.set_shape([None, self.audio_processor.n_mels])
-                    text_len.set_shape([])
-                    mel_len = tf.cast(mel_len, tf.int32)
-                    
-                    return tokens, mel, text_len, mel_len
-                
+
+                    text_len = tf.shape(tokens)[0]
+                    mel_len = tf.shape(mel)[0]
+
+                    return tokens, mel, tf.cast(text_len, tf.int32), tf.cast(mel_len, tf.int32)
+
                 # Use TF-native loader
                 print("✅ Using TensorFlow-native data loading (GPU-optimized)")
                 dataset = ds.map(
@@ -1211,6 +1273,9 @@ class LJSpeechDataset:
                 # Keep the last 5000 items (most recently added)
                 for key, value in items[-5000:]:
                     self._text_cache[key] = value
+            
+            # Drop TF-native cache so it can be regenerated with fresh tensors
+            self._tf_native_cache = None
     
     def __del__(self):
         """Cleanup resources when dataset is destroyed."""

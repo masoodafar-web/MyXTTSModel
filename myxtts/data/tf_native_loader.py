@@ -65,6 +65,7 @@ class TFNativeDataLoader:
         # Pre-compute mel filterbank matrix for efficiency
         # This is computed once and reused for all spectrograms
         self._mel_filterbank = self._create_mel_filterbank()
+        self._warmup_tf_graphs()
     
     def _create_mel_filterbank(self) -> tf.Tensor:
         """
@@ -82,9 +83,18 @@ class TFNativeDataLoader:
             lower_edge_hertz=self.fmin,
             upper_edge_hertz=self.fmax,
         )
-        return mel_matrix
+        return tf.transpose(mel_matrix)
     
-    @tf.function
+    def _warmup_tf_graphs(self) -> None:
+        """Warm up compiled TensorFlow graphs to avoid first-iteration stalls."""
+        try:
+            dummy = tf.zeros([self.sample_rate], dtype=tf.float32)
+            _ = self._compute_mel_spectrogram(dummy)
+        except Exception:
+            # Warm-up is a best-effort optimization; ignore failures
+            pass
+    
+    @tf.function(experimental_relax_shapes=True)
     def load_and_process_audio(
         self,
         audio_path: tf.Tensor,
@@ -138,7 +148,7 @@ class TFNativeDataLoader:
         
         return audio, mel_spec
     
-    @tf.function
+    @tf.function(experimental_relax_shapes=True)
     def _normalize_audio(self, audio: tf.Tensor) -> tf.Tensor:
         """
         Normalize audio to [-1, 1] range.
@@ -159,7 +169,7 @@ class TFNativeDataLoader:
         
         return audio
     
-    @tf.function
+    @tf.function(experimental_relax_shapes=True)
     def _truncate_or_pad(self, audio: tf.Tensor, max_length: int) -> tf.Tensor:
         """
         Truncate or pad audio to specified length.
@@ -182,7 +192,7 @@ class TFNativeDataLoader:
         
         return audio
     
-    @tf.function
+    @tf.function(experimental_relax_shapes=True)
     def _resample_audio(
         self,
         audio: tf.Tensor,
@@ -231,7 +241,7 @@ class TFNativeDataLoader:
         
         return audio_resampled
     
-    @tf.function
+    @tf.function(experimental_relax_shapes=True)
     def _compute_mel_spectrogram(self, audio: tf.Tensor) -> tf.Tensor:
         """
         Compute mel spectrogram using TensorFlow operations.
@@ -258,7 +268,7 @@ class TFNativeDataLoader:
         magnitude = tf.abs(stft)
         
         # Apply mel filterbank
-        mel_spec = tf.matmul(magnitude, self.mel_filterbank)
+        mel_spec = tf.matmul(magnitude, self.mel_filterbank, transpose_b=True)
         
         # Convert to log scale (dB)
         # Add small epsilon to avoid log(0)
@@ -269,7 +279,7 @@ class TFNativeDataLoader:
         
         return mel_spec
     
-    @tf.function
+    @tf.function(experimental_relax_shapes=True)
     def _normalize_mel_spectrogram(self, mel_spec: tf.Tensor) -> tf.Tensor:
         """
         Normalize mel spectrogram to [0, 1] range.
