@@ -575,11 +575,32 @@ class XTTSTrainer:
         enable_graph_mode = getattr(self.config.training, 'enable_graph_mode', True)
         enable_xla_compile = getattr(self.config.training, 'enable_xla_compilation', True)
         
+        # CRITICAL FIX: Define input_signature to prevent tf.function retracing
+        # Use fixed shapes based on config to ensure consistent tensor shapes
+        use_input_signature = getattr(self.config.data, 'pad_to_fixed_length', False)
+        input_signature = None
+        
+        if use_input_signature:
+            max_text_len = getattr(self.config.data, 'max_text_length', 200)
+            max_mel_frames = getattr(self.config.data, 'max_mel_frames', 800)
+            n_mels = getattr(self.config.data, 'n_mels', 80)
+            batch_size = getattr(self.config.data, 'batch_size', None)
+            
+            # Define fixed input signature to prevent retracing
+            input_signature = [
+                tf.TensorSpec(shape=[batch_size, max_text_len], dtype=tf.int32, name='text_sequences'),
+                tf.TensorSpec(shape=[batch_size, max_mel_frames, n_mels], dtype=tf.float32, name='mel_spectrograms'),
+                tf.TensorSpec(shape=[batch_size], dtype=tf.int32, name='text_lengths'),
+                tf.TensorSpec(shape=[batch_size], dtype=tf.int32, name='mel_lengths'),
+            ]
+            self.logger.info(f"✅ Input signature enabled: text=[{batch_size}, {max_text_len}], mel=[{batch_size}, {max_mel_frames}, {n_mels}]")
+        
         if enable_graph_mode:
             if enable_xla_compile:
                 self.logger.info("✅ Graph mode ENABLED with XLA JIT compilation")
                 self._compiled_train_step = tf.function(
                     self._train_step_impl,
+                    input_signature=input_signature,
                     jit_compile=True,  # Enable XLA for maximum GPU performance
                     reduce_retracing=True
                 )
@@ -587,11 +608,18 @@ class XTTSTrainer:
                 self.logger.info("✅ Graph mode ENABLED without XLA")
                 self._compiled_train_step = tf.function(
                     self._train_step_impl,
+                    input_signature=input_signature,
                     reduce_retracing=True
                 )
+            
+            # Initialize retracing monitor
+            self._retrace_count = 0
+            self._last_retrace_step = -1
         else:
             self.logger.warning("⚠️  Graph mode DISABLED - GPU utilization will be lower")
             self._compiled_train_step = self._train_step_impl
+            self._retrace_count = 0
+            self._last_retrace_step = -1
         
         return train_tf_dataset, val_tf_dataset
     
@@ -934,6 +962,9 @@ class XTTSTrainer:
         Returns:
             Dictionary with loss values
         """
+        # Monitor retracing if enabled
+        self._check_retracing(text_sequences, mel_spectrograms, text_lengths, mel_lengths)
+        
         # Call the compiled training step (or eager if graph mode disabled)
         return self._compiled_train_step(
             text_sequences,
@@ -941,6 +972,54 @@ class XTTSTrainer:
             text_lengths,
             mel_lengths
         )
+    
+    def _check_retracing(
+        self,
+        text_sequences: tf.Tensor,
+        mel_spectrograms: tf.Tensor,
+        text_lengths: tf.Tensor,
+        mel_lengths: tf.Tensor
+    ) -> None:
+        """
+        Check if tf.function is retracing and log warnings.
+        
+        This helps detect when variable tensor shapes cause performance issues.
+        """
+        if not hasattr(self, '_compiled_train_step'):
+            return
+        
+        # Get the function's concrete functions
+        try:
+            if hasattr(self._compiled_train_step, 'get_concrete_function'):
+                # Check number of concrete functions (increases on retrace)
+                concrete_functions = getattr(self._compiled_train_step, '_list_all_concrete_functions_for_serialization', lambda: [])()
+                current_count = len(concrete_functions)
+                
+                if current_count > self._retrace_count:
+                    # Retracing detected
+                    self._retrace_count = current_count
+                    steps_since_last = self.current_step - self._last_retrace_step if self._last_retrace_step >= 0 else 0
+                    self._last_retrace_step = self.current_step
+                    
+                    # Log tensor shapes for debugging
+                    text_shape = text_sequences.shape
+                    mel_shape = mel_spectrograms.shape
+                    
+                    self.logger.warning(
+                        f"⚠️  tf.function RETRACING detected at step {self.current_step} "
+                        f"(total retraces: {self._retrace_count}, steps since last: {steps_since_last}) - "
+                        f"text_shape={text_shape}, mel_shape={mel_shape}"
+                    )
+                    
+                    # Log recommendation
+                    if self._retrace_count > 5:
+                        self.logger.error(
+                            "❌ CRITICAL: Excessive retracing detected! "
+                            "Enable pad_to_fixed_length in config to fix this issue."
+                        )
+        except Exception as e:
+            # Silently fail if introspection not available
+            pass
     
     def find_optimal_batch_size(self, start_batch_size: int = 8, max_batch_size: int = 32) -> int:
         """
