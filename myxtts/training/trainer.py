@@ -570,9 +570,32 @@ class XTTSTrainer:
         self._spectrogram_reference_initialized = False
         self._load_spectrogram_reference_sample()
         
+        # CRITICAL GPU OPTIMIZATION: Create compiled training step for graph mode execution
+        # This dramatically improves GPU utilization by eliminating eager mode overhead
+        enable_graph_mode = getattr(self.config.training, 'enable_graph_mode', True)
+        enable_xla_compile = getattr(self.config.training, 'enable_xla_compilation', True)
+        
+        if enable_graph_mode:
+            if enable_xla_compile:
+                self.logger.info("✅ Graph mode ENABLED with XLA JIT compilation")
+                self._compiled_train_step = tf.function(
+                    self._train_step_impl,
+                    jit_compile=True,  # Enable XLA for maximum GPU performance
+                    reduce_retracing=True
+                )
+            else:
+                self.logger.info("✅ Graph mode ENABLED without XLA")
+                self._compiled_train_step = tf.function(
+                    self._train_step_impl,
+                    reduce_retracing=True
+                )
+        else:
+            self.logger.warning("⚠️  Graph mode DISABLED - GPU utilization will be lower")
+            self._compiled_train_step = self._train_step_impl
+        
         return train_tf_dataset, val_tf_dataset
     
-    def train_step(
+    def _train_step_impl(
         self,
         text_sequences: tf.Tensor,
         mel_spectrograms: tf.Tensor,
@@ -580,7 +603,10 @@ class XTTSTrainer:
         mel_lengths: tf.Tensor
     ) -> Dict[str, tf.Tensor]:
         """
-        Single training step with explicit GPU placement and memory optimization.
+        Internal training step implementation (can be compiled with @tf.function).
+        
+        This is the actual training logic that gets compiled into a TensorFlow graph
+        for maximum GPU performance when enable_graph_mode is True.
         
         Args:
             text_sequences: Text token sequences [batch, text_len]
@@ -885,6 +911,36 @@ class XTTSTrainer:
                     "mel_loss": tf.constant(float('inf')),
                     "stop_loss": tf.constant(float('inf'))
                 }
+    
+    def train_step(
+        self,
+        text_sequences: tf.Tensor,
+        mel_spectrograms: tf.Tensor,
+        text_lengths: tf.Tensor,
+        mel_lengths: tf.Tensor
+    ) -> Dict[str, tf.Tensor]:
+        """
+        Single training step - dispatches to compiled or eager implementation.
+        
+        This wrapper allows us to use graph-compiled training for maximum GPU
+        utilization while handling errors gracefully in eager mode.
+        
+        Args:
+            text_sequences: Text token sequences [batch, text_len]
+            mel_spectrograms: Target mel spectrograms [batch, mel_len, n_mels]
+            text_lengths: Text sequence lengths [batch]
+            mel_lengths: Mel sequence lengths [batch]
+            
+        Returns:
+            Dictionary with loss values
+        """
+        # Call the compiled training step (or eager if graph mode disabled)
+        return self._compiled_train_step(
+            text_sequences,
+            mel_spectrograms,
+            text_lengths,
+            mel_lengths
+        )
     
     def find_optimal_batch_size(self, start_batch_size: int = 8, max_batch_size: int = 32) -> int:
         """

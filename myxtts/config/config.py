@@ -253,6 +253,11 @@ class TrainingConfig:
     max_memory_fraction: float = 0.9
     enable_memory_cleanup: bool = True
 
+    # GPU Optimization - CRITICAL for high GPU utilization
+    enable_graph_mode: bool = True  # Enable @tf.function graph compilation (MAJOR performance boost)
+    enable_xla_compilation: bool = True  # Enable XLA JIT compilation for GPU kernels (10-50% speedup)
+    enable_eager_debug: bool = False  # Disable for production (only enable for debugging)
+
     # Optimizer
     optimizer: str = "adamw"
     beta1: float = 0.9
