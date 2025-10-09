@@ -1140,23 +1140,49 @@ class LJSpeechDataset:
             )
         )
 
-        # Pad and batch with improved padding strategy
-        dataset = dataset.padded_batch(
-            batch_size,
-            padded_shapes=(
-                [None],       # text_sequence
-                [None, self.audio_processor.n_mels], # mel_spectrogram
-                [],           # text_length
-                []            # mel_length
-            ),
-            padding_values=(
-                tf.constant(0, dtype=tf.int32),
-                tf.constant(0.0, dtype=tf.float32),
-                tf.constant(0, dtype=tf.int32),
-                tf.constant(0, dtype=tf.int32)
-            ),
-            drop_remainder=drop_remainder
-        )
+        # CRITICAL FIX: Use fixed padding shapes to prevent tf.function retracing
+        # Check if fixed-length padding is enabled
+        use_fixed_padding = getattr(self.config, 'pad_to_fixed_length', False)
+        max_text_len = getattr(self.config, 'max_text_length', None)
+        max_mel_frames = getattr(self.config, 'max_mel_frames', None)
+        
+        if use_fixed_padding and max_text_len and max_mel_frames:
+            # Fixed-length padding: all batches will have the same shape
+            # This prevents tf.function retracing and improves GPU utilization
+            dataset = dataset.padded_batch(
+                batch_size,
+                padded_shapes=(
+                    [max_text_len],                    # Fixed text sequence length
+                    [max_mel_frames, self.audio_processor.n_mels],  # Fixed mel shape
+                    [],                                # text_length (scalar)
+                    []                                 # mel_length (scalar)
+                ),
+                padding_values=(
+                    tf.constant(0, dtype=tf.int32),
+                    tf.constant(0.0, dtype=tf.float32),
+                    tf.constant(0, dtype=tf.int32),
+                    tf.constant(0, dtype=tf.int32)
+                ),
+                drop_remainder=drop_remainder
+            )
+        else:
+            # Variable-length padding (legacy behavior, may cause retracing)
+            dataset = dataset.padded_batch(
+                batch_size,
+                padded_shapes=(
+                    [None],       # text_sequence
+                    [None, self.audio_processor.n_mels], # mel_spectrogram
+                    [],           # text_length
+                    []            # mel_length
+                ),
+                padding_values=(
+                    tf.constant(0, dtype=tf.int32),
+                    tf.constant(0.0, dtype=tf.float32),
+                    tf.constant(0, dtype=tf.int32),
+                    tf.constant(0, dtype=tf.int32)
+                ),
+                drop_remainder=drop_remainder
+            )
 
         # Repeat dataset for training
         if repeat:

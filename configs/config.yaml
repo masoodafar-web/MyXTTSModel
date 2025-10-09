@@ -8,6 +8,9 @@ model:
   sample_rate: 22050         # Audio sample rate
   n_mels: 80                 # Mel spectrogram channels
   
+  # Sequence length limits (aligned with data config for consistency)
+  max_attention_sequence_length: 200  # Max text length for attention
+  
   # Voice cloning
   use_voice_conditioning: true
   speaker_embedding_dim: 256
@@ -63,6 +66,7 @@ data:
   sample_rate: 22050
   normalize_audio: true
   trim_silence: true
+  n_mels: 80
   
   # Text processing
   text_cleaners: ["english_cleaners"]
@@ -73,6 +77,12 @@ data:
   val_split: 0.1
   batch_size: 56               # Increased for better GPU utilization
   num_workers: 16              # Increased for better CPU utilization
+  
+  # CRITICAL FIX: Fixed sequence lengths to prevent tf.function retracing
+  # These values ensure consistent tensor shapes across all batches
+  max_text_length: 200         # Maximum text sequence length (padded)
+  max_mel_frames: 800          # Maximum mel spectrogram frames (padded)
+  pad_to_fixed_length: true    # Enable fixed-length padding
   
   # GPU optimization settings
   prefetch_buffer_size: 16      # Increased for better GPU utilization
