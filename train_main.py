@@ -244,6 +244,41 @@ for _tmp_env in ("TMPDIR", "TEMP", "TMP"):
     if not os.environ.get(_tmp_env):
         os.environ[_tmp_env] = _DEFAULT_TMP_DIR
 
+# CRITICAL: Early GPU configuration must happen BEFORE importing TensorFlow
+# We need to parse GPU arguments early, before TF import
+_EARLY_GPU_CONFIG_DONE = False
+_IS_MULTI_GPU_MODE = False
+
+def _parse_gpu_args_early():
+    """Parse only GPU-related arguments before TensorFlow import."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--data-gpu", type=int, default=None)
+    parser.add_argument("--model-gpu", type=int, default=None)
+    args, _ = parser.parse_known_args()
+    return args.data_gpu, args.model_gpu
+
+def _early_setup():
+    """Perform early GPU setup before TensorFlow import."""
+    global _EARLY_GPU_CONFIG_DONE, _IS_MULTI_GPU_MODE
+    if not _EARLY_GPU_CONFIG_DONE:
+        data_gpu, model_gpu = _parse_gpu_args_early()
+        
+        # Import early_gpu_configuration before TensorFlow
+        from myxtts.utils.commons import early_gpu_configuration
+        _IS_MULTI_GPU_MODE = early_gpu_configuration(data_gpu=data_gpu, model_gpu=model_gpu)
+        
+        # Check if multi-GPU was requested but failed
+        if data_gpu is not None and model_gpu is not None and not _IS_MULTI_GPU_MODE:
+            print("❌ Multi-GPU mode was requested but configuration failed")
+            print("   Please check your GPU indices and ensure you have at least 2 GPUs")
+            sys.exit(1)
+        
+        _EARLY_GPU_CONFIG_DONE = True
+
+# Perform early setup before importing TensorFlow
+_early_setup()
+
+# Now safe to import TensorFlow and other heavy dependencies
 import numpy as np
 import tensorflow as tf
 import torch
@@ -251,7 +286,7 @@ import torch
 from myxtts.config.config import XTTSConfig, ModelConfig, DataConfig, TrainingConfig
 from myxtts.models.xtts import XTTS
 from myxtts.training.trainer import XTTSTrainer
-from myxtts.utils.commons import setup_logging, find_latest_checkpoint, early_gpu_configuration
+from myxtts.utils.commons import setup_logging, find_latest_checkpoint
 
 # Try to import optimization utilities, provide fallbacks if not available
 try:
@@ -1246,14 +1281,9 @@ def main():
 
     logger = setup_logging()
 
-    # CRITICAL: Configure GPUs BEFORE any TensorFlow operations
-    # This must happen before tf.config.list_physical_devices() or any TF imports that initialize GPUs
-    is_multi_gpu_mode = early_gpu_configuration(data_gpu=args.data_gpu, model_gpu=args.model_gpu)
-    
-    if args.data_gpu is not None and args.model_gpu is not None and not is_multi_gpu_mode:
-        logger.error("❌ Multi-GPU mode was requested but configuration failed")
-        logger.error("   Please check your GPU indices and ensure you have at least 2 GPUs")
-        sys.exit(1)
+    # Note: GPU configuration already done at module level via _early_setup()
+    # This ensures GPUs are configured BEFORE TensorFlow import
+    is_multi_gpu_mode = _IS_MULTI_GPU_MODE
 
     # Build full config
     gpu_available = bool(tf.config.list_physical_devices('GPU'))
