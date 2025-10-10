@@ -112,6 +112,10 @@ MyXTTSModel/
 ### 🔧 **GPU Optimization**
 - **Memory Management**: Efficient VRAM usage
 - **Single GPU Training**: Optimized for single GPU or CPU training
+- **Intelligent GPU Pipeline**: 🆕 Automatic Multi-GPU and Single-GPU Buffered modes
+  - Multi-GPU Mode: Separate GPUs for data and model
+  - Single-GPU Buffered Mode: Smart prefetching with configurable buffer
+  - See [`docs/INTELLIGENT_GPU_PIPELINE.md`](docs/INTELLIGENT_GPU_PIPELINE.md) for details
 
 ### 📈 **Training Enhancements**
 - **Fast Convergence**: 2-3x faster loss convergence
@@ -144,6 +148,23 @@ python3 train_main.py \
     --gst-num-style-tokens 12 \
     --model-size normal \
     --optimization-level enhanced
+```
+
+### Multi-GPU Training (NEW! 🆕)
+```bash
+# Use separate GPUs for data and model (maximum performance)
+python3 train_main.py \
+    --data-gpu 0 \
+    --model-gpu 1 \
+    --buffer-size 100 \
+    --batch-size 64 \
+    --epochs 500
+
+# Single-GPU with large buffer (recommended for most users)
+python3 train_main.py \
+    --buffer-size 100 \
+    --batch-size 32 \
+    --epochs 500
 ```
 
 ### Model Evaluation and Optimization
@@ -283,6 +304,8 @@ Comprehensive guides available in the `docs/` directory:
 - **[Enhanced Voice Conditioning Guide](docs/ENHANCED_VOICE_CONDITIONING.md)** - Voice cloning features
 
 ### Optimization Guides
+- **[Intelligent GPU Pipeline System](docs/INTELLIGENT_GPU_PIPELINE.md)** 🆕 - Multi-GPU and Single-GPU optimization
+- **[Intelligent GPU Pipeline (Persian)](docs/INTELLIGENT_GPU_PIPELINE_FA.md)** 🆕 - راهنمای فارسی
 - **[Advanced Memory Optimization Guide](docs/ADVANCED_MEMORY_OPTIMIZATION_GUIDE.md)**
 - **[GPU Utilization Fix Guide](docs/GPU_UTILIZATION_FIX_GUIDE.md)**
 - **[Plateau Breakthrough Guide](docs/PLATEAU_BREAKTHROUGH_GUIDE.md)**

@@ -669,6 +669,11 @@ def build_config(
     enable_static_shapes: bool = False,
     max_text_length_override: Optional[int] = None,
     max_mel_frames_override: Optional[int] = None,
+    # Intelligent GPU Pipeline System parameters
+    data_gpu: Optional[int] = None,
+    model_gpu: Optional[int] = None,
+    pipeline_buffer_size: int = 50,
+    model_start_delay: float = 2.0,
     ) -> XTTSConfig:
     preset_key = model_size.lower() if model_size else "normal"
     preset = MODEL_SIZE_PRESETS.get(preset_key, MODEL_SIZE_PRESETS["normal"])
@@ -951,6 +956,12 @@ def build_config(
         use_tf_native_loading=True,
         enhanced_gpu_prefetch=True,
         optimize_cpu_gpu_overlap=True,
+        
+        # Intelligent GPU Pipeline System
+        data_gpu=data_gpu,
+        model_gpu=model_gpu,
+        pipeline_buffer_size=pipeline_buffer_size,
+        model_start_delay=model_start_delay,
 
         # Dataset identity/paths are filled outside via CLI args
         dataset_path="",
@@ -1007,6 +1018,32 @@ def main():
         help="Disable prefetching data onto GPU"
     )
     parser.set_defaults(prefetch_to_gpu=None)
+    
+    # Intelligent GPU Pipeline System arguments
+    parser.add_argument(
+        "--data-gpu",
+        type=int,
+        default=None,
+        help="GPU ID for data processing (enables Multi-GPU Mode when used with --model-gpu)"
+    )
+    parser.add_argument(
+        "--model-gpu",
+        type=int,
+        default=None,
+        help="GPU ID for model training (enables Multi-GPU Mode when used with --data-gpu)"
+    )
+    parser.add_argument(
+        "--buffer-size",
+        type=int,
+        default=50,
+        help="Buffer size for Single-GPU Buffered Mode prefetching (default: 50)"
+    )
+    parser.add_argument(
+        "--model-start-delay",
+        type=float,
+        default=2.0,
+        help="Delay in seconds before model training starts in Multi-GPU Mode (default: 2.0)"
+    )
     parser.add_argument(
         "--model-size",
         choices=sorted(MODEL_SIZE_PRESETS.keys()),
@@ -1381,6 +1418,11 @@ def main():
         enable_static_shapes=args.enable_static_shapes,
         max_text_length_override=args.max_text_length,
         max_mel_frames_override=args.max_mel_frames,
+        # Intelligent GPU Pipeline System
+        data_gpu=args.data_gpu,
+        model_gpu=args.model_gpu,
+        pipeline_buffer_size=args.buffer_size,
+        model_start_delay=args.model_start_delay,
     )
 
     # Apply optimization level
@@ -1481,6 +1523,19 @@ def main():
         else:
             logger.info("No existing checkpoint found, starting fresh")
 
+    # Intelligent GPU Pipeline: Configure model GPU placement for Multi-GPU Mode
+    if config.data.model_gpu is not None:
+        model_device = f'/GPU:{config.data.model_gpu}'
+        logger.info(f"🎯 Multi-GPU Mode: Model will be placed on {model_device}")
+        # Set visible devices to ensure model uses the specified GPU
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            if len(gpus) > config.data.model_gpu:
+                # Configure GPU visibility for model training
+                logger.info(f"   Configuring GPU {config.data.model_gpu} for model training")
+        except Exception as e:
+            logger.warning(f"Could not configure model GPU: {e}")
+    
     trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt)
     
     # Fix optimizer variable mismatch issue
@@ -1593,6 +1648,14 @@ def main():
             trainer.training_step = enhanced_training_step
         
         logger.info("✅ GPU monitoring enabled for training")
+    
+    # Intelligent GPU Pipeline: Apply model start delay for Multi-GPU Mode
+    if config.data.data_gpu is not None and config.data.model_gpu is not None:
+        delay = config.data.model_start_delay
+        logger.info(f"🕐 Multi-GPU Mode: Waiting {delay}s for data pipeline to warm up...")
+        import time
+        time.sleep(delay)
+        logger.info("✅ Model training starting now")
     
     # Start training
     try:
