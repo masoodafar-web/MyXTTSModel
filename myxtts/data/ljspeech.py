@@ -1188,59 +1188,115 @@ class LJSpeechDataset:
         if repeat:
             dataset = dataset.repeat()
 
-        # Optimized prefetching strategy
-        if prefetch:
-            # Use config-driven prefetch buffer (reduces peak memory vs. batch_size//4)
-            prefetch_buffer = max(1, int(getattr(self.config, 'prefetch_buffer_size', 2)))
-            dataset = dataset.prefetch(prefetch_buffer)
-
-        # CRITICAL GPU OPTIMIZATION: Advanced prefetching and CPU-GPU overlap
-        try:
-            # Check if enhanced GPU prefetching is enabled
-            use_enhanced_prefetch = getattr(self.config, 'enhanced_gpu_prefetch', True)
+        # ============================================================
+        # INTELLIGENT GPU PIPELINE SYSTEM
+        # ============================================================
+        # Automatically selects between Multi-GPU Mode and Single-GPU Buffered Mode
+        
+        data_gpu = getattr(self.config, 'data_gpu', None)
+        model_gpu = getattr(self.config, 'model_gpu', None)
+        pipeline_buffer_size = getattr(self.config, 'pipeline_buffer_size', 50)
+        
+        # Check if Multi-GPU Mode is enabled
+        is_multi_gpu_mode = (data_gpu is not None and model_gpu is not None)
+        
+        if is_multi_gpu_mode:
+            # ============================================================
+            # MULTI-GPU MODE: Separate GPUs for data and model
+            # ============================================================
+            print(f"🚀 Intelligent GPU Pipeline: Multi-GPU Mode")
+            print(f"   - Data Processing GPU: {data_gpu}")
+            print(f"   - Model Training GPU: {model_gpu}")
             
-            if use_enhanced_prefetch and bool(getattr(self.config, 'prefetch_to_gpu', True)):
-                gpus = tf.config.list_logical_devices('GPU')
-                # Single GPU training only - pin prefetch to GPU:0
-                if gpus and len(gpus) > 0:
-                    gpu_device = '/GPU:0'
+            gpus = tf.config.list_physical_devices('GPU')
+            if len(gpus) > max(data_gpu, model_gpu):
+                try:
+                    # Configure GPU memory growth
+                    for gpu in gpus:
+                        tf.config.experimental.set_memory_growth(gpu, True)
                     
-                    # Intelligent buffer sizing based on hardware and auto-tuning
-                    base_buffer = getattr(self.config, 'prefetch_buffer_size', 8)
-                    if getattr(self.config, 'auto_tune_performance', True):
-                        # Auto-scale buffer based on number of workers and GPU count
-                        worker_factor = max(1, self.config.num_workers // 8)
-                        gpu_factor = len(gpus)
-                        gpu_buf = max(6, min(20, base_buffer * worker_factor * gpu_factor))
-                    else:
-                        gpu_buf = max(4, int(base_buffer))
+                    # Prefetch data to the data processing GPU
+                    data_device = f'/GPU:{data_gpu}'
+                    gpu_buf = max(6, pipeline_buffer_size // 2)
                     
-                    # Apply GPU prefetching with automatic memory management
+                    print(f"   - Prefetching to {data_device} with buffer_size={gpu_buf}")
                     dataset = dataset.apply(
                         tf.data.experimental.prefetch_to_device(
-                            gpu_device,
+                            data_device,
                             buffer_size=gpu_buf
                         )
                     )
-                # If multi-GPU, keep host prefetching only (strategy will shard inputs)
                     
-                    # Additional optimization: Enable GPU memory growth to avoid fragmentation
-                    if getattr(self.config, 'optimize_cpu_gpu_overlap', True):
-                        try:
-                            physical_devices = tf.config.list_physical_devices('GPU')
-                            if physical_devices:
-                                tf.config.experimental.set_memory_growth(physical_devices[0], True)
-                        except Exception:
-                            pass  # Ignore if already configured
-                        
-                    # Allow tf.data to further tune buffering on host side
+                    # Additional host-side prefetch for smooth data flow
                     dataset = dataset.prefetch(tf.data.AUTOTUNE)
-
-        except Exception as e:
-            print(f"Could not prefetch to GPU: {e}")
-
-        if prefetch:
-            dataset = dataset.prefetch(tf.data.AUTOTUNE)
+                    
+                except Exception as e:
+                    print(f"⚠️  Multi-GPU setup failed, falling back to default: {e}")
+                    if prefetch:
+                        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+            else:
+                print(f"⚠️  Insufficient GPUs for Multi-GPU Mode (need {max(data_gpu, model_gpu)+1}, have {len(gpus)})")
+                print(f"   Falling back to Single-GPU Buffered Mode")
+                if prefetch:
+                    dataset = dataset.prefetch(pipeline_buffer_size)
+        else:
+            # ============================================================
+            # SINGLE-GPU BUFFERED MODE: Smart prefetching with cache
+            # ============================================================
+            print(f"🚀 Intelligent GPU Pipeline: Single-GPU Buffered Mode")
+            print(f"   - Buffer Size: {pipeline_buffer_size}")
+            print(f"   - Smart Prefetching: Enabled")
+            
+            # Optimized prefetching strategy for single GPU
+            if prefetch:
+                # Use config-driven prefetch buffer
+                prefetch_buffer = max(1, pipeline_buffer_size)
+                dataset = dataset.prefetch(prefetch_buffer)
+            
+            # Advanced GPU prefetching with cache
+            try:
+                use_enhanced_prefetch = getattr(self.config, 'enhanced_gpu_prefetch', True)
+                
+                if use_enhanced_prefetch and bool(getattr(self.config, 'prefetch_to_gpu', True)):
+                    gpus = tf.config.list_logical_devices('GPU')
+                    if gpus and len(gpus) > 0:
+                        gpu_device = '/GPU:0'
+                        
+                        # Intelligent buffer sizing for single GPU mode
+                        base_buffer = pipeline_buffer_size
+                        if getattr(self.config, 'auto_tune_performance', True):
+                            # Auto-scale buffer based on number of workers
+                            worker_factor = max(1, self.config.num_workers // 8)
+                            gpu_buf = max(8, min(base_buffer, base_buffer * worker_factor))
+                        else:
+                            gpu_buf = max(8, min(base_buffer, 100))
+                        
+                        print(f"   - Prefetching to {gpu_device} with buffer_size={gpu_buf}")
+                        
+                        # Apply GPU prefetching with automatic memory management
+                        dataset = dataset.apply(
+                            tf.data.experimental.prefetch_to_device(
+                                gpu_device,
+                                buffer_size=gpu_buf
+                            )
+                        )
+                        
+                        # Enable GPU memory growth to avoid fragmentation
+                        if getattr(self.config, 'optimize_cpu_gpu_overlap', True):
+                            try:
+                                physical_devices = tf.config.list_physical_devices('GPU')
+                                if physical_devices:
+                                    tf.config.experimental.set_memory_growth(physical_devices[0], True)
+                            except Exception:
+                                pass  # Ignore if already configured
+                            
+                        # Allow tf.data to further tune buffering on host side
+                        dataset = dataset.prefetch(tf.data.AUTOTUNE)
+                        
+            except Exception as e:
+                print(f"⚠️  GPU prefetching setup failed: {e}")
+                if prefetch:
+                    dataset = dataset.prefetch(tf.data.AUTOTUNE)
 
         # CRITICAL PERFORMANCE OPTIMIZATION: Enhanced TensorFlow data pipeline options
         options = tf.data.Options()

@@ -231,6 +231,12 @@ class DataConfig:
     enhanced_gpu_prefetch: bool = True  # Enable advanced GPU prefetching strategies
     optimize_cpu_gpu_overlap: bool = True  # Enable maximum CPU-GPU overlap optimizations
     auto_tune_performance: bool = True  # Automatically adjust performance settings based on hardware
+    
+    # Intelligent GPU Pipeline System (NEW)
+    data_gpu: Optional[int] = None  # GPU ID for data processing (Multi-GPU Mode)
+    model_gpu: Optional[int] = None  # GPU ID for model training (Multi-GPU Mode)
+    pipeline_buffer_size: int = 50  # Buffer size for Single-GPU Buffered Mode
+    model_start_delay: float = 2.0  # Delay before model starts in Multi-GPU Mode (seconds)
 
     def __post_init__(self):
         if self.text_cleaners is None:
