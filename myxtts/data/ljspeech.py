@@ -1061,10 +1061,17 @@ class LJSpeechDataset:
         # This eliminates CPU bottleneck from tf.numpy_function
         use_tf_native = getattr(self.config, 'use_tf_native_loading', True)
         
+        print(f"\n{'='*70}")
+        print("DATA PIPELINE CONFIGURATION")
+        print("="*70)
+        print(f"use_tf_native_loading config: {use_tf_native}")
+        
         if use_tf_native:
             # Try to use TensorFlow-native operations for better GPU utilization
+            print("🔧 Attempting to use TensorFlow-native data loading (GPU-optimized)...")
             try:
                 from .tf_native_loader import TFNativeDataLoader
+                print("   ✅ TFNativeDataLoader imported successfully")
                 
                 # Create TF-native loader
                 tf_loader = TFNativeDataLoader(
@@ -1076,8 +1083,10 @@ class LJSpeechDataset:
                     fmin=self.audio_processor.fmin,
                     fmax=self.audio_processor.fmax,
                 )
+                print("   ✅ TFNativeDataLoader initialized")
 
                 cache = self._get_tf_native_cache(max_tokens)
+                print("   ✅ TF-native cache prepared")
                 tokens_rt = cache["tokens"]
                 audio_paths_tensor = cache["audio_paths"]
 
@@ -1106,7 +1115,18 @@ class LJSpeechDataset:
                     return tokens, mel, tf.cast(text_len, tf.int32), tf.cast(mel_len, tf.int32)
 
                 # Use TF-native loader
-                print("✅ Using TensorFlow-native data loading (GPU-optimized)")
+                print("   ✅ TF-native map function created")
+                print("\n" + "="*70)
+                print("✅ SUCCESS: Using TensorFlow-native data loading (GPU-optimized)")
+                print("="*70)
+                print("Benefits:")
+                print("  • No CPU bottleneck (no tf.numpy_function)")
+                print("  • Full graph compilation support")
+                print("  • GPU-accelerated operations")
+                print("  • Enables GPU prefetching")
+                print("  • Eliminates oscillation pattern")
+                print("="*70 + "\n")
+                
                 dataset = ds.map(
                     _load_sample_tf_native,
                     num_parallel_calls=num_parallel_calls,
@@ -1115,12 +1135,30 @@ class LJSpeechDataset:
                 
             except Exception as e:
                 # Fall back to numpy_function if TF-native fails
-                print(f"⚠️  TF-native loading failed, falling back to numpy_function: {e}")
+                print("\n" + "="*70)
+                print("⚠️  WARNING: TF-native loading FAILED")
+                print("="*70)
+                print(f"Error: {e}")
+                print("Falling back to tf.numpy_function (CPU bottleneck)")
+                print("="*70 + "\n")
                 use_tf_native = False
         
         if not use_tf_native:
             # Original numpy_function approach (has CPU bottleneck)
-            print("⚠️  Using tf.numpy_function (may cause GPU utilization drops)")
+            print("\n" + "="*70)
+            print("🔴 WARNING: Using tf.numpy_function (CPU BOTTLENECK)")
+            print("="*70)
+            print("Issues:")
+            print("  • Forces CPU execution")
+            print("  • Breaks TensorFlow graph")
+            print("  • Creates GPU synchronization barrier")
+            print("  • Causes oscillation pattern (2-40% GPU usage)")
+            print("  • Prevents GPU prefetching")
+            print("\nRecommendation:")
+            print("  Set use_tf_native_loading: true in config.yaml")
+            print("  Or fix tf_native_loader.py import issues")
+            print("="*70 + "\n")
+            
             dataset = ds.map(
                 _load_sample_tf,
                 num_parallel_calls=num_parallel_calls,

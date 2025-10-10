@@ -214,12 +214,51 @@ class GPUBottleneckDiagnostic:
             with open(ljspeech_file, 'r') as f:
                 content = f.read()
                 if 'tf.numpy_function' in content:
-                    print("🔴 CRITICAL: tf.numpy_function found in data pipeline!")
-                    print("   This forces CPU execution and breaks TensorFlow graph")
-                    print("   Causes: GPU waits → CPU prepares → GPU processes → repeat")
-                    print("   Solution: Replace with TensorFlow-native operations")
+                    print("⚠️  WARNING: tf.numpy_function found in data pipeline code")
+                    print("   This CAN force CPU execution if TF-native path is not used")
+                    print("   Checking if TF-native loading is enabled...")
+                    
+                    # Check if TF-native loading is actually being used
+                    if 'use_tf_native = getattr(self.config, \'use_tf_native_loading\'' in content:
+                        print("   ✅ TF-native loading code path exists")
+                        
+                        # Check config setting
+                        if hasattr(self.config.data, 'use_tf_native_loading'):
+                            tf_native_enabled = self.config.data.use_tf_native_loading
+                            if tf_native_enabled:
+                                print(f"   ✅ Config: use_tf_native_loading = {tf_native_enabled}")
+                                print("   ✅ TF-native loading should be active (GPU-optimized)")
+                            else:
+                                print(f"   🔴 Config: use_tf_native_loading = {tf_native_enabled}")
+                                print("   🔴 CRITICAL: TF-native loading is DISABLED!")
+                                print("   Action: Set use_tf_native_loading: true in config")
+                        else:
+                            print("   ⚠️  Config setting 'use_tf_native_loading' not found")
+                            print("   Will use default value from DataConfig")
+                    else:
+                        print("   🔴 TF-native loading code path NOT found!")
+                        print("   This means tf.numpy_function is always used (CPU bottleneck)")
                 else:
                     print("✅ No tf.numpy_function usage detected")
+        
+        # Check for TF-native loader module
+        print("\n🔍 Checking for TF-native loader module...")
+        tf_native_file = Path(__file__).parent.parent / "myxtts" / "data" / "tf_native_loader.py"
+        if tf_native_file.exists():
+            print("   ✅ tf_native_loader.py exists")
+            # Try to import it
+            try:
+                import sys
+                sys.path.insert(0, str(Path(__file__).parent.parent))
+                from myxtts.data.tf_native_loader import TFNativeDataLoader
+                print("   ✅ TFNativeDataLoader can be imported")
+                print("   ✅ GPU-optimized data loading is available")
+            except Exception as e:
+                print(f"   🔴 Failed to import TFNativeDataLoader: {e}")
+                print("   🔴 TF-native loading will fail!")
+        else:
+            print("   🔴 tf_native_loader.py NOT found!")
+            print("   🔴 TF-native loading not available!")
         
         return {
             'avg_time': avg_time,
@@ -277,6 +316,7 @@ class GPUBottleneckDiagnostic:
         print("   Ensure these settings in config.yaml:")
         print("   ")
         print("   data:")
+        print("     use_tf_native_loading: true    # CRITICAL for GPU optimization")
         print("     num_workers: 8-16")
         print("     prefetch_buffer_size: 8-16")
         print("     prefetch_to_gpu: true")
@@ -287,6 +327,15 @@ class GPUBottleneckDiagnostic:
         print("     enable_graph_mode: true")
         print("     enable_xla_compilation: true")
         print("     enable_eager_debug: false")
+        
+        print("\n4. 🔍 VERIFICATION STEPS")
+        print("   After configuration changes:")
+        print("   1. Re-run this diagnostic tool")
+        print("   2. Look for: '✅ SUCCESS: Using TensorFlow-native data loading'")
+        print("   3. Should NOT see: '🔴 WARNING: Using tf.numpy_function'")
+        print("   4. Monitor GPU with: watch -n 0.5 nvidia-smi")
+        print("   5. Expect: Stable 70-95% GPU utilization")
+        print("   6. No more oscillation between 2-40%")
 
 
 def main():
@@ -343,11 +392,34 @@ def main():
     print("\n" + "="*70)
     print("DIAGNOSTIC COMPLETE")
     print("="*70)
-    print("\nNext steps:")
-    print("1. Review recommendations above")
-    print("2. Apply suggested configuration changes")
-    print("3. Re-run diagnostic to verify improvements")
-    print("4. Monitor GPU utilization during training with: watch -n 0.5 nvidia-smi")
+    print("\n📋 QUICK FIX SUMMARY:")
+    print("-" * 70)
+    
+    # Check current config status
+    if metrics:
+        if metrics.get('oscillation_detected'):
+            print("🔴 ISSUE DETECTED: GPU oscillation pattern")
+            print("\n✅ SOLUTION:")
+            print("   1. Edit configs/config.yaml")
+            print("   2. Under 'data:' section, ensure:")
+            print("      use_tf_native_loading: true")
+            print("   3. Save and re-run training")
+            print("   4. Verify with: python utilities/diagnose_gpu_bottleneck.py")
+        else:
+            print("✅ Data pipeline looks stable")
+            print("   If still seeing GPU issues, check:")
+            print("   - Batch size (may be too small)")
+            print("   - Model GPU memory (may need larger allocation)")
+            print("   - Dual-GPU configuration (data_gpu and model_gpu)")
+    
+    print("\n📚 DOCUMENTATION:")
+    print("   - GPU_OSCILLATION_SOLUTION_SUMMARY.md")
+    print("   - docs/GPU_OSCILLATION_FIX.md")
+    print("   - DUAL_GPU_BOTTLENECK_FIX.md")
+    print("\n🔧 UTILITY:")
+    print("   - This tool: python utilities/diagnose_gpu_bottleneck.py")
+    print("   - Monitor GPU: watch -n 0.5 nvidia-smi")
+    print("=" * 70)
 
 
 if __name__ == "__main__":
