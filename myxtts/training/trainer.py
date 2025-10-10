@@ -65,7 +65,8 @@ class XTTSTrainer:
         self,
         config: XTTSConfig,
         model: Optional[XTTS] = None,
-        resume_checkpoint: Optional[str] = None
+        resume_checkpoint: Optional[str] = None,
+        model_device: Optional[str] = None
     ):
         """
         Initialize XTTS trainer.
@@ -74,9 +75,11 @@ class XTTSTrainer:
             config: Training configuration
             model: Pre-initialized model (creates new if None)
             resume_checkpoint: Path to checkpoint for resuming training
+            model_device: Explicit device for model placement (e.g., '/GPU:1' for multi-GPU mode)
         """
         self.config = config
         self.logger = setup_logging()
+        self.model_device = model_device  # Store for multi-GPU support
 
         self.summary_writer = None
         try:
@@ -179,9 +182,12 @@ class XTTSTrainer:
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
             # CRITICAL FIX: Ensure model is created with strategy-managed placement
-            with get_device_context():
+            # Use explicit device for multi-GPU mode, otherwise default device
+            with get_device_context(self.model_device):
                 # Initialize model
                 if model is None:
+                    if self.model_device:
+                        self.logger.info(f"Creating model on device: {self.model_device}")
                     self.model = XTTS(config.model)
                 else:
                     self.model = model
@@ -646,7 +652,8 @@ class XTTSTrainer:
             Dictionary with loss values
         """
         # Wrap entire training step in GPU device context
-        with get_device_context():
+        # Use explicit model device for multi-GPU mode, otherwise default device
+        with get_device_context(self.model_device):
             # Memory optimization: cap text/mel lengths independently to avoid OOM
             max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
             if max_text_len:
@@ -658,12 +665,26 @@ class XTTSTrainer:
                 mel_spectrograms = mel_spectrograms[:, :max_mel_len, :]
                 mel_lengths = tf.minimum(mel_lengths, max_mel_len)
             
-            # Ensure tensors are on GPU if available
+            # Ensure tensors are on correct GPU
+            # In multi-GPU mode, data comes from GPU:0 and needs to be on model's device
+            # TensorFlow with 'silent' policy will automatically copy when needed
             if self.device == "GPU":
-                text_sequences = ensure_gpu_placement(text_sequences)
-                mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
-                text_lengths = ensure_gpu_placement(text_lengths)
-                mel_lengths = ensure_gpu_placement(mel_lengths)
+                if self.model_device:
+                    # Multi-GPU mode: explicit device placement for clarity
+                    # Data is prefetched on GPU:0, model is on GPU:1
+                    # TensorFlow will handle the transfer automatically with 'silent' policy
+                    # We just ensure proper placement with identity op
+                    with tf.device(self.model_device):
+                        text_sequences = tf.identity(text_sequences)
+                        mel_spectrograms = tf.identity(mel_spectrograms)
+                        text_lengths = tf.identity(text_lengths)
+                        mel_lengths = tf.identity(mel_lengths)
+                else:
+                    # Single-GPU mode: standard placement
+                    text_sequences = ensure_gpu_placement(text_sequences)
+                    mel_spectrograms = ensure_gpu_placement(mel_spectrograms)
+                    text_lengths = ensure_gpu_placement(text_lengths)
+                    mel_lengths = ensure_gpu_placement(mel_lengths)
             
             # CRITICAL FIX: Use static shapes when available to prevent retracing
             # Get static shapes from tensor.shape instead of tf.shape() for fixed-length tensors
