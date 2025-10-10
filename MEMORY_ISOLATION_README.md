@@ -132,6 +132,22 @@ watch -n 1 nvidia-smi
 
 ---
 
+## 🔧 TensorFlow Version Compatibility | سازگاری نسخه TensorFlow
+
+این feature با تمام نسخه‌های TensorFlow 2.4 به بعد سازگار است | This feature is compatible with all TensorFlow versions 2.4+
+
+| TensorFlow Version | API Used | Status |
+|-------------------|----------|--------|
+| 2.10+ | `set_virtual_device_configuration` | ✅ Full Support |
+| 2.4-2.9 | `set_logical_device_configuration` | ✅ Full Support |
+| < 2.4 | `set_memory_growth` (fallback) | ⚠️ Limited |
+
+**Note**: کد به صورت خودکار API مناسب را تشخیص می‌دهد | The code automatically detects and uses the appropriate API.
+
+برای اطلاعات بیشتر: `docs/TENSORFLOW_API_COMPATIBILITY_FIX.md`
+
+---
+
 ## 📊 Performance | عملکرد
 
 ### Expected Results | نتایج مورد انتظار:
