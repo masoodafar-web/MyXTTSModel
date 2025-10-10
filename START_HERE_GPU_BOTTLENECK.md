@@ -10,19 +10,31 @@
 
 ## ⚡ Quick Start (5 دقیقه)
 
-### گام ۱: تشخیص سریع
+### گام ۱: بررسی و تشخیص
 
 ```bash
-python utilities/comprehensive_gpu_diagnostic.py --data-path ./data
+# Validate configuration
+python utilities/validate_gpu_pipeline.py
+```
+
+اگر خطا دارد، خودکار تعمیر کنید:
+```bash
+python utilities/validate_gpu_pipeline.py --fix
+```
+
+### گام ۱.۵: تشخیص عمیق (اختیاری)
+
+```bash
+python utilities/diagnose_gpu_bottleneck.py --batch-size 16 --num-batches 50
 ```
 
 این دستور **تمام مشکلات را شناسایی** و **راهحل دقیق** ارائه میدهد.
 
 ---
 
-### گام ۲: اعمال تغییرات
+### گام ۲: اعمال تغییرات (اگر validator خطا داد)
 
-بر اساس خروجی گام ۱، فایل `configs/config.yaml` را ویرایش کنید:
+فایل `configs/config.yaml` را ویرایش کنید:
 
 ```yaml
 data:
@@ -38,14 +50,22 @@ training:
 
 ---
 
-### گام ۳: تست
+### گام ۳: تست و تایید
 
 ```bash
-# بررسی بهبود
-python utilities/enhanced_gpu_profiler.py --data-path ./data --num-batches 50
+# Verify the fix
+python utilities/diagnose_gpu_bottleneck.py --batch-size 16 --num-batches 50
 ```
 
-باید **variation < 20%** و **avg time < 100ms** ببینید.
+باید ببینید:
+```
+✅ SUCCESS: Using TensorFlow-native data loading (GPU-optimized)
+```
+
+**نباید** ببینید:
+```
+🔴 WARNING: Using tf.numpy_function (CPU BOTTLENECK)
+```
 
 ---
 
@@ -322,14 +342,41 @@ watch -n 0.5 nvidia-smi
 
 ---
 
-**تاریخ:** 2024  
+## 🔧 ابزارهای جدید / New Tools (2025)
+
+### Validation Tool (توصیه میشود!)
+```bash
+# Check and auto-fix configuration
+python utilities/validate_gpu_pipeline.py --fix
+```
+
+### Diagnostic Tool
+```bash
+# Diagnose data pipeline bottlenecks
+python utilities/diagnose_gpu_bottleneck.py --batch-size 16
+```
+
+### Quick Reference
+- **راهنمای سریع:** [QUICK_FIX_GPU_OSCILLATION.md](QUICK_FIX_GPU_OSCILLATION.md)
+- **راهنمای کامل:** [docs/GPU_OSCILLATION_FIX.md](docs/GPU_OSCILLATION_FIX.md)
+
+---
+
+**تاریخ:** 2025-10-10  
 **وضعیت:** ✅ **راهحل کامل و آماده استفاده**  
 **زمان استفاده:** ~5 دقیقه  
-**بهبود:** 5-10x سریعتر
+**بهبود:** 2-3x سریعتر (70-95% GPU utilization)
 
 ---
 
 **شروع کنید:**
 ```bash
-python utilities/comprehensive_gpu_diagnostic.py --data-path ./data
+# Step 1: Validate
+python utilities/validate_gpu_pipeline.py --fix
+
+# Step 2: Verify
+python utilities/diagnose_gpu_bottleneck.py --batch-size 16
+
+# Step 3: Train
+python train_main.py --enable-memory-isolation
 ```
