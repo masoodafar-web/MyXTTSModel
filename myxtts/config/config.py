@@ -208,6 +208,10 @@ class DataConfig:
     # Increase these for longer sentences: max_mel_frames for audio duration, 
     # ModelConfig.max_attention_sequence_length for text length
     max_mel_frames: int = 1024  # Increased from 512 for better GPU utilization (~13 seconds at 22kHz)
+    max_text_length: int = 200  # Maximum text sequence length for fixed padding
+    
+    # Static shapes for preventing tf.function retracing (CRITICAL for GPU utilization)
+    pad_to_fixed_length: bool = False  # Enable fixed-length padding to prevent retracing
 
     # GPU-specific optimizations
     enable_xla: bool = True

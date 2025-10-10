@@ -665,6 +665,10 @@ def build_config(
     # Debugging / diagnostics
     use_simple_loss: bool = False,
     tensorboard_log_dir: Optional[str] = None,
+    # Static shapes optimization (CRITICAL for GPU utilization)
+    enable_static_shapes: bool = False,
+    max_text_length_override: Optional[int] = None,
+    max_mel_frames_override: Optional[int] = None,
     ) -> XTTSConfig:
     preset_key = model_size.lower() if model_size else "normal"
     preset = MODEL_SIZE_PRESETS.get(preset_key, MODEL_SIZE_PRESETS["normal"])
@@ -928,12 +932,16 @@ def build_config(
         enable_memory_mapping=True,
         cache_verification=True,
         prefetch_to_gpu=True if prefetch_to_gpu is None else prefetch_to_gpu,
-        max_mel_frames=max_attention_len,
+        max_mel_frames=max_mel_frames_override if max_mel_frames_override else max_attention_len,
+        max_text_length=max_text_length_override if max_text_length_override else 200,
         enable_xla=True,
         enable_tensorrt=False,
         mixed_precision=False,  # Disable mixed precision for stability on multi-GPU
         pin_memory=True,
         persistent_workers=True,
+        
+        # Static shapes optimization (CRITICAL for preventing retracing and stabilizing GPU)
+        pad_to_fixed_length=enable_static_shapes,
         # Additional GPU utilization optimizations (handled in DataLoader creation)
         # drop_last=True,  # Handled by DataLoader
         # multiprocessing_context='spawn',  # Handled by DataLoader
@@ -1176,6 +1184,27 @@ def main():
         help="Run TensorFlow functions eagerly for debugging"
     )
 
+    # Static shapes optimization for GPU utilization (CRITICAL FIX)
+    parser.add_argument(
+        "--enable-static-shapes",
+        "--pad-to-fixed-length",
+        dest="enable_static_shapes",
+        action="store_true",
+        help="Enable fixed-length padding to prevent tf.function retracing and stabilize GPU utilization (recommended)"
+    )
+    parser.add_argument(
+        "--max-text-length",
+        type=int,
+        default=200,
+        help="Maximum text sequence length for fixed padding (default: 200)"
+    )
+    parser.add_argument(
+        "--max-mel-frames",
+        type=int,
+        default=None,
+        help="Maximum mel spectrogram frames for fixed padding (default: auto from model config)"
+    )
+
     args = parser.parse_args()
 
     logger = setup_logging()
@@ -1348,6 +1377,10 @@ def main():
         # Debugging
         use_simple_loss=args.simple_loss,
         tensorboard_log_dir=tensorboard_log_dir,
+        # Static shapes optimization (CRITICAL for GPU utilization)
+        enable_static_shapes=args.enable_static_shapes,
+        max_text_length_override=args.max_text_length,
+        max_mel_frames_override=args.max_mel_frames,
     )
 
     # Apply optimization level
@@ -1406,6 +1439,17 @@ def main():
         logger.info(f"Label smoothing: {config.training.use_label_smoothing}")
     if hasattr(config.training, 'use_huber_loss'):
         logger.info(f"Huber loss: {config.training.use_huber_loss}")
+    
+    # Log static shapes configuration (CRITICAL for GPU utilization)
+    if hasattr(config.data, 'pad_to_fixed_length'):
+        logger.info(f"Static shapes (pad_to_fixed_length): {config.data.pad_to_fixed_length}")
+        if config.data.pad_to_fixed_length:
+            logger.info(f"  ✅ ENABLED - This prevents tf.function retracing and stabilizes GPU utilization")
+            logger.info(f"  Max text length: {config.data.max_text_length}")
+            logger.info(f"  Max mel frames: {config.data.max_mel_frames}")
+        else:
+            logger.warning(f"  ⚠️  DISABLED - GPU utilization may be unstable due to retracing")
+            logger.warning(f"  Consider using --enable-static-shapes for better performance")
     logger.info("=====================================")
     
     # Log plateau prevention and troubleshooting recommendations
