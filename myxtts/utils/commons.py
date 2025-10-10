@@ -17,6 +17,109 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 
+def early_gpu_configuration(data_gpu: Optional[int] = None, model_gpu: Optional[int] = None) -> bool:
+    """Configure GPUs before any TensorFlow operations.
+    
+    This function MUST be called before any TensorFlow GPU operations to avoid the error:
+    "Physical devices cannot be modified after being initialized"
+    
+    Args:
+        data_gpu: GPU ID for data processing (Multi-GPU mode)
+        model_gpu: GPU ID for model training (Multi-GPU mode)
+    
+    Returns:
+        bool: True if multi-GPU mode was successfully configured, False otherwise
+    """
+    logger = logging.getLogger("MyXTTS")
+    
+    # Check if Multi-GPU mode is requested
+    if data_gpu is not None and model_gpu is not None:
+        logger.info("🎯 Configuring Multi-GPU Mode...")
+        logger.info(f"   Data Processing GPU: {data_gpu}")
+        logger.info(f"   Model Training GPU: {model_gpu}")
+        
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            
+            # Validate GPU indices
+            if len(gpus) < 2:
+                logger.error(f"❌ Multi-GPU requires at least 2 GPUs, found {len(gpus)}")
+                logger.error("   Falling back to single-GPU mode")
+                return False
+            
+            if data_gpu < 0 or data_gpu >= len(gpus):
+                logger.error(f"❌ Invalid data_gpu={data_gpu}, must be 0-{len(gpus)-1}")
+                return False
+                
+            if model_gpu < 0 or model_gpu >= len(gpus):
+                logger.error(f"❌ Invalid model_gpu={model_gpu}, must be 0-{len(gpus)-1}")
+                return False
+            
+            # Configure visible devices for multi-GPU mode
+            selected_gpus = [gpus[data_gpu], gpus[model_gpu]]
+            tf.config.set_visible_devices(selected_gpus, 'GPU')
+            logger.info(f"   Set visible devices: GPU {data_gpu} and GPU {model_gpu}")
+            
+            # Configure memory settings for each GPU
+            # Note: After set_visible_devices, the indices are remapped to 0 and 1
+            visible_gpus = tf.config.list_physical_devices('GPU')
+            
+            try:
+                # Configure data GPU (now at index 0)
+                tf.config.experimental.set_memory_growth(visible_gpus[0], True)
+                logger.info(f"   Configured memory growth for data GPU")
+            except Exception as e:
+                logger.warning(f"   Could not set memory growth for data GPU: {e}")
+            
+            try:
+                # Configure model GPU (now at index 1) 
+                tf.config.experimental.set_memory_growth(visible_gpus[1], True)
+                logger.info(f"   Configured memory growth for model GPU")
+            except Exception as e:
+                logger.warning(f"   Could not set memory growth for model GPU: {e}")
+            
+            # Set device policy to allow automatic tensor copying
+            try:
+                tf.config.experimental.set_device_policy('silent')
+                logger.info("   Set device policy to 'silent' for automatic placement")
+            except Exception as e:
+                logger.debug(f"   Device policy note: {e}")
+            
+            logger.info("✅ Multi-GPU configuration completed successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Multi-GPU setup failed: {e}")
+            logger.error("   This error typically means TensorFlow was already initialized.")
+            logger.error("   Ensure early_gpu_configuration() is called BEFORE any TF operations.")
+            return False
+    else:
+        # Single GPU mode - configure all available GPUs with memory growth
+        logger.debug("Configuring single-GPU mode...")
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                for gpu in gpus:
+                    try:
+                        tf.config.experimental.set_memory_growth(gpu, True)
+                    except Exception as e:
+                        logger.debug(f"Memory growth configuration note for {gpu}: {e}")
+                
+                # Set device policy
+                try:
+                    tf.config.experimental.set_device_policy('silent')
+                except Exception as e:
+                    logger.debug(f"Device policy note: {e}")
+                    
+                logger.debug(f"Single-GPU mode configured with {len(gpus)} GPU(s)")
+            else:
+                logger.debug("No GPUs available, using CPU")
+        except Exception as e:
+            logger.debug(f"GPU configuration note: {e}")
+        
+        return False
+
+
 def configure_gpus(
     visible_gpus: Optional[str] = None,
     memory_growth: bool = True,

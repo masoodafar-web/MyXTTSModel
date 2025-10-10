@@ -1208,37 +1208,29 @@ class LJSpeechDataset:
             print(f"   - Data Processing GPU: {data_gpu}")
             print(f"   - Model Training GPU: {model_gpu}")
             
-            gpus = tf.config.list_physical_devices('GPU')
-            if len(gpus) > max(data_gpu, model_gpu):
-                try:
-                    # Configure GPU memory growth
-                    for gpu in gpus:
-                        tf.config.experimental.set_memory_growth(gpu, True)
-                    
-                    # Prefetch data to the data processing GPU
-                    data_device = f'/GPU:{data_gpu}'
-                    gpu_buf = max(6, pipeline_buffer_size // 2)
-                    
-                    print(f"   - Prefetching to {data_device} with buffer_size={gpu_buf}")
-                    dataset = dataset.apply(
-                        tf.data.experimental.prefetch_to_device(
-                            data_device,
-                            buffer_size=gpu_buf
-                        )
+            # Note: GPU configuration is done early in train_main.py via early_gpu_configuration()
+            # After early configuration, visible devices are remapped: data_gpu -> GPU:0, model_gpu -> GPU:1
+            try:
+                # In multi-GPU mode, data processing uses GPU:0 (remapped from original data_gpu)
+                data_device = '/GPU:0'
+                gpu_buf = max(6, pipeline_buffer_size // 2)
+                
+                print(f"   - Prefetching to {data_device} with buffer_size={gpu_buf}")
+                dataset = dataset.apply(
+                    tf.data.experimental.prefetch_to_device(
+                        data_device,
+                        buffer_size=gpu_buf
                     )
-                    
-                    # Additional host-side prefetch for smooth data flow
-                    dataset = dataset.prefetch(tf.data.AUTOTUNE)
-                    
-                except Exception as e:
-                    print(f"⚠️  Multi-GPU setup failed, falling back to default: {e}")
-                    if prefetch:
-                        dataset = dataset.prefetch(tf.data.AUTOTUNE)
-            else:
-                print(f"⚠️  Insufficient GPUs for Multi-GPU Mode (need {max(data_gpu, model_gpu)+1}, have {len(gpus)})")
-                print(f"   Falling back to Single-GPU Buffered Mode")
+                )
+                
+                # Additional host-side prefetch for smooth data flow
+                dataset = dataset.prefetch(tf.data.AUTOTUNE)
+                
+            except Exception as e:
+                print(f"⚠️  Multi-GPU data pipeline setup failed: {e}")
+                print(f"   Falling back to default prefetching")
                 if prefetch:
-                    dataset = dataset.prefetch(pipeline_buffer_size)
+                    dataset = dataset.prefetch(tf.data.AUTOTUNE)
         else:
             # ============================================================
             # SINGLE-GPU BUFFERED MODE: Smart prefetching with cache
