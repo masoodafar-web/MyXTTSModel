@@ -365,6 +365,7 @@ import torch
 from myxtts.config.config import XTTSConfig, ModelConfig, DataConfig, TrainingConfig
 from myxtts.models.xtts import XTTS
 from myxtts.training.trainer import XTTSTrainer
+from myxtts.training.memory_isolated_trainer import MemoryIsolatedDualGPUTrainer
 from myxtts.utils.commons import setup_logging, find_latest_checkpoint
 
 # Try to import optimization utilities, provide fallbacks if not available
@@ -1159,6 +1160,23 @@ def main():
         help="Delay in seconds before model training starts in Multi-GPU Mode (default: 2.0)"
     )
     parser.add_argument(
+        "--enable-memory-isolation",
+        action="store_true",
+        help="Enable memory-isolated dual-GPU training with producer-consumer pipeline"
+    )
+    parser.add_argument(
+        "--data-gpu-memory",
+        type=int,
+        default=8192,
+        help="Memory limit in MB for data GPU when using memory isolation (default: 8192 = 8GB)"
+    )
+    parser.add_argument(
+        "--model-gpu-memory",
+        type=int,
+        default=16384,
+        help="Memory limit in MB for model GPU when using memory isolation (default: 16384 = 16GB)"
+    )
+    parser.add_argument(
         "--model-size",
         choices=sorted(MODEL_SIZE_PRESETS.keys()),
         default="normal",
@@ -1650,7 +1668,27 @@ def main():
         logger.info(f"🎯 Multi-GPU Mode: Model will be placed on {model_device}")
         logger.info(f"   (Original GPU {config.data.model_gpu} is now mapped to GPU:1)")
     
-    trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt, model_device=model_device)
+    # Create appropriate trainer based on memory isolation flag
+    if args.enable_memory_isolation and is_multi_gpu_mode:
+        logger.info("=" * 70)
+        logger.info("🎯 Memory-Isolated Dual-GPU Training Mode Enabled")
+        logger.info("=" * 70)
+        
+        trainer = MemoryIsolatedDualGPUTrainer(
+            config=config,
+            data_gpu_id=config.data.data_gpu,
+            model_gpu_id=config.data.model_gpu,
+            data_gpu_memory_limit=args.data_gpu_memory,
+            model_gpu_memory_limit=args.model_gpu_memory,
+            resume_checkpoint=resume_ckpt,
+            enable_monitoring=True
+        )
+    elif args.enable_memory_isolation and not is_multi_gpu_mode:
+        logger.warning("⚠️  --enable-memory-isolation requires --data-gpu and --model-gpu")
+        logger.warning("   Falling back to standard trainer")
+        trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt, model_device=model_device)
+    else:
+        trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt, model_device=model_device)
     
     # Fix optimizer variable mismatch issue
     try:
