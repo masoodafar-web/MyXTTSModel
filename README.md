@@ -36,8 +36,11 @@ pip install -r requirements.txt
 # Basic training
 python3 train_main.py --train-data ../dataset/dataset_train --val-data ../dataset/dataset_eval
 
-# Advanced training with optimizations
-python3 train_main.py --optimization-level enhanced
+# Training with stable GPU utilization (RECOMMENDED)
+python3 train_main.py --enable-static-shapes --batch-size 16
+
+# Advanced training with all optimizations
+python3 train_main.py --enable-static-shapes --optimization-level enhanced --batch-size 16
 ```
 
 ## 📁 Project Structure
