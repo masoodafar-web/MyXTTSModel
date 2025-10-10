@@ -87,6 +87,10 @@ class LJSpeechDataset:
         self._custom_index_map: Optional[List[int]] = None
         # Thread lock for cache access
         self._cache_lock = threading.RLock()
+        # Language detection cache to avoid repeated detection
+        self._language_cache: Dict[str, str] = {}
+        # Normalized text cache to avoid repeated normalization
+        self._normalized_text_cache: Dict[Tuple[str, str], str] = {}
         
         # Multi-speaker support
         self.speaker_mapping: Dict[str, int] = {}  # speaker_id -> speaker_index
@@ -144,6 +148,10 @@ class LJSpeechDataset:
         lang_tag = getattr(config, 'language', 'xx')
         symbol_dir = self.processed_dir / f"tokens_{tokenizer_tag}_{phon_tag}_{blank_tag}_{lang_tag}"
         self.symbol_map_path = symbol_dir / "symbols.json"
+        
+        # TF-native cache directory for persistent text preprocessing cache
+        self.tf_native_cache_dir = self.processed_dir / f"tf_native_cache_{subset}"
+        self.tf_native_cache_dir.mkdir(parents=True, exist_ok=True)
 
         # Load dataset
         self._prepare_dataset()
@@ -810,6 +818,9 @@ class LJSpeechDataset:
         """
         Prepare token sequence and audio path without triggering audio loading.
         
+        OPTIMIZED: Uses caching for language detection and text normalization
+        to reduce redundant processing during parallel cache building.
+        
         Args:
             dataset_idx: Dataset index (0..len(self)-1)
             max_tokens: Optional cap on number of text tokens
@@ -824,8 +835,22 @@ class LJSpeechDataset:
         text_normalized = row['normalized_transcription']
         audio_id = str(row['id'])
         
-        detected_language = self._detect_language(text, audio_id)
-        text_normalized = self._apply_phone_level_normalization(text_normalized, detected_language)
+        # Use cached language detection to avoid repeated processing
+        with self._cache_lock:
+            if audio_id in self._language_cache:
+                detected_language = self._language_cache[audio_id]
+            else:
+                detected_language = self._detect_language(text, audio_id)
+                self._language_cache[audio_id] = detected_language
+        
+        # Use cached phone-level normalization
+        norm_cache_key = (text_normalized, detected_language)
+        with self._cache_lock:
+            if norm_cache_key in self._normalized_text_cache:
+                text_normalized = self._normalized_text_cache[norm_cache_key]
+            else:
+                text_normalized = self._apply_phone_level_normalization(text_normalized, detected_language)
+                self._normalized_text_cache[norm_cache_key] = text_normalized
         
         tokens = self._load_tokens_optimized(text_normalized, audio_id)
         if max_tokens > 0 and tokens.shape[0] > max_tokens:
@@ -837,6 +862,11 @@ class LJSpeechDataset:
         """
         Build (or reuse) tensors consumed by the TF-native data pipeline.
         
+        OPTIMIZED: 
+        1. Uses persistent disk cache to avoid rebuilding every time
+        2. Uses parallel processing to speed up initial cache building
+        3. Reduces CPU bottleneck during dataset initialization
+        
         Args:
             max_tokens: Optional cap on token length used when populating cache
         
@@ -844,24 +874,135 @@ class LJSpeechDataset:
             Dictionary containing ragged tokens and audio path tensors
         """
         cache_key = (len(self), max_tokens)
+        
+        # Check in-memory cache first (fastest)
         if self._tf_native_cache and self._tf_native_cache.get("key") == cache_key:
             return self._tf_native_cache
         
-        token_sequences: List[np.ndarray] = []
-        audio_paths: List[str] = []
-        for dataset_idx in range(len(self)):
-            tokens, audio_path = self._prepare_text_entry(dataset_idx, max_tokens)
-            token_sequences.append(tokens)
-            audio_paths.append(audio_path)
+        dataset_size = len(self)
         
-        tokens_rt = tf.ragged.constant(token_sequences, dtype=tf.int32)
-        audio_paths_tensor = tf.constant(audio_paths, dtype=tf.string)
+        # Try to load from disk cache (fast)
+        cache_file_tokens = self.tf_native_cache_dir / f"tokens_{dataset_size}_{max_tokens}.npy"
+        cache_file_paths = self.tf_native_cache_dir / f"paths_{dataset_size}_{max_tokens}.npy"
+        cache_metadata_file = self.tf_native_cache_dir / f"metadata_{dataset_size}_{max_tokens}.json"
+        
+        if cache_file_tokens.exists() and cache_file_paths.exists() and cache_metadata_file.exists():
+            try:
+                print(f"\n{'='*70}")
+                print("LOADING TF-NATIVE CACHE FROM DISK")
+                print("="*70)
+                print(f"Loading cached text preprocessing for {dataset_size} samples...")
+                
+                # Load metadata to verify cache validity
+                with open(cache_metadata_file, 'r') as f:
+                    cache_metadata = json.load(f)
+                
+                # Verify cache is still valid
+                if cache_metadata.get('dataset_size') == dataset_size:
+                    # Load token sequences
+                    with open(cache_file_tokens, 'rb') as f:
+                        token_data = np.load(f, allow_pickle=True)
+                    ordered_tokens = list(token_data)
+                    
+                    # Load audio paths
+                    with open(cache_file_paths, 'rb') as f:
+                        ordered_paths = np.load(f, allow_pickle=True).tolist()
+                    
+                    print(f"✅ Cache loaded successfully from disk")
+                    print(f"Building TensorFlow tensors...")
+                    
+                    tokens_rt = tf.ragged.constant(ordered_tokens, dtype=tf.int32)
+                    audio_paths_tensor = tf.constant(ordered_paths, dtype=tf.string)
+                    
+                    self._tf_native_cache = {
+                        "key": cache_key,
+                        "tokens": tokens_rt,
+                        "audio_paths": audio_paths_tensor,
+                    }
+                    
+                    print(f"✅ TF-native cache ready (loaded from disk)")
+                    print("="*70 + "\n")
+                    
+                    return self._tf_native_cache
+                else:
+                    print(f"⚠️  Cache metadata mismatch, rebuilding...")
+            except Exception as e:
+                print(f"⚠️  Failed to load cache from disk: {e}")
+                print(f"Rebuilding cache...")
+        
+        # Build cache from scratch with parallel processing
+        print(f"\n{'='*70}")
+        print("BUILDING TF-NATIVE CACHE (Text Preprocessing)")
+        print("="*70)
+        print(f"Processing {dataset_size} samples...")
+        print("This is a one-time operation (will be cached to disk)")
+        
+        # Use parallel processing to speed up cache building
+        # This reduces the CPU bottleneck during dataset initialization
+        num_workers = min(max(4, self.config.num_workers // 2), 16)
+        print(f"Using {num_workers} parallel workers for faster preprocessing")
+        
+        # Parallel processing with ordered results
+        ordered_tokens = [None] * dataset_size
+        ordered_paths = [None] * dataset_size
+        
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all tasks with their indices
+            futures = {
+                executor.submit(self._prepare_text_entry, idx, max_tokens): idx
+                for idx in range(dataset_size)
+            }
+            
+            # Collect results with progress tracking
+            completed = 0
+            for future in as_completed(futures):
+                idx = futures[future]
+                tokens, audio_path = future.result()
+                ordered_tokens[idx] = tokens
+                ordered_paths[idx] = audio_path
+                
+                completed += 1
+                if completed % max(1, dataset_size // 20) == 0 or completed == dataset_size:
+                    progress_pct = (completed / dataset_size) * 100
+                    print(f"  Progress: {completed}/{dataset_size} ({progress_pct:.1f}%)", end='\r')
+        
+        print()  # New line after progress
+        print(f"✅ Text preprocessing complete")
+        
+        # Save cache to disk for future use
+        try:
+            print(f"Saving cache to disk...")
+            np.save(cache_file_tokens, np.array(ordered_tokens, dtype=object), allow_pickle=True)
+            np.save(cache_file_paths, np.array(ordered_paths, dtype=object), allow_pickle=True)
+            
+            # Save metadata for cache validation
+            cache_metadata = {
+                'dataset_size': dataset_size,
+                'max_tokens': max_tokens,
+                'timestamp': time.time()
+            }
+            with open(cache_metadata_file, 'w') as f:
+                json.dump(cache_metadata, f)
+            
+            print(f"✅ Cache saved to disk: {self.tf_native_cache_dir}")
+        except Exception as e:
+            print(f"⚠️  Warning: Failed to save cache to disk: {e}")
+            print(f"Cache will be rebuilt on next run")
+        
+        print(f"Building TensorFlow tensors...")
+        
+        tokens_rt = tf.ragged.constant(ordered_tokens, dtype=tf.int32)
+        audio_paths_tensor = tf.constant(ordered_paths, dtype=tf.string)
         
         self._tf_native_cache = {
             "key": cache_key,
             "tokens": tokens_rt,
             "audio_paths": audio_paths_tensor,
         }
+        
+        print(f"✅ TF-native cache built successfully")
+        print("="*70 + "\n")
+        
         return self._tf_native_cache
     
     def __len__(self) -> int:
