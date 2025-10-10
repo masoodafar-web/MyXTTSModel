@@ -25,6 +25,11 @@ def setup_gpu_memory_isolation(
     This function configures TensorFlow to use separate memory limits for each GPU,
     enabling true producer-consumer pipeline pattern without memory conflicts.
     
+    The function automatically detects and uses the appropriate TensorFlow API:
+    - TensorFlow 2.10+: Uses set_virtual_device_configuration
+    - TensorFlow < 2.10: Uses set_logical_device_configuration  
+    - Fallback: Uses set_memory_growth if neither API is available
+    
     Args:
         data_gpu_id: Physical GPU ID for data processing (0-indexed)
         model_gpu_id: Physical GPU ID for model training (0-indexed)
@@ -32,12 +37,17 @@ def setup_gpu_memory_isolation(
         model_gpu_memory_limit: Memory limit in MB for model GPU (default: 16384 = 16GB)
     
     Returns:
-        bool: True if memory isolation was successfully configured
+        bool: True if memory isolation was successfully configured with memory limits,
+              False if fallback to memory growth was used or configuration failed
         
     Example:
         >>> setup_gpu_memory_isolation(data_gpu_id=0, model_gpu_id=1)
         >>> # GPU 0 limited to 8GB for data processing
         >>> # GPU 1 limited to 16GB for model training
+    
+    Note:
+        This function must be called BEFORE any TensorFlow operations that initialize
+        the GPUs, otherwise it will fail with a RuntimeError.
     """
     try:
         gpus = tf.config.list_physical_devices('GPU')
@@ -62,17 +72,46 @@ def setup_gpu_memory_isolation(
         logger.info(f"   Data GPU {data_gpu_id}: {data_gpu_memory_limit}MB limit")
         logger.info(f"   Model GPU {model_gpu_id}: {model_gpu_memory_limit}MB limit")
         
+        # Try to use the new API (TensorFlow 2.10+) first, fallback to old API
+        use_virtual_device_api = hasattr(tf.config.experimental, 'set_virtual_device_configuration')
+        
+        if use_virtual_device_api:
+            logger.debug("   Using set_virtual_device_configuration (TensorFlow 2.10+)")
+        else:
+            logger.debug("   Using set_logical_device_configuration (TensorFlow < 2.10)")
+        
         # Configure data GPU with memory limit
         try:
-            tf.config.experimental.set_logical_device_configuration(
-                gpus[data_gpu_id],
-                [tf.config.experimental.LogicalDeviceConfiguration(
-                    memory_limit=data_gpu_memory_limit
-                )]
-            )
+            if use_virtual_device_api:
+                # New API for TensorFlow 2.10+
+                tf.config.experimental.set_virtual_device_configuration(
+                    gpus[data_gpu_id],
+                    [tf.config.experimental.VirtualDeviceConfiguration(
+                        memory_limit=data_gpu_memory_limit
+                    )]
+                )
+            else:
+                # Old API for backward compatibility
+                tf.config.experimental.set_logical_device_configuration(
+                    gpus[data_gpu_id],
+                    [tf.config.experimental.LogicalDeviceConfiguration(
+                        memory_limit=data_gpu_memory_limit
+                    )]
+                )
             logger.info(f"   ✅ Data GPU memory limit set to {data_gpu_memory_limit}MB")
+        except AttributeError as e:
+            # API not available, fallback to memory growth only
+            logger.warning(f"   ⚠️  Virtual/Logical device configuration API not available")
+            logger.warning(f"      Falling back to memory growth only")
+            for gpu in gpus:
+                try:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                except Exception as growth_error:
+                    logger.debug(f"      Memory growth setup note: {growth_error}")
+            logger.info(f"   ✅ Enabled memory growth for all GPUs as fallback")
+            return False
         except RuntimeError as e:
-            if "Virtual devices cannot be modified" in str(e):
+            if "Virtual devices cannot be modified" in str(e) or "cannot be modified after being initialized" in str(e):
                 logger.warning(f"   ⚠️  GPU already initialized, cannot set memory limit")
                 logger.warning(f"      Ensure setup_gpu_memory_isolation() is called before any TF operations")
                 return False
@@ -80,15 +119,29 @@ def setup_gpu_memory_isolation(
         
         # Configure model GPU with memory limit
         try:
-            tf.config.experimental.set_logical_device_configuration(
-                gpus[model_gpu_id],
-                [tf.config.experimental.LogicalDeviceConfiguration(
-                    memory_limit=model_gpu_memory_limit
-                )]
-            )
+            if use_virtual_device_api:
+                # New API for TensorFlow 2.10+
+                tf.config.experimental.set_virtual_device_configuration(
+                    gpus[model_gpu_id],
+                    [tf.config.experimental.VirtualDeviceConfiguration(
+                        memory_limit=model_gpu_memory_limit
+                    )]
+                )
+            else:
+                # Old API for backward compatibility
+                tf.config.experimental.set_logical_device_configuration(
+                    gpus[model_gpu_id],
+                    [tf.config.experimental.LogicalDeviceConfiguration(
+                        memory_limit=model_gpu_memory_limit
+                    )]
+                )
             logger.info(f"   ✅ Model GPU memory limit set to {model_gpu_memory_limit}MB")
+        except AttributeError as e:
+            # API not available, this shouldn't happen if data GPU succeeded
+            logger.warning(f"   ⚠️  Unexpected: API became unavailable for model GPU")
+            return False
         except RuntimeError as e:
-            if "Virtual devices cannot be modified" in str(e):
+            if "Virtual devices cannot be modified" in str(e) or "cannot be modified after being initialized" in str(e):
                 logger.warning(f"   ⚠️  GPU already initialized, cannot set memory limit")
                 return False
             raise
