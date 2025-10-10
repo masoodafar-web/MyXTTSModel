@@ -360,12 +360,19 @@ def ensure_gpu_placement(tensor):
     return tensor
 
 
-def get_device_context():
+def get_device_context(device: Optional[str] = None):
     """
     Return an appropriate device context manager for ops/variable creation.
     
-    Prefers GPU:0 when available, otherwise CPU:0.
+    Args:
+        device: Explicit device to use (e.g., '/GPU:1'). If None, defaults to GPU:0 or CPU:0.
+    
+    Returns:
+        Device context manager
     """
+    if device:
+        return tf.device(device)
+    
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         return tf.device('/GPU:0')

@@ -1642,6 +1642,7 @@ def main():
             logger.info("No existing checkpoint found, starting fresh")
 
     # Intelligent GPU Pipeline: Model GPU placement for Multi-GPU Mode
+    model_device = None
     if is_multi_gpu_mode:
         # After early_gpu_configuration(), visible devices are remapped:
         # Original data_gpu -> GPU:0, Original model_gpu -> GPU:1
@@ -1649,7 +1650,7 @@ def main():
         logger.info(f"🎯 Multi-GPU Mode: Model will be placed on {model_device}")
         logger.info(f"   (Original GPU {config.data.model_gpu} is now mapped to GPU:1)")
     
-    trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt)
+    trainer = XTTSTrainer(config=config, resume_checkpoint=resume_ckpt, model_device=model_device)
     
     # Fix optimizer variable mismatch issue
     try:
