@@ -245,8 +245,7 @@ for _tmp_env in ("TMPDIR", "TEMP", "TMP"):
         os.environ[_tmp_env] = _DEFAULT_TMP_DIR
 
 # CRITICAL: Early GPU configuration must happen BEFORE importing TensorFlow
-# We need to parse GPU arguments early, before TF import
-_EARLY_GPU_CONFIG_DONE = False
+# Parse GPU arguments early and configure before TF import
 _IS_MULTI_GPU_MODE = False
 
 def _parse_gpu_args_early():
@@ -257,30 +256,110 @@ def _parse_gpu_args_early():
     args, _ = parser.parse_known_args()
     return args.data_gpu, args.model_gpu
 
-def _early_setup():
-    """Perform early GPU setup before TensorFlow import."""
-    global _EARLY_GPU_CONFIG_DONE, _IS_MULTI_GPU_MODE
-    if not _EARLY_GPU_CONFIG_DONE:
-        data_gpu, model_gpu = _parse_gpu_args_early()
+def _early_gpu_setup():
+    """Configure GPUs before TensorFlow import."""
+    global _IS_MULTI_GPU_MODE
+    
+    data_gpu, model_gpu = _parse_gpu_args_early()
+    
+    # Import TensorFlow early (before other heavy imports)
+    import tensorflow as tf
+    import logging
+    
+    logger = logging.getLogger("MyXTTS")
+    
+    # Configure multi-GPU mode if requested
+    if data_gpu is not None and model_gpu is not None:
+        logger.info("🎯 Configuring Multi-GPU Mode...")
+        logger.info(f"   Data Processing GPU: {data_gpu}")
+        logger.info(f"   Model Training GPU: {model_gpu}")
         
-        # Import early_gpu_configuration before TensorFlow
-        from myxtts.utils.commons import early_gpu_configuration
-        _IS_MULTI_GPU_MODE = early_gpu_configuration(data_gpu=data_gpu, model_gpu=model_gpu)
-        
-        # Check if multi-GPU was requested but failed
-        if data_gpu is not None and model_gpu is not None and not _IS_MULTI_GPU_MODE:
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            
+            # Validate GPU indices
+            if len(gpus) < 2:
+                logger.error(f"❌ Multi-GPU requires at least 2 GPUs, found {len(gpus)}")
+                logger.error("   Falling back to single-GPU mode")
+                return False
+            
+            if data_gpu < 0 or data_gpu >= len(gpus):
+                logger.error(f"❌ Invalid data_gpu={data_gpu}, must be 0-{len(gpus)-1}")
+                return False
+                
+            if model_gpu < 0 or model_gpu >= len(gpus):
+                logger.error(f"❌ Invalid model_gpu={model_gpu}, must be 0-{len(gpus)-1}")
+                return False
+            
+            # Configure visible devices for multi-GPU mode
+            selected_gpus = [gpus[data_gpu], gpus[model_gpu]]
+            tf.config.set_visible_devices(selected_gpus, 'GPU')
+            logger.info(f"   Set visible devices: GPU {data_gpu} and GPU {model_gpu}")
+            
+            # Configure memory settings for each GPU
+            visible_gpus = tf.config.list_physical_devices('GPU')
+            
+            try:
+                tf.config.experimental.set_memory_growth(visible_gpus[0], True)
+                logger.info(f"   Configured memory growth for data GPU")
+            except Exception as e:
+                logger.warning(f"   Could not set memory growth for data GPU: {e}")
+            
+            try:
+                tf.config.experimental.set_memory_growth(visible_gpus[1], True)
+                logger.info(f"   Configured memory growth for model GPU")
+            except Exception as e:
+                logger.warning(f"   Could not set memory growth for model GPU: {e}")
+            
+            # Set device policy
+            try:
+                tf.config.experimental.set_device_policy('silent')
+                logger.info("   Set device policy to 'silent' for automatic placement")
+            except Exception as e:
+                logger.debug(f"   Device policy note: {e}")
+            
+            logger.info("✅ Multi-GPU configuration completed successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Multi-GPU setup failed: {e}")
             print("❌ Multi-GPU mode was requested but configuration failed")
             print("   Please check your GPU indices and ensure you have at least 2 GPUs")
             sys.exit(1)
-        
-        _EARLY_GPU_CONFIG_DONE = True
+    else:
+        # Single-GPU mode - configure all available GPUs with memory growth
+        logger.debug("Configuring single-GPU mode...")
+        try:
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                for gpu in gpus:
+                    try:
+                        tf.config.experimental.set_memory_growth(gpu, True)
+                    except Exception as e:
+                        logger.debug(f"Memory growth configuration note for {gpu}: {e}")
+                
+                # Set device policy
+                try:
+                    tf.config.experimental.set_device_policy('silent')
+                except Exception as e:
+                    logger.debug(f"Device policy note: {e}")
+                    
+                logger.debug(f"Single-GPU mode configured with {len(gpus)} GPU(s)")
+            else:
+                logger.debug("No GPUs available, using CPU")
+        except Exception as e:
+            logger.debug(f"GPU configuration note: {e}")
+    
+    return False
 
-# Perform early setup before importing TensorFlow
-_early_setup()
+# Perform early GPU setup (this also imports TensorFlow for the first time)
+_IS_MULTI_GPU_MODE = _early_gpu_setup()
 
-# Now safe to import TensorFlow and other heavy dependencies
-import numpy as np
+# Now safe to import other heavy dependencies
+# TensorFlow is already imported and configured in _early_gpu_setup, but we import here
+# at module level for use throughout the file
 import tensorflow as tf
+import numpy as np
 import torch
 
 from myxtts.config.config import XTTSConfig, ModelConfig, DataConfig, TrainingConfig
