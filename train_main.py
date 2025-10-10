@@ -1671,8 +1671,34 @@ def main():
     # Create appropriate trainer based on memory isolation flag
     if args.enable_memory_isolation and is_multi_gpu_mode:
         logger.info("=" * 70)
-        logger.info("🎯 Memory-Isolated Dual-GPU Training Mode Enabled")
+        logger.info("🎯 Memory-Isolated Dual-GPU Training Mode Enabled (v2.0 - Optimized)")
         logger.info("=" * 70)
+        logger.info("✅ Using optimized async pipeline with triple buffering")
+        logger.info("✅ GPU-to-GPU async transfers for better overlap")
+        logger.info("✅ Direct GPU prefetching enabled")
+        
+        # Configuration recommendations
+        batch_size = config.data.batch_size
+        logger.info("\n📊 Current Configuration:")
+        logger.info(f"   Batch size: {batch_size}")
+        logger.info(f"   Data GPU memory: {args.data_gpu_memory}MB")
+        logger.info(f"   Model GPU memory: {args.model_gpu_memory}MB")
+        logger.info(f"   Num workers: {config.data.num_workers}")
+        
+        # Check for potential issues
+        if batch_size >= 32 and args.model_gpu_memory < 20480:
+            logger.warning("⚠️  Large batch size with limited memory!")
+            logger.warning("   Consider: --model-gpu-memory 20480 or reduce batch size")
+        
+        if config.data.num_workers < 16:
+            logger.warning("⚠️  Low num_workers may cause data bottleneck")
+            logger.warning(f"   Recommended: num_workers >= 16 (current: {config.data.num_workers})")
+        
+        logger.info("\n💡 Performance Tips:")
+        logger.info("   - Monitor GPU utilization: watch -n 1 nvidia-smi")
+        logger.info("   - Target: GPU:0 >50%, GPU:1 >80% utilization")
+        logger.info("   - Run profiler if performance issues: utilities/dual_gpu_bottleneck_profiler.py")
+        logger.info("=" * 70 + "\n")
         
         trainer = MemoryIsolatedDualGPUTrainer(
             config=config,
