@@ -488,6 +488,15 @@ class XTTSLoss(tf.keras.losses.Loss):
         self.history_index = tf.Variable(0, trainable=False, name="history_index")
         self._weighted_losses = {}
         self._raw_total_loss_tensor = None
+        
+        # New stable adaptive weights variables
+        self.current_mel_weight = tf.Variable(mel_loss_weight, trainable=False, name="current_mel_weight")
+        self.previous_mel_weight = tf.Variable(mel_loss_weight, trainable=False, name="previous_mel_weight")
+        self.gradient_norm_history = tf.Variable(tf.zeros([10]), trainable=False, name="gradient_norm_history")
+        self.gradient_history_index = tf.Variable(0, trainable=False, name="gradient_history_index")
+        self.last_weight_change_step = tf.Variable(0, trainable=False, name="last_weight_change_step")
+        self.consecutive_stable_steps = tf.Variable(0, trainable=False, name="consecutive_stable_steps")
+        self.weight_adjustment_enabled = tf.Variable(True, trainable=False, name="weight_adjustment_enabled")
     
     def call(
         self,
@@ -693,46 +702,296 @@ class XTTSLoss(tf.keras.losses.Loss):
 
         return total_loss
     
-    def _adaptive_mel_weight(self, current_mel_loss: tf.Tensor) -> tf.Tensor:
+    def _adaptive_mel_weight(self, current_mel_loss: tf.Tensor, gradient_norm: Optional[tf.Tensor] = None) -> tf.Tensor:
         """
-        Compute adaptive weight for mel loss based on convergence progress.
+        Compute stable adaptive weight for mel loss with comprehensive safety mechanisms.
+        
+        This is a robust replacement for the previous unstable adaptive weights system.
+        Key improvements:
+        - Conservative adaptation (±5% max change per step)
+        - Multi-metric monitoring (loss + gradient norms)
+        - Safety mechanisms (NaN/Inf checks, rollback capability)
+        - Intelligent logic (gradient-aware adjustments)
+        - Cooling period after weight changes
         
         Args:
             current_mel_loss: Current mel loss value
+            gradient_norm: Optional gradient norm for stability monitoring
             
         Returns:
-            Adaptive weight for mel loss
+            Stable adaptive weight for mel loss
         """
-        # Update running average
+        # Step 1: Safety check for NaN/Inf in input
+        current_mel_loss = self._safe_tensor(current_mel_loss, "current_mel_loss", 0.0)
+        
+        # Step 2: Update running average with safety checks
         self.step_count.assign_add(1)
         decay = tf.minimum(tf.cast(self.step_count, tf.float32) / 1000.0, 0.99)
         
-        self.running_mel_loss.assign(
-            decay * self.running_mel_loss + (1.0 - decay) * current_mel_loss
+        new_running_mel = decay * self.running_mel_loss + (1.0 - decay) * current_mel_loss
+        new_running_mel = self._safe_tensor(new_running_mel, "running_mel_loss", current_mel_loss)
+        self.running_mel_loss.assign(new_running_mel)
+        
+        # Step 3: Track gradient norms if provided
+        if gradient_norm is not None:
+            gradient_norm = self._safe_tensor(gradient_norm, "gradient_norm", 0.0)
+            self._update_gradient_history(gradient_norm)
+        
+        # Step 4: Check if adaptation is currently enabled
+        # Disable if we detect instability
+        if not self._is_adaptation_safe():
+            tf.print("⚠️ Adaptive weights disabled due to instability - using base weight")
+            return self.mel_loss_weight
+        
+        # Step 5: Calculate loss statistics for decision making
+        loss_ratio = self._calculate_safe_ratio(current_mel_loss, self.running_mel_loss)
+        loss_variance = self._calculate_loss_variance()
+        
+        # Step 6: Calculate gradient statistics if available
+        gradient_growing = False
+        if gradient_norm is not None:
+            avg_gradient = tf.reduce_mean(self.gradient_norm_history)
+            gradient_growing = gradient_norm > (avg_gradient * 1.5)
+        
+        # Step 7: Intelligent weight adjustment decision
+        # Do NOT increase weight if:
+        # - Loss is decreasing but gradients are growing (model unstable)
+        # - Loss variance is too high (oscillating)
+        # - We're in cooling period after last change
+        should_adjust, adjustment_direction = self._determine_weight_adjustment(
+            loss_ratio, loss_variance, gradient_growing
         )
         
-        # Adaptive scaling based on loss magnitude
-        # Reduce weight if loss is converging well, increase if struggling
-        base_weight = self.mel_loss_weight
+        # Step 8: Apply very conservative adjustment if approved
+        if should_adjust:
+            new_weight = self._apply_conservative_adjustment(
+                self.current_mel_weight, adjustment_direction
+            )
+            
+            # Step 9: Validate new weight before applying
+            if self._validate_new_weight(new_weight, current_mel_loss):
+                self.previous_mel_weight.assign(self.current_mel_weight)
+                self.current_mel_weight.assign(new_weight)
+                self.last_weight_change_step.assign(self.step_count)
+                self.consecutive_stable_steps.assign(0)
+                tf.print(f"✓ Adaptive weight adjusted: {self.previous_mel_weight:.3f} → {new_weight:.3f}")
+            else:
+                tf.print("⚠️ Weight adjustment rejected - would cause instability")
         
-        # If loss is higher than running average, slightly increase weight
-        # If loss is lower, slightly decrease weight for better balance
-        ratio = current_mel_loss / (self.running_mel_loss + 1e-8)
+        # Step 10: Return current weight with final safety clipping
+        final_weight = tf.clip_by_value(self.current_mel_weight, 1.0, 5.0)
+        return final_weight
+    
+    def _safe_tensor(self, tensor: tf.Tensor, name: str, fallback_value: float) -> tf.Tensor:
+        """
+        Ensure tensor is finite, replace NaN/Inf with fallback value.
         
-        # Smooth adaptation - don't make dramatic changes
-        # Tighter bounds to prevent excessive mel loss weight amplification
-        adaptation_factor = tf.clip_by_value(
-            0.5 + 0.5 * tf.tanh(ratio - 1.0), 
-            0.8,  # Minimum 80% of base weight (tightened from 70%)
-            1.2   # Maximum 120% of base weight (tightened from 130%)
+        Args:
+            tensor: Input tensor to check
+            name: Name for logging
+            fallback_value: Value to use if tensor is invalid
+            
+        Returns:
+            Safe tensor with no NaN/Inf values
+        """
+        tensor = tf.cast(tensor, tf.float32)
+        is_finite = tf.math.is_finite(tensor)
+        
+        # Check if any non-finite values exist
+        has_invalid = tf.reduce_any(tf.logical_not(is_finite))
+        
+        def log_warning():
+            tf.print(f"⚠️ WARNING: {name} contains NaN/Inf - using fallback")
+            return tf.constant(True)
+        
+        def no_warning():
+            return tf.constant(False)
+        
+        tf.cond(has_invalid, log_warning, no_warning)
+        
+        # Replace invalid values
+        safe_tensor = tf.where(is_finite, tensor, tf.constant(fallback_value, dtype=tf.float32))
+        return safe_tensor
+    
+    def _update_gradient_history(self, gradient_norm: tf.Tensor):
+        """Update rolling history of gradient norms."""
+        history_length = tf.shape(self.gradient_norm_history)[0]
+        idx = tf.math.mod(self.gradient_history_index, history_length)
+        
+        updated_history = tf.tensor_scatter_nd_update(
+            self.gradient_norm_history,
+            tf.reshape(idx, [1, 1]),
+            tf.reshape(gradient_norm, [1])
+        )
+        self.gradient_norm_history.assign(updated_history)
+        self.gradient_history_index.assign_add(1)
+    
+    def _is_adaptation_safe(self) -> tf.Tensor:
+        """
+        Check if it's safe to perform adaptive weight adjustments.
+        
+        Returns:
+            Boolean tensor indicating if adaptation should be enabled
+        """
+        # Check if manually disabled
+        if not self.weight_adjustment_enabled:
+            return tf.constant(False)
+        
+        # Need minimum steps before adapting
+        min_steps = tf.constant(100, dtype=self.step_count.dtype)
+        if tf.less(self.step_count, min_steps):
+            return tf.constant(False)
+        
+        # Check if current weight is already at boundary
+        current = self.current_mel_weight
+        if tf.less_equal(current, 1.0) or tf.greater_equal(current, 5.0):
+            return tf.constant(False)
+        
+        # Check loss history for stability
+        loss_variance = self._calculate_loss_variance()
+        high_variance_threshold = 1.0  # If variance too high, don't adapt
+        if tf.greater(loss_variance, high_variance_threshold):
+            return tf.constant(False)
+        
+        return tf.constant(True)
+    
+    def _calculate_safe_ratio(self, numerator: tf.Tensor, denominator: tf.Tensor) -> tf.Tensor:
+        """Calculate ratio with safety checks."""
+        denominator = tf.maximum(tf.abs(denominator), 1e-8)
+        ratio = numerator / denominator
+        ratio = self._safe_tensor(ratio, "loss_ratio", 1.0)
+        return tf.clip_by_value(ratio, 0.1, 10.0)  # Prevent extreme ratios
+    
+    def _calculate_loss_variance(self) -> tf.Tensor:
+        """Calculate variance of recent losses."""
+        recent_losses = self.loss_history
+        loss_mean = tf.reduce_mean(recent_losses)
+        loss_variance = tf.reduce_mean(tf.square(recent_losses - loss_mean))
+        return self._safe_tensor(loss_variance, "loss_variance", 0.0)
+    
+    def _determine_weight_adjustment(
+        self, 
+        loss_ratio: tf.Tensor, 
+        loss_variance: tf.Tensor,
+        gradient_growing: tf.Tensor
+    ) -> Tuple[tf.Tensor, tf.Tensor]:
+        """
+        Intelligently determine if and how to adjust weight.
+        
+        Args:
+            loss_ratio: Current loss / running average loss
+            loss_variance: Variance of recent losses
+            gradient_growing: Whether gradients are increasing
+            
+        Returns:
+            Tuple of (should_adjust, direction) where direction is +1 or -1
+        """
+        # Cooling period: minimum steps between adjustments
+        cooling_period = 50
+        steps_since_change = self.step_count - self.last_weight_change_step
+        in_cooling = tf.less(steps_since_change, cooling_period)
+        
+        if in_cooling:
+            return tf.constant(False), tf.constant(0.0)
+        
+        # Check stability requirements
+        stable_variance_threshold = 0.5
+        is_stable = tf.less(loss_variance, stable_variance_threshold)
+        
+        if not is_stable:
+            return tf.constant(False), tf.constant(0.0)
+        
+        # Increment stable step counter
+        self.consecutive_stable_steps.assign_add(1)
+        
+        # Need consecutive stable steps before adjusting
+        min_stable_steps = 10
+        has_enough_stable = tf.greater_equal(self.consecutive_stable_steps, min_stable_steps)
+        
+        if not has_enough_stable:
+            return tf.constant(False), tf.constant(0.0)
+        
+        # Determine adjustment direction based on intelligent logic
+        # If loss is high AND gradients are NOT growing -> increase weight slightly
+        # If loss is low OR gradients ARE growing -> decrease weight slightly
+        
+        loss_high = tf.greater(loss_ratio, 1.1)  # Loss is 10% above average
+        loss_low = tf.less(loss_ratio, 0.9)      # Loss is 10% below average
+        
+        # Conservative decision tree
+        should_increase = tf.logical_and(loss_high, tf.logical_not(gradient_growing))
+        should_decrease = tf.logical_or(loss_low, gradient_growing)
+        
+        # Only adjust if clear signal
+        if should_increase:
+            return tf.constant(True), tf.constant(1.0)
+        elif should_decrease:
+            return tf.constant(True), tf.constant(-1.0)
+        else:
+            return tf.constant(False), tf.constant(0.0)
+    
+    def _apply_conservative_adjustment(
+        self, 
+        current_weight: tf.Tensor, 
+        direction: tf.Tensor
+    ) -> tf.Tensor:
+        """
+        Apply very conservative weight adjustment (max ±5%).
+        
+        Args:
+            current_weight: Current weight value
+            direction: +1 for increase, -1 for decrease
+            
+        Returns:
+            New weight value
+        """
+        # Maximum 5% change per adjustment
+        max_change_percent = 0.05
+        change_amount = current_weight * max_change_percent * direction
+        new_weight = current_weight + change_amount
+        
+        # Ensure stays in safe range
+        new_weight = tf.clip_by_value(new_weight, 1.0, 5.0)
+        return new_weight
+    
+    def _validate_new_weight(
+        self, 
+        new_weight: tf.Tensor, 
+        current_loss: tf.Tensor
+    ) -> tf.Tensor:
+        """
+        Validate that new weight won't cause issues.
+        
+        Args:
+            new_weight: Proposed new weight
+            current_loss: Current loss value
+            
+        Returns:
+            Boolean indicating if weight is safe to apply
+        """
+        # Check weight is finite
+        if not tf.math.is_finite(new_weight):
+            return tf.constant(False)
+        
+        # Check weight is in valid range
+        in_range = tf.logical_and(
+            tf.greater_equal(new_weight, 1.0),
+            tf.less_equal(new_weight, 5.0)
         )
         
-        adaptive_weight = base_weight * adaptation_factor
+        if not in_range:
+            return tf.constant(False)
         
-        # Additional safety: ensure adaptive weight stays within safe range (1.0-5.0)
-        adaptive_weight = tf.clip_by_value(adaptive_weight, 1.0, 5.0)
+        # Check that weighted loss would be reasonable
+        weighted_loss = new_weight * current_loss
+        if not tf.math.is_finite(weighted_loss):
+            return tf.constant(False)
         
-        return adaptive_weight
+        # Prevent extreme weighted losses
+        if tf.greater(weighted_loss, 1000.0):
+            return tf.constant(False)
+        
+        return tf.constant(True)
     
     def _apply_loss_smoothing(self, current_loss: tf.Tensor) -> tf.Tensor:
         """
@@ -936,6 +1195,44 @@ class XTTSLoss(tf.keras.losses.Loss):
         self.loss_history.assign(tf.zeros([10]))
         self.history_index.assign(0)
         self._raw_total_loss_tensor = None
+        
+        # Reset adaptive weight state
+        self.current_mel_weight.assign(self.mel_loss_weight)
+        self.previous_mel_weight.assign(self.mel_loss_weight)
+        self.gradient_norm_history.assign(tf.zeros([10]))
+        self.gradient_history_index.assign(0)
+        self.last_weight_change_step.assign(0)
+        self.consecutive_stable_steps.assign(0)
+        self.weight_adjustment_enabled.assign(True)
+    
+    def disable_adaptive_weights(self):
+        """Disable adaptive weight adjustments (emergency fallback)."""
+        self.weight_adjustment_enabled.assign(False)
+        self.current_mel_weight.assign(self.mel_loss_weight)
+        tf.print("⚠️ Adaptive weights disabled - using base weight:", self.mel_loss_weight)
+    
+    def enable_adaptive_weights(self):
+        """Re-enable adaptive weight adjustments."""
+        self.weight_adjustment_enabled.assign(True)
+        tf.print("✓ Adaptive weights enabled")
+    
+    def get_adaptive_weight_metrics(self) -> Dict[str, tf.Tensor]:
+        """
+        Get metrics related to adaptive weight system.
+        
+        Returns:
+            Dictionary containing adaptive weight metrics
+        """
+        metrics = {
+            "current_mel_weight": self.current_mel_weight,
+            "previous_mel_weight": self.previous_mel_weight,
+            "base_mel_weight": tf.constant(self.mel_loss_weight),
+            "steps_since_weight_change": self.step_count - self.last_weight_change_step,
+            "consecutive_stable_steps": tf.cast(self.consecutive_stable_steps, tf.float32),
+            "weight_adjustment_enabled": tf.cast(self.weight_adjustment_enabled, tf.float32),
+            "avg_gradient_norm": tf.reduce_mean(self.gradient_norm_history),
+        }
+        return metrics
 
 
 def create_stop_targets(mel_lengths: tf.Tensor, max_length: int) -> tf.Tensor:
