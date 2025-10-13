@@ -33,15 +33,30 @@ pip install -r requirements.txt
 # Validate your setup (recommended!)
 ./validate_setup.sh configs/config.yaml
 
-# Basic training
+# Basic training - NOW WITH SMART DEFAULTS! 🎯
+# Uses: tiny model, batch-size 16, static shapes enabled
 python3 train_main.py --train-data ../dataset/dataset_train --val-data ../dataset/dataset_eval
 
-# Training with stable GPU utilization (RECOMMENDED)
-python3 train_main.py --enable-static-shapes --batch-size 16
+# Or even simpler (uses default dataset paths):
+python3 train_main.py
+
+# Override specific parameters as needed:
+python3 train_main.py --model-size small --batch-size 24
 
 # Advanced training with all optimizations
-python3 train_main.py --enable-static-shapes --optimization-level enhanced --batch-size 16
+python3 train_main.py --model-size normal --optimization-level enhanced
 ```
+
+### ✨ New Smart Defaults
+
+The training script now comes with sensible defaults that work out of the box:
+- **Model size**: `tiny` (great for learning and quick iterations)
+- **Batch size**: `16` (automatically adjusted based on your GPU memory)
+- **Static shapes**: `enabled` (prevents GPU utilization issues)
+- **GPU mode**: `single-GPU` (automatically switches to multi-GPU when you specify `--data-gpu` and `--model-gpu`)
+- **Workers**: `8` (automatically adjusted based on your system)
+
+You can override any of these with command-line arguments!
 
 ## 📁 Project Structure
 
@@ -122,15 +137,23 @@ MyXTTSModel/
 - **Adaptive Loss Weights**: Auto-adjusting loss components
 - **Plateau Detection**: Automatic learning rate adjustment
 - **Enhanced Monitoring**: Real-time training metrics
+- **Text-to-Audio Evaluation**: 🆕 Automatic audio generation during training
+  - Generates audio samples every N steps (default: 200)
+  - Saves WAV files for quality comparison
+  - TensorBoard integration for real-time listening
+  - See [`docs/TEXT2AUDIO_EVAL_GUIDE.md`](docs/TEXT2AUDIO_EVAL_GUIDE.md) for details
 
 ## 🚀 Usage Examples
 
 ### Basic Training
 ```bash
-# Quick start with tiny model
-python3 train_main.py --model-size tiny --batch-size 4 --epochs 10
+# Simplest command - uses smart defaults (tiny model, batch-size 16, static shapes enabled)
+python3 train_main.py
 
-# Production training with GPU optimization
+# Quick test with even smaller batch
+python3 train_main.py --batch-size 4 --epochs 10
+
+# Production training with larger model
 python3 train_main.py \
     --model-size normal \
     --optimization-level enhanced \
