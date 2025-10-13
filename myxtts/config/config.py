@@ -357,9 +357,24 @@ class TrainingConfig:
     enable_automatic_evaluation: bool = False  # Enable MOSNet, ASR-WER evaluation during training
     evaluation_interval: int = 10              # Evaluate model every N epochs
     
+    # Text-to-Audio evaluation during training (for quality monitoring)
+    enable_text2audio_eval: bool = True  # Enable automatic audio generation during training
+    text2audio_interval_steps: int = 200  # Generate evaluation audio every N steps
+    text2audio_output_dir: str = "./eval_samples"  # Output directory for evaluation audio
+    text2audio_texts: List[str] = None  # List of texts to synthesize (set in __post_init__)
+    text2audio_speaker_id: Optional[int] = None  # Speaker ID for multi-speaker models
+    text2audio_log_tensorboard: bool = True  # Log audio to TensorBoard
+    
     def __post_init__(self):
         if self.scheduler_params is None:
             self.scheduler_params = {}
+        
+        # Set default evaluation texts if not provided
+        if self.text2audio_texts is None:
+            self.text2audio_texts = [
+                "The quick brown fox jumps over the lazy dog.",
+                "سلام! این یک نمونهی ارزیابی است.",
+            ]
 
 
 @dataclass
