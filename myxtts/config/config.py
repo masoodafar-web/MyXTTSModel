@@ -306,6 +306,13 @@ class TrainingConfig:
     gradient_norm_threshold: float = 5.0        # Threshold for gradient norm monitoring
     loss_alert_threshold: float = 500.0         # Threshold for triggering loss breakdown logging
     
+    # Advanced adaptive weights configuration
+    adaptive_weight_max_change_percent: float = 0.05    # Maximum change per adjustment (5%)
+    adaptive_weight_cooling_period: int = 50            # Minimum steps between adjustments
+    adaptive_weight_min_stable_steps: int = 10          # Required stable steps before adjustment
+    adaptive_weight_min_warmup_steps: int = 100         # Steps before enabling adaptation
+    adaptive_weight_variance_threshold: float = 0.5     # Max loss variance for stable condition
+    
     # Enhanced loss function options
     use_label_smoothing: bool = True            # Enable label smoothing for regularization
     mel_label_smoothing: float = 0.05          # Label smoothing for mel loss
