@@ -2266,6 +2266,9 @@ class XTTSTrainer:
 
                     if self.config.training.use_wandb:
                         wandb.log({f"step_{k}": v for k, v in step_log.items()})
+                
+                # Check if text-to-audio evaluation should be performed
+                self._maybe_eval_text2audio()
         
         except tf.errors.OutOfRangeError:
             # End of dataset reached
@@ -2319,6 +2322,183 @@ class XTTSTrainer:
                 wandb.log({f"val_{k}": v for k, v in val_losses.items()})
         
         return val_losses
+    
+    def _maybe_eval_text2audio(self) -> None:
+        """
+        Check if text-to-audio evaluation should be performed and execute if needed.
+        Generates audio samples from predefined texts to monitor training quality.
+        """
+        # Check if feature is enabled
+        if not getattr(self.config.training, 'enable_text2audio_eval', False):
+            return
+        
+        # Check if we're at the right step interval
+        interval = getattr(self.config.training, 'text2audio_interval_steps', 200)
+        if self.current_step == 0 or self.current_step % interval != 0:
+            return
+        
+        # Run the evaluation
+        try:
+            self._generate_eval_audio()
+        except Exception as e:
+            self.logger.warning(f"Text-to-audio evaluation failed at step {self.current_step}: {e}")
+    
+    def _generate_eval_audio(self) -> None:
+        """
+        Generate audio samples from evaluation texts and save them to disk.
+        Also logs to TensorBoard if enabled.
+        """
+        # Lazy import to avoid circular dependencies
+        from ..utils.text import TextProcessor
+        from ..utils.audio import AudioProcessor
+        
+        # Get evaluation settings
+        output_dir = getattr(self.config.training, 'text2audio_output_dir', './eval_samples')
+        eval_texts = getattr(self.config.training, 'text2audio_texts', [])
+        speaker_id = getattr(self.config.training, 'text2audio_speaker_id', None)
+        log_to_tensorboard = getattr(self.config.training, 'text2audio_log_tensorboard', True)
+        
+        if not eval_texts:
+            self.logger.debug("No evaluation texts configured, skipping text-to-audio eval")
+            return
+        
+        # Create output directory for this step
+        step_dir = Path(output_dir) / f"step_{self.current_step}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        
+        self.logger.info(f"🎵 Generating {len(eval_texts)} evaluation audio sample(s) at step {self.current_step}")
+        
+        # Initialize processors if not already done
+        if not hasattr(self, '_text2audio_text_processor'):
+            try:
+                self._text2audio_text_processor = TextProcessor(
+                    language=self.config.data.language,
+                    use_phonemes=getattr(self.config.data, 'use_phonemes', True),
+                    tokenizer_type=self.config.model.tokenizer_type
+                )
+                self._text2audio_audio_processor = AudioProcessor(
+                    sample_rate=self.config.model.sample_rate,
+                    n_fft=self.config.model.n_fft,
+                    hop_length=self.config.model.hop_length,
+                    win_length=self.config.model.win_length,
+                    n_mels=self.config.model.n_mels
+                )
+            except Exception as e:
+                self.logger.error(f"Failed to initialize processors for text-to-audio eval: {e}")
+                return
+        
+        # Temporarily set model to inference mode
+        original_trainable = self.model.trainable
+        self.model.trainable = False
+        
+        try:
+            # Generate audio for each evaluation text
+            for idx, text in enumerate(eval_texts):
+                try:
+                    # Preprocess text
+                    text_processed = self._text2audio_text_processor.clean_text(text)
+                    text_sequence = self._text2audio_text_processor.text_to_sequence(text_processed)
+                    
+                    # Convert to tensor
+                    text_tensor = tf.constant([text_sequence], dtype=tf.int32)
+                    
+                    # Clip to max length if needed
+                    max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
+                    if max_text_len and text_tensor.shape[1] > max_text_len:
+                        text_tensor = text_tensor[:, :max_text_len]
+                    
+                    # Generate mel spectrogram using the model
+                    with get_device_context():
+                        # For autoregressive generation, we need to use the generate method
+                        if hasattr(self.model, 'generate'):
+                            outputs = self.model.generate(
+                                text_inputs=text_tensor,
+                                max_length=getattr(self.config.data, 'max_mel_frames', 1024),
+                                temperature=1.0,
+                                generate_audio=False  # Generate only mel, convert to audio later
+                            )
+                            mel_output = outputs.get("mel_output")
+                        else:
+                            # Fallback: use model forward pass with dummy mel input
+                            dummy_mel_len = min(100, getattr(self.config.data, 'max_mel_frames', 1024))
+                            dummy_mel = tf.zeros([1, dummy_mel_len, self.config.model.n_mels], dtype=tf.float32)
+                            text_len = tf.constant([text_tensor.shape[1]], dtype=tf.int32)
+                            mel_len = tf.constant([dummy_mel_len], dtype=tf.int32)
+                            
+                            outputs = self.model(
+                                text_inputs=text_tensor,
+                                mel_inputs=dummy_mel,
+                                text_lengths=text_len,
+                                mel_lengths=mel_len,
+                                training=False
+                            )
+                            mel_output = outputs.get("mel_output")
+                    
+                    if mel_output is None:
+                        self.logger.warning(f"No mel output generated for text {idx}")
+                        continue
+                    
+                    # Convert mel to audio using vocoder or Griffin-Lim
+                    mel_np = mel_output.numpy()[0]  # Remove batch dimension
+                    
+                    # Try using HiFi-GAN vocoder if available
+                    if hasattr(self.model, 'vocoder') and self.model.vocoder is not None:
+                        try:
+                            mel_tensor = tf.constant(mel_np.T[np.newaxis, ...], dtype=tf.float32)
+                            audio_tensor = self.model.vocoder(mel_tensor, training=False)
+                            audio_waveform = audio_tensor.numpy()[0, :, 0]
+                        except Exception as e:
+                            self.logger.debug(f"Vocoder failed, falling back to Griffin-Lim: {e}")
+                            audio_waveform = self._text2audio_audio_processor.mel_to_wav(mel_np.T)
+                    else:
+                        # Use Griffin-Lim
+                        audio_waveform = self._text2audio_audio_processor.mel_to_wav(mel_np.T)
+                    
+                    # Save audio file
+                    audio_filename = f"eval_{idx:02d}.wav"
+                    audio_path = step_dir / audio_filename
+                    sf.write(str(audio_path), audio_waveform, self.config.model.sample_rate)
+                    
+                    # Save text file for reference
+                    text_filename = f"eval_{idx:02d}.txt"
+                    text_path = step_dir / text_filename
+                    with open(text_path, 'w', encoding='utf-8') as f:
+                        f.write(text)
+                    
+                    self.logger.info(f"   ✓ Generated: {audio_filename} (text: {text[:50]}{'...' if len(text) > 50 else ''})")
+                    
+                    # Log to TensorBoard if enabled
+                    if log_to_tensorboard and self.summary_writer:
+                        try:
+                            with self.summary_writer.as_default():
+                                # Log audio
+                                audio_tensor = tf.expand_dims(tf.constant(audio_waveform, dtype=tf.float32), axis=0)
+                                audio_tensor = tf.expand_dims(audio_tensor, axis=-1)  # Add channel dimension
+                                tf.summary.audio(
+                                    f"text2audio_eval/sample_{idx}",
+                                    audio_tensor,
+                                    sample_rate=self.config.model.sample_rate,
+                                    step=self.current_step
+                                )
+                                # Log text as description
+                                tf.summary.text(
+                                    f"text2audio_eval/text_{idx}",
+                                    text,
+                                    step=self.current_step
+                                )
+                            self.summary_writer.flush()
+                        except Exception as e:
+                            self.logger.debug(f"TensorBoard logging failed for sample {idx}: {e}")
+                
+                except Exception as e:
+                    self.logger.warning(f"Failed to generate audio for evaluation text {idx}: {e}")
+                    continue
+        
+        finally:
+            # Restore model training mode
+            self.model.trainable = original_trainable
+        
+        self.logger.info(f"✅ Evaluation audio samples saved to: {step_dir}")
     
     def _save_checkpoint(self, is_best: bool = False):
         """Save model checkpoint."""
