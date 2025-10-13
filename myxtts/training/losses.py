@@ -774,7 +774,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 self.current_mel_weight.assign(new_weight)
                 self.last_weight_change_step.assign(self.step_count)
                 self.consecutive_stable_steps.assign(0)
-                tf.print(f"✓ Adaptive weight adjusted: {self.previous_mel_weight:.3f} → {new_weight:.3f}")
+                rounded_prev = tf.round(self.previous_mel_weight * 1000.0) / 1000.0
+                rounded_new = tf.round(new_weight * 1000.0) / 1000.0
+                tf.print("✓ Adaptive weight adjusted:", rounded_prev, "→", rounded_new)
             else:
                 tf.print("⚠️ Weight adjustment rejected - would cause instability")
         
