@@ -392,6 +392,7 @@ except ImportError:
                 return {
                     'batch_size': 48,
                     'num_workers': 16,
+                    'gradient_accumulation_steps': 1,
                     'max_memory_fraction': 0.9,
                     'prefetch_buffer_size': 32,
                     'shuffle_buffer_multiplier': 50,
@@ -405,6 +406,7 @@ except ImportError:
                 return {
                     'batch_size': 24,
                     'num_workers': 12,
+                    'gradient_accumulation_steps': 2,
                     'max_memory_fraction': 0.85,
                     'prefetch_buffer_size': 16,
                     'shuffle_buffer_multiplier': 30,
@@ -418,6 +420,7 @@ except ImportError:
                 return {
                     'batch_size': 8,
                     'num_workers': 8,
+                    'gradient_accumulation_steps': 4,
                     'max_memory_fraction': 0.8,
                     'prefetch_buffer_size': 8,
                     'shuffle_buffer_multiplier': 20,
@@ -1105,14 +1108,14 @@ def main():
     )
     parser.add_argument("--checkpoint-dir", default="./checkpointsmain", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=500, help="Number of epochs (increased for better convergence)")
-    parser.add_argument("--batch-size", type=int, default=64, help="Batch size")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size (default: 16, auto-adjusted based on GPU memory if not specified)")
     parser.add_argument(
         "--grad-accum",
         type=int,
         default=2,
-        help="Gradient accumulation steps (optimized for larger effective batch size)"
+        help="Gradient accumulation steps (default: 2, auto-adjusted based on GPU memory if not specified)"
     )
-    parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers")
+    parser.add_argument("--num-workers", type=int, default=8, help="Data loader workers (default: 8, auto-adjusted based on GPU memory if not specified)")
     parser.add_argument("--lr", type=float, default=8e-5, help="Learning rate (optimized for better convergence)")
     parser.add_argument(
         "--prefetch-buffer-size",
@@ -1139,13 +1142,13 @@ def main():
         "--data-gpu",
         type=int,
         default=None,
-        help="GPU ID for data processing (enables Multi-GPU Mode when used with --model-gpu)"
+        help="GPU ID for data processing (default: None for single-GPU mode, use with --model-gpu to enable Multi-GPU Mode)"
     )
     parser.add_argument(
         "--model-gpu",
         type=int,
         default=None,
-        help="GPU ID for model training (enables Multi-GPU Mode when used with --data-gpu)"
+        help="GPU ID for model training (default: None for single-GPU mode, use with --data-gpu to enable Multi-GPU Mode)"
     )
     parser.add_argument(
         "--buffer-size",
@@ -1162,7 +1165,8 @@ def main():
     parser.add_argument(
         "--enable-memory-isolation",
         action="store_true",
-        help="Enable memory-isolated dual-GPU training with producer-consumer pipeline"
+        default=False,
+        help="Enable memory-isolated dual-GPU training with producer-consumer pipeline (default: False, use when you have multiple GPUs)"
     )
     parser.add_argument(
         "--data-gpu-memory",
@@ -1179,8 +1183,8 @@ def main():
     parser.add_argument(
         "--model-size",
         choices=sorted(MODEL_SIZE_PRESETS.keys()),
-        default="normal",
-        help="Model capacity preset to use (tiny, small, normal, big)"
+        default="tiny",
+        help="Model capacity preset to use (default: tiny for beginners, options: tiny, small, normal, big)"
     )
     parser.add_argument(
         "--decoder-strategy",
@@ -1359,7 +1363,14 @@ def main():
         "--pad-to-fixed-length",
         dest="enable_static_shapes",
         action="store_true",
-        help="Enable fixed-length padding to prevent tf.function retracing and stabilize GPU utilization (recommended)"
+        default=True,
+        help="Enable fixed-length padding to prevent tf.function retracing and stabilize GPU utilization (default: True, recommended)"
+    )
+    parser.add_argument(
+        "--disable-static-shapes",
+        dest="enable_static_shapes",
+        action="store_false",
+        help="Disable static shapes optimization"
     )
     parser.add_argument(
         "--max-text-length",
@@ -1377,6 +1388,37 @@ def main():
     args = parser.parse_args()
 
     logger = setup_logging()
+
+    # Log initial parameter summary
+    logger.info("=" * 80)
+    logger.info("📋 TRAINING PARAMETERS SUMMARY")
+    logger.info("=" * 80)
+    logger.info("Core Training Parameters:")
+    logger.info(f"  • Model size: {args.model_size}")
+    logger.info(f"  • Batch size: {args.batch_size}")
+    logger.info(f"  • Gradient accumulation: {args.grad_accum}")
+    logger.info(f"  • Number of workers: {args.num_workers}")
+    logger.info(f"  • Learning rate: {args.lr}")
+    logger.info(f"  • Epochs: {args.epochs}")
+    logger.info(f"  • Optimization level: {args.optimization_level}")
+    logger.info("")
+    logger.info("GPU Configuration:")
+    logger.info(f"  • Data GPU: {args.data_gpu if args.data_gpu is not None else 'Auto (single-GPU mode)'}")
+    logger.info(f"  • Model GPU: {args.model_gpu if args.model_gpu is not None else 'Auto (single-GPU mode)'}")
+    logger.info(f"  • Memory isolation: {args.enable_memory_isolation}")
+    logger.info(f"  • Buffer size: {args.buffer_size}")
+    logger.info("")
+    logger.info("Optimization Features:")
+    logger.info(f"  • Static shapes: {args.enable_static_shapes}")
+    if args.enable_static_shapes:
+        logger.info(f"    - Max text length: {args.max_text_length}")
+        logger.info(f"    - Max mel frames: {args.max_mel_frames if args.max_mel_frames else 'auto'}")
+    logger.info("")
+    logger.info("Dataset Paths:")
+    logger.info(f"  • Training data: {args.train_data}")
+    logger.info(f"  • Validation data: {args.val_data}")
+    logger.info("=" * 80)
+    logger.info("")
 
     # Note: GPU configuration already done at module level via _early_setup()
     # This ensures GPUs are configured BEFORE TensorFlow import
