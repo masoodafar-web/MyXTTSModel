@@ -137,6 +137,11 @@ MyXTTSModel/
 - **Adaptive Loss Weights**: Auto-adjusting loss components
 - **Plateau Detection**: Automatic learning rate adjustment
 - **Enhanced Monitoring**: Real-time training metrics
+- **Text-to-Audio Evaluation**: 🆕 Automatic audio generation during training
+  - Generates audio samples every N steps (default: 200)
+  - Saves WAV files for quality comparison
+  - TensorBoard integration for real-time listening
+  - See [`docs/TEXT2AUDIO_EVAL_GUIDE.md`](docs/TEXT2AUDIO_EVAL_GUIDE.md) for details
 
 ## 🚀 Usage Examples
 
