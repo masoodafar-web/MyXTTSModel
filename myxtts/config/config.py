@@ -137,6 +137,7 @@ class DataConfig:
     # Dataset paths
     dataset_path: str = ""
     dataset_name: str = "ljspeech"
+    auto_download_ljspeech: bool = False
 
     # Custom metadata file paths (optional)
     metadata_train_file: Optional[str] = None  # Custom path for train metadata
@@ -355,7 +356,7 @@ class TrainingConfig:
     
     # Automatic evaluation parameters for checkpoint quality monitoring
     enable_automatic_evaluation: bool = False  # Enable MOSNet, ASR-WER evaluation during training
-    evaluation_interval: int = 10              # Evaluate model every N epochs
+    evaluation_interval: int = 2              # Evaluate model every N epochs
     
     # Text-to-Audio evaluation during training (for quality monitoring)
     enable_text2audio_eval: bool = True  # Enable automatic audio generation during training
@@ -373,7 +374,6 @@ class TrainingConfig:
         if self.text2audio_texts is None:
             self.text2audio_texts = [
                 "The quick brown fox jumps over the lazy dog.",
-                "سلام! این یک نمونهی ارزیابی است.",
             ]
 
 

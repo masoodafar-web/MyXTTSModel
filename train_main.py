@@ -792,6 +792,9 @@ def build_config(
     model_gpu: Optional[int] = None,
     pipeline_buffer_size: int = 50,
     model_start_delay: float = 2.0,
+    enable_full_loss_stack: bool = True,
+    use_adaptive_loss_override: Optional[bool] = None,
+    download_ljspeech: bool = False,
     ) -> XTTSConfig:
     preset_key = model_size.lower() if model_size else "normal"
     preset = MODEL_SIZE_PRESETS.get(preset_key, MODEL_SIZE_PRESETS["normal"])
@@ -820,7 +823,11 @@ def build_config(
     decoder_layers = preset["decoder_layers"]
 
     max_attention_len = max_attention_len_override or preset["max_attention_len"]
-    max_text_length = preset["max_text_length"]
+    max_text_length = (
+        max_text_length_override
+        if max_text_length_override is not None
+        else preset["max_text_length"]
+    )
 
     if enable_grad_checkpointing_override is None:
         enable_grad_checkpointing = preset["enable_gradient_checkpointing"]
@@ -836,6 +843,15 @@ def build_config(
     speaker_encoder_type_value = speaker_encoder_type or "ecapa_tdnn"
     contrastive_temperature_value = contrastive_loss_temperature if contrastive_loss_temperature is not None else 0.1
     contrastive_margin_value = contrastive_loss_margin if contrastive_loss_margin is not None else 0.2
+
+    adaptive_loss_enabled = (
+        use_adaptive_loss_override
+        if use_adaptive_loss_override is not None
+        else enable_full_loss_stack
+    )
+
+    def _optional_weight(value: float) -> float:
+        return value if enable_full_loss_stack else 0.0
 
     # Model configuration (enhanced for larger, higher-quality model with voice cloning)
     m = ModelConfig(
@@ -877,7 +893,7 @@ def build_config(
         min_reference_audio_length=2.0,
         voice_feature_dim=voice_feature_dim,
         enable_voice_denoising=True,
-        voice_cloning_loss_weight=2.0,  # Actual loss weight used in training
+        voice_cloning_loss_weight=_optional_weight(2.0),  # Actual loss weight used in training
 
         # Enhanced voice conditioning with pre-trained speaker encoders
         # NOTE: Set use_pretrained_speaker_encoder=True to enable enhanced voice conditioning
@@ -950,21 +966,21 @@ def build_config(
         mel_loss_weight=2.5,    # Balanced weight for stable mel learning and loss < 8
         kl_loss_weight=1.0,     # Standard KL weight for regularization
         duration_loss_weight=0.8,  # Moderate duration loss
-        pitch_loss_weight=0.12,
-        energy_loss_weight=0.12,
-        prosody_pitch_loss_weight=0.06,
-        prosody_energy_loss_weight=0.06,
-        speaking_rate_loss_weight=0.05,
+        pitch_loss_weight=_optional_weight(0.12),
+        energy_loss_weight=_optional_weight(0.12),
+        prosody_pitch_loss_weight=_optional_weight(0.06),
+        prosody_energy_loss_weight=_optional_weight(0.06),
+        speaking_rate_loss_weight=_optional_weight(0.05),
         
         # Voice cloning loss components for superior voice cloning capability
-        voice_similarity_loss_weight=3.0,        # Weight for voice similarity loss
-        speaker_classification_loss_weight=1.5,  # Weight for speaker classification
-        voice_reconstruction_loss_weight=2.0,    # Weight for voice reconstruction
-        prosody_matching_loss_weight=1.0,        # Weight for prosody matching
-        spectral_consistency_loss_weight=1.5,    # Weight for spectral consistency
+        voice_similarity_loss_weight=_optional_weight(3.0),        # Weight for voice similarity loss
+        speaker_classification_loss_weight=_optional_weight(1.5),  # Weight for speaker classification
+        voice_reconstruction_loss_weight=_optional_weight(2.0),    # Weight for voice reconstruction
+        prosody_matching_loss_weight=_optional_weight(1.0),        # Weight for prosody matching
+        spectral_consistency_loss_weight=_optional_weight(1.5),    # Weight for spectral consistency
 
         # Enhanced loss stability features (supported by TrainingConfig)
-        use_adaptive_loss_weights=True,      # Auto-adjust weights during training
+        use_adaptive_loss_weights=adaptive_loss_enabled,      # Auto-adjust weights during training
         loss_smoothing_factor=0.08,          # Stronger smoothing for stability
         max_loss_spike_threshold=1.3,        # Lower spike threshold
         gradient_norm_threshold=2.5,         # Lower gradient monitoring threshold
@@ -1084,6 +1100,7 @@ def build_config(
         # Dataset identity/paths are filled outside via CLI args
         dataset_path="",
         dataset_name="custom_dataset",
+        auto_download_ljspeech=download_ljspeech,
         metadata_train_file="metadata_train.csv",
         metadata_eval_file="metadata_eval.csv",
         wavs_train_dir="wavs",
@@ -1105,6 +1122,12 @@ def main():
         "--val-data",
         default="../dataset/dataset_eval",
         help="Path to val subset root (default: ../dataset/dataset_eval)"
+    )
+    parser.add_argument(
+        "--download-ljspeech",
+        action="store_true",
+        default=False,
+        help="Download LJSpeech to the train data path if it is missing"
     )
     parser.add_argument("--checkpoint-dir", default="./checkpointsmain", help="Checkpoint directory")
     parser.add_argument("--epochs", type=int, default=500, help="Number of epochs (increased for better convergence)")
@@ -1601,6 +1624,7 @@ def main():
         model_gpu=args.model_gpu,
         pipeline_buffer_size=args.buffer_size,
         model_start_delay=args.model_start_delay,
+        download_ljspeech=args.download_ljspeech,
     )
 
     # Apply optimization level

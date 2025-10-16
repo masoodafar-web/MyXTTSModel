@@ -9,7 +9,7 @@ import os
 import time
 import sys
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, List
 import numpy as np
 import tensorflow as tf
 from tqdm import tqdm
@@ -21,6 +21,10 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend for server environments
 import matplotlib.pyplot as plt
 import io
+try:
+    import soundfile as sf  # Optional but preferred for WAV writing
+except ImportError:
+    sf = None
 
 
 
@@ -441,6 +445,8 @@ class XTTSTrainer:
             )
         elif config.scheduler == "cosine":
             params = dict(getattr(config, "scheduler_params", {}) or {})
+            warmup_steps = int(getattr(config, "warmup_steps", 0))
+            use_warmup = getattr(config, "use_warmup_cosine_schedule", False) or warmup_steps > 0
             min_lr = params.pop("min_learning_rate", None)
             if min_lr is None:
                 min_lr = getattr(config, "min_learning_rate", None)
@@ -466,20 +472,27 @@ class XTTSTrainer:
 
             if use_restarts:
                 first_decay_steps = max(1, int(first_decay_steps or config.epochs * 1000))
-                return tf.keras.optimizers.schedules.CosineDecayRestarts(
+                base_schedule = tf.keras.optimizers.schedules.CosineDecayRestarts(
                     initial_learning_rate=config.learning_rate,
                     first_decay_steps=first_decay_steps,
                     t_mul=t_mul if t_mul is not None else (restart_mult if restart_mult is not None else 1.0),
                     m_mul=m_mul if m_mul is not None else 1.0,
                     alpha=alpha if alpha is not None else 0.0,
                 )
-
-            decay_steps = max(1, int(decay_steps or config.epochs * 1000))
-            return tf.keras.optimizers.schedules.CosineDecay(
-                initial_learning_rate=config.learning_rate,
-                decay_steps=decay_steps,
-                alpha=alpha if alpha is not None else 0.0,
-            )
+            else:
+                decay_steps = max(1, int(decay_steps or config.epochs * 1000))
+                base_schedule = tf.keras.optimizers.schedules.CosineDecay(
+                    initial_learning_rate=config.learning_rate,
+                    decay_steps=decay_steps,
+                    alpha=alpha if alpha is not None else 0.0,
+                )
+            if use_warmup and warmup_steps > 0:
+                return WarmupSchedule(
+                    base_schedule=base_schedule,
+                    warmup_steps=warmup_steps,
+                    target_learning_rate=config.learning_rate,
+                )
+            return base_schedule
         elif config.scheduler == "exponential":
             return tf.keras.optimizers.schedules.ExponentialDecay(
                 initial_learning_rate=config.learning_rate,
@@ -509,7 +522,7 @@ class XTTSTrainer:
             data_path=train_data_path,
             config=self.config.data,
             subset="train",
-            download=False
+            download=getattr(self.config.data, "auto_download_ljspeech", False)
         )
         
         # Create validation dataset
@@ -854,17 +867,18 @@ class XTTSTrainer:
 
                     # Mixed precision handling (Keras 3 API)
                     is_mixed = (tf.keras.mixed_precision.global_policy().name == 'mixed_float16')
+                    trainable_vars = self._trainable_variables()
                     if is_mixed and hasattr(self.optimizer, 'scale_loss'):
                         scaled_loss = self.optimizer.scale_loss(loss_for_grad)
-                        gradients = tape.gradient(scaled_loss, self.model.trainable_variables)
+                        gradients = tape.gradient(scaled_loss, trainable_vars)
                         if hasattr(self.optimizer, 'get_unscaled_gradients'):
                             gradients = self.optimizer.get_unscaled_gradients(gradients)
                     else:
-                        gradients = tape.gradient(loss_for_grad, self.model.trainable_variables)
+                        gradients = tape.gradient(loss_for_grad, trainable_vars)
 
                 grad_var_pairs = [
                     (g, v)
-                    for g, v in zip(gradients, self.model.trainable_variables)
+                    for g, v in zip(gradients, trainable_vars)
                     if g is not None
                 ]
 
@@ -1146,11 +1160,12 @@ class XTTSTrainer:
                     loss = self.criterion(y_true, y_pred)
                 
                 # Test gradient computation
-                gradients = tape.gradient(loss, self.model.trainable_variables)
-                
+                trainable_vars = self._trainable_variables()
+                gradients = tape.gradient(loss, trainable_vars)
+
                 optimal_batch_size = batch_size
                 self.logger.info(f"Batch size {batch_size} successful")
-                
+
                 # Clear memory
                 del outputs, gradients, loss, y_true, y_pred
                 tf.keras.backend.clear_session()
@@ -1177,6 +1192,27 @@ class XTTSTrainer:
         except Exception:
             pass
         return value
+
+    def _trainable_variables(self) -> List[tf.Variable]:
+        """
+        Return trainable variables excluding frozen vocoder weights.
+
+        Some Keras 3 builds still surface frozen vocoder layers in
+        `model.trainable_variables`; filtering keeps the optimizer
+        aligned with the intended frozen components.
+        """
+        trainable_vars = list(self.model.trainable_variables)
+        if not trainable_vars:
+            return trainable_vars
+
+        filtered_vars: List[tf.Variable] = []
+        for var in trainable_vars:
+            path = getattr(var, "path", "")
+            name = getattr(var, "name", "")
+            if ("vocoder/" in path) or ("vocoder/" in name):
+                continue
+            filtered_vars.append(var)
+        return filtered_vars
 
     def _next_batch(self) -> Tuple[tf.Tensor, tf.Tensor, tf.Tensor, tf.Tensor]:
         """Return next batch from stored train dataset, unwrapping distributed values."""
@@ -1224,18 +1260,20 @@ class XTTSTrainer:
             batch_data = self._next_batch()
         text_sequences, mel_spectrograms, text_lengths, mel_lengths = batch_data
 
+        # Only enforce hard length caps when static padding is in use
+        use_static_shapes = getattr(self.config.data, 'pad_to_fixed_length', False)
+
         max_text_len = getattr(self.config.model, 'max_attention_sequence_length', None)
-        if max_text_len:
+        if use_static_shapes and max_text_len:
             text_sequences = text_sequences[:, :max_text_len]
             text_lengths = tf.minimum(text_lengths, max_text_len)
 
         max_mel_len = getattr(self.config.data, 'max_mel_frames', None)
-        if max_mel_len:
+        if use_static_shapes and max_mel_len:
             mel_spectrograms = mel_spectrograms[:, :max_mel_len, :]
             mel_lengths = tf.minimum(mel_lengths, max_mel_len)
         
         # CRITICAL FIX: Use static shapes when available
-        use_static_shapes = getattr(self.config.data, 'pad_to_fixed_length', False)
         
         # Split batch into micro-batches
         micro_batch_size = tf.shape(text_sequences)[0] // accumulation_steps
@@ -1251,6 +1289,7 @@ class XTTSTrainer:
 
         accumulated_gradients = None
         total_losses = {}
+        trainable_vars_ref: Optional[List[tf.Variable]] = None
         
         # Reuse device context and placement logic similar to train_step
         with get_device_context():
@@ -1414,8 +1453,22 @@ class XTTSTrainer:
                     )
                     scaled_loss = raw_total_tensor / accum_steps_tensor
                 
-                grads = tape.gradient(scaled_loss, self.model.trainable_variables)
-                
+                current_trainable_vars = self._trainable_variables()
+                grads = tape.gradient(scaled_loss, current_trainable_vars)
+
+                variables_changed = False
+                if trainable_vars_ref is None:
+                    variables_changed = True
+                elif len(current_trainable_vars) != len(trainable_vars_ref):
+                    variables_changed = True
+                else:
+                    variables_changed = any(
+                        a is not b for a, b in zip(trainable_vars_ref, current_trainable_vars)
+                    )
+                if variables_changed:
+                    accumulated_gradients = None
+                trainable_vars_ref = current_trainable_vars
+
                 # Accumulate gradients safely
                 if accumulated_gradients is None:
                     accumulated_gradients = [(_to_dense_if_indexed(g) if g is not None else None) for g in grads]
@@ -1449,7 +1502,8 @@ class XTTSTrainer:
             clip_norm = getattr(self.config.training, 'gradient_clip_norm', 0.5)
             accumulated_gradients, _ = tf.clip_by_global_norm(accumulated_gradients, clip_norm=clip_norm)
             with self.strategy.scope():
-                self.optimizer.apply_gradients(zip(accumulated_gradients, self.model.trainable_variables))
+                target_trainable_vars = trainable_vars_ref or self._trainable_variables()
+                self.optimizer.apply_gradients(zip(accumulated_gradients, target_trainable_vars))
 
         # Average losses across micro-steps
         for key in list(total_losses.keys()):
@@ -2457,7 +2511,54 @@ class XTTSTrainer:
                     # Save audio file
                     audio_filename = f"eval_{idx:02d}.wav"
                     audio_path = step_dir / audio_filename
-                    sf.write(str(audio_path), audio_waveform, self.config.model.sample_rate)
+                    try:
+                        if sf is not None:
+                            sf.write(str(audio_path), audio_waveform, self.config.model.sample_rate)
+                        else:
+                            audio_tensor = tf.constant(audio_waveform, dtype=tf.float32)
+                            audio_tensor = tf.expand_dims(audio_tensor, axis=1)  # [samples, 1]
+                            wav_bytes = tf.audio.encode_wav(
+                                audio_tensor,
+                                sample_rate=self.config.model.sample_rate
+                            )
+                            tf.io.write_file(str(audio_path), wav_bytes)
+                    except Exception as write_err:
+                        self.logger.warning(f"Could not write WAV file for sample {idx}: {write_err}")
+                        continue
+
+                    # Save mel spectrogram image for quick inspection
+                    mel_image_filename = f"eval_{idx:02d}_mel.png"
+                    mel_image_path = step_dir / mel_image_filename
+                    mel_image_bytes = None
+                    fig = None
+                    buffer = None
+                    try:
+                        fig, ax = plt.subplots(figsize=(8, 4))
+                        im = ax.imshow(
+                            mel_np.T,
+                            origin="lower",
+                            aspect="auto",
+                            interpolation="nearest"
+                        )
+                        fig.colorbar(im, ax=ax)
+                        ax.set_title("Predicted Mel Spectrogram")
+                        ax.set_xlabel("Frame")
+                        ax.set_ylabel("Mel Bin")
+                        fig.tight_layout()
+
+                        buffer = io.BytesIO()
+                        fig.savefig(buffer, format="png")
+                        buffer.seek(0)
+                        mel_image_bytes = buffer.getvalue()
+                        with open(mel_image_path, "wb") as img_file:
+                            img_file.write(mel_image_bytes)
+                    except Exception as plot_err:
+                        self.logger.debug(f"Could not save spectrogram for sample {idx}: {plot_err}")
+                    finally:
+                        if fig is not None:
+                            plt.close(fig)
+                        if buffer is not None:
+                            buffer.close()
                     
                     # Save text file for reference
                     text_filename = f"eval_{idx:02d}.txt"
@@ -2486,6 +2587,14 @@ class XTTSTrainer:
                                     text,
                                     step=self.current_step
                                 )
+                                if mel_image_bytes is not None:
+                                    image_tensor = tf.image.decode_png(mel_image_bytes, channels=4)
+                                    image_tensor = tf.expand_dims(image_tensor, axis=0)
+                                    tf.summary.image(
+                                        f"text2audio_eval/mel_{idx}",
+                                        image_tensor,
+                                        step=self.current_step
+                                    )
                             self.summary_writer.flush()
                         except Exception as e:
                             self.logger.debug(f"TensorBoard logging failed for sample {idx}: {e}")
@@ -2573,9 +2682,10 @@ class XTTSTrainer:
         try:
             opt_weights = _get_opt_weights(self.optimizer)
             if not opt_weights:
-                dummy_grads = [tf.zeros_like(var) for var in self.model.trainable_variables]
+                trainable_vars = self._trainable_variables()
+                dummy_grads = [tf.zeros_like(var) for var in trainable_vars]
                 with self.strategy.scope():
-                    self.optimizer.apply_gradients(zip(dummy_grads, self.model.trainable_variables))
+                    self.optimizer.apply_gradients(zip(dummy_grads, trainable_vars))
                 opt_weights = _get_opt_weights(self.optimizer)
             
             optimizer_state['weights'] = opt_weights
@@ -2748,4 +2858,40 @@ class NoamSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
             "d_model": int(self.d_model.numpy()),
             "warmup_steps": int(self.warmup_steps.numpy()),
             "scale": float(self.scale.numpy()),
+        }
+
+
+class WarmupSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    """Linear warmup wrapper for an existing learning-rate schedule."""
+
+    def __init__(
+        self,
+        base_schedule: tf.keras.optimizers.schedules.LearningRateSchedule,
+        warmup_steps: int,
+        target_learning_rate: float,
+    ):
+        super().__init__()
+        self.base_schedule = base_schedule
+        self.warmup_steps = int(max(1, warmup_steps))
+        self.target_learning_rate = float(target_learning_rate)
+
+    def __call__(self, step):
+        step = tf.cast(step, tf.float32)
+        warmup_steps = tf.cast(self.warmup_steps, tf.float32)
+        target_lr = tf.cast(self.target_learning_rate, tf.float32)
+
+        # Linear warmup phase
+        warmup_lr = target_lr * (step / warmup_steps)
+
+        # Base schedule after warmup
+        shifted_step = tf.maximum(step - warmup_steps, 0.0)
+        base_lr = self.base_schedule(shifted_step)
+
+        return tf.where(step < warmup_steps, warmup_lr, base_lr)
+
+    def get_config(self):
+        return {
+            "warmup_steps": self.warmup_steps,
+            "target_learning_rate": self.target_learning_rate,
+            "base_schedule": tf.keras.utils.serialize_keras_object(self.base_schedule),
         }
