@@ -1624,7 +1624,6 @@ def main():
         model_gpu=args.model_gpu,
         pipeline_buffer_size=args.buffer_size,
         model_start_delay=args.model_start_delay,
-        download_ljspeech=args.download_ljspeech,
     )
 
     # Apply optimization level

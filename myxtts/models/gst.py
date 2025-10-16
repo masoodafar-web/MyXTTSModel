@@ -213,6 +213,16 @@ class GlobalStyleToken(tf.keras.layers.Layer):
         if reference_mel is not None:
             # Extract reference embedding from mel spectrogram
             reference_embedding = self.reference_encoder(reference_mel, training=training)
+            if self.config.gst_reference_encoder_dim != self.style_token_dim:
+                if self.config.gst_reference_encoder_dim < self.style_token_dim:
+                    pad_width = self.style_token_dim - self.config.gst_reference_encoder_dim
+                    padding = tf.zeros(
+                        [batch_size, pad_width],
+                        dtype=reference_embedding.dtype
+                    )
+                    reference_embedding = tf.concat([reference_embedding, padding], axis=-1)
+                else:
+                    reference_embedding = reference_embedding[:, :self.style_token_dim]
             # Add sequence dimension for attention: [batch, 1, dim]
             query = tf.expand_dims(reference_embedding, 1)
         elif style_weights is not None:

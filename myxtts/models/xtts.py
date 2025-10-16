@@ -538,8 +538,29 @@ class XTTS(tf.keras.Model):
             self.mel_decoder = MelDecoder(config, name="mel_decoder")
             self.decoder_strategy = None
         
-        # HiFi-GAN vocoder
+        # HiFi-GAN vocoder (kept frozen during training; used only for eval)
         self.vocoder = Vocoder(config, name="vocoder")
+        self.vocoder.trainable = False
+        # Some TF/Keras builds do not expose the `submodules` helper, so fall back gracefully.
+        submodules = getattr(self.vocoder, "submodules", None)
+        if submodules:
+            for sublayer in submodules:
+                sublayer.trainable = False
+        elif hasattr(self.vocoder, "layers"):
+            for sublayer in self.vocoder.layers:
+                sublayer.trainable = False
+        else:
+            manual_sublayers = []
+            for attr in ("pre_conv", "post_conv", "activation"):
+                layer = getattr(self.vocoder, attr, None)
+                if hasattr(layer, "trainable"):
+                    manual_sublayers.append(layer)
+            manual_sublayers.extend(getattr(self.vocoder, "upsampling_layers", []))
+            for resblock_group in getattr(self.vocoder, "resblocks", []):
+                manual_sublayers.extend(resblock_group if isinstance(resblock_group, (list, tuple)) else [resblock_group])
+            for sublayer in manual_sublayers:
+                if hasattr(sublayer, "trainable"):
+                    sublayer.trainable = False
     
     def call(
         self,

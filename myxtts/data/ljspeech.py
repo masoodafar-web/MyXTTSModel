@@ -327,6 +327,7 @@ class LJSpeechDataset:
     def _prepare_dataset(self):
         """Download and extract dataset if necessary."""
         if not self.dataset_dir.exists() and self.download_flag:
+        # if self.download_flag:
             print("Downloading LJSpeech dataset...")
             self._download_dataset()
         

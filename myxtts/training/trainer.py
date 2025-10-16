@@ -522,7 +522,7 @@ class XTTSTrainer:
             data_path=train_data_path,
             config=self.config.data,
             subset="train",
-            download=getattr(self.config.data, "auto_download_ljspeech", False)
+            download=True
         )
         
         # Create validation dataset
