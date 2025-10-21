@@ -182,6 +182,8 @@ class XTTSTrainer:
             pass
 
         self._tb_train_step = 0
+        # Track stability incidents to trigger conservative fallbacks outside tf.function
+        self._nonfinite_grad_streak = 0
 
         # Initialize model and optimizer within strategy scope
         with self.strategy.scope():
@@ -876,6 +878,7 @@ class XTTSTrainer:
                     else:
                         gradients = tape.gradient(loss_for_grad, trainable_vars)
 
+                # Sanity: drop Nones from gradients
                 grad_var_pairs = [
                     (g, v)
                     for g, v in zip(gradients, trainable_vars)
@@ -892,12 +895,34 @@ class XTTSTrainer:
                         "total_loss": loss,
                         **individual_losses
                     }
-
+                
+                # Clip gradients and compute global norm
                 grad_tensors, trainable_vars = zip(*grad_var_pairs)
                 grad_tensors, global_norm = tf.clip_by_global_norm(grad_tensors, clip_norm=0.5)
 
+                # Guard: replace any non-finite gradient values with zeros to avoid corrupting weights
+                # Also detect if the global norm itself is non-finite
+                is_global_finite = tf.math.is_finite(global_norm)
+                sanitized_grads = []
+                for g in grad_tensors:
+                    finite_mask = tf.math.is_finite(g)
+                    sanitized_grads.append(tf.where(finite_mask, g, tf.zeros_like(g)))
+
+                # Optional warning when any non-finite gradient is detected
+                any_bad_grad = tf.logical_not(
+                    tf.reduce_all(
+                        tf.stack([tf.reduce_all(tf.math.is_finite(g)) for g in grad_tensors])
+                    )
+                )
+                # Use tf.print inside tf.function for lightweight logging
+                tf.cond(
+                    tf.logical_or(tf.logical_not(is_global_finite), any_bad_grad),
+                    lambda: tf.print("WARNING: Non-finite gradients detected — masking to zero for this step."),
+                    lambda: tf.no_op(),
+                )
+
                 # Apply gradients (already in distributed context, no need for strategy.scope())
-                self.optimizer.apply_gradients(zip(grad_tensors, trainable_vars))
+                self.optimizer.apply_gradients(zip(sanitized_grads, trainable_vars))
                 
                 # Get individual losses and stability metrics
                 individual_losses = self.criterion.get_losses()
@@ -917,6 +942,12 @@ class XTTSTrainer:
                         stability_metrics = self.criterion.get_stability_metrics()
                     except Exception:
                         stability_metrics = {}
+
+                # Expose gradient diagnostics
+                individual_losses["gradient_norm"] = tf.cast(global_norm, tf.float32)
+                individual_losses["nonfinite_gradients"] = tf.cast(
+                    tf.logical_or(tf.logical_not(is_global_finite), any_bad_grad), tf.float32
+                )
 
                 if weighted_losses:
                     for key, value in weighted_losses.items():
@@ -2274,6 +2305,29 @@ class XTTSTrainer:
                     if key not in train_losses:
                         train_losses[key] = 0.0
                     train_losses[key] += float(value)
+
+                # Stability supervisor (Python-side to avoid tf.function side-effects)
+                try:
+                    nonfinite_flag = float(step_losses.get("nonfinite_gradients", 0.0))
+                except Exception:
+                    nonfinite_flag = 0.0
+                if nonfinite_flag > 0.5:
+                    self._nonfinite_grad_streak += 1
+                else:
+                    self._nonfinite_grad_streak = 0
+
+                # If repeated incidents, disable adaptive loss weights as a safety fallback
+                if self._nonfinite_grad_streak >= 3:
+                    self.logger.warning(
+                        "Repeated non-finite gradients detected (%d in a row). Disabling adaptive loss weights for stability.",
+                        self._nonfinite_grad_streak,
+                    )
+                    try:
+                        if hasattr(self.criterion, 'disable_adaptive_weights'):
+                            self.criterion.disable_adaptive_weights()
+                    except Exception:
+                        pass
+                    self._nonfinite_grad_streak = 0
                 
                 num_batches += 1
                 # Only increment step for non-accumulation training or last accumulation step
@@ -2533,6 +2587,19 @@ class XTTSTrainer:
                     fig = None
                     buffer = None
                     try:
+                        # Quick degeneracy check to surface collapsed outputs early
+                        try:
+                            m_mean = float(np.mean(mel_np))
+                            m_std = float(np.std(mel_np))
+                            m_min = float(np.min(mel_np))
+                            m_max = float(np.max(mel_np))
+                            if m_std < 1e-4:
+                                self.logger.warning(
+                                    "Degenerate mel generated (std %.2e; min %.3f max %.3f mean %.3f). Model likely collapsed or untrained.",
+                                    m_std, m_min, m_max, m_mean,
+                                )
+                        except Exception:
+                            pass
                         fig, ax = plt.subplots(figsize=(8, 4))
                         im = ax.imshow(
                             mel_np.T,

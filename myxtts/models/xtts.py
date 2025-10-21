@@ -911,6 +911,9 @@ class XTTS(tf.keras.Model):
             current_mel = tf.zeros([batch_size, 1, self.config.n_mels])
             
             decoder = self.mel_decoder if hasattr(self, 'mel_decoder') else self.decoder_strategy.decoder
+
+            # Encoder mask (assume all tokens valid if lengths are unknown at inference)
+            enc_mask = tf.ones([batch_size, tf.shape(text_encoded)[1]], dtype=tf.float32)
             
             # Calculate minimum frames based on text length
             # Assume roughly 10-15 mel frames per character for reasonable speech
@@ -926,10 +929,18 @@ class XTTS(tf.keras.Model):
             for step in range(max_length):
                 # Decode current step
                 if hasattr(self, 'mel_decoder'):
+                    # Build causal mask for current autoregressive length
+                    cur_len = tf.shape(current_mel)[1]
+                    dec_mask = tf.linalg.band_part(tf.ones([cur_len, cur_len]), -1, 0)
+                    dec_mask = tf.expand_dims(dec_mask, 0)
+                    dec_mask = tf.tile(dec_mask, [batch_size, 1, 1])
                     mel_output, stop_tokens, pitch_output, energy_output = self.mel_decoder(
                         current_mel,
                         text_encoded,
                         speaker_embedding=speaker_embedding,
+                        style_embedding=style_embedding,
+                        encoder_mask=enc_mask,
+                        decoder_mask=dec_mask,
                         training=False
                     )
                 else:
