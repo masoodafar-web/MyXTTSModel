@@ -1107,6 +1107,14 @@ def build_config(
         wavs_eval_dir="wavs",
     )
 
+    # Align token cap with fixed padding when static shapes are used to prevent
+    # TF padded_batch errors ("Attempted to pad to a smaller size than the input element").
+    try:
+        if getattr(d, "pad_to_fixed_length", False) and getattr(d, "max_text_length", None):
+            d.max_text_tokens = d.max_text_length
+    except Exception:
+        pass
+
     return XTTSConfig(model=m, data=d, training=t)
 
 

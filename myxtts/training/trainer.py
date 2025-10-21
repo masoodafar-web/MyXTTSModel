@@ -937,6 +937,8 @@ class XTTSTrainer:
                 except Exception:
                     weighted_losses = {}
 
+                # Determine if we're under a multi-replica strategy (e.g., MirroredStrategy)
+                is_multi_strategy = getattr(self.strategy, 'num_replicas_in_sync', 1) > 1
                 if not is_multi_strategy:
                     try:
                         stability_metrics = self.criterion.get_stability_metrics()

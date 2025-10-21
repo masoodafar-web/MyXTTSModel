@@ -554,8 +554,9 @@ class XTTSLoss(tf.keras.losses.Loss):
             else:
                 mel_weight = self.mel_loss_weight
 
-            total_loss += mel_weight * mel_l
-            weighted_contrib["mel_loss"] = _safe("w_mel_loss", mel_weight * mel_l)
+            mel_l_safe = losses["mel_loss"]
+            total_loss += mel_weight * mel_l_safe
+            weighted_contrib["mel_loss"] = _safe("w_mel_loss", mel_weight * mel_l_safe)
             weighted_contrib["mel_weight"] = _safe("w_mel_weight", mel_weight)
 
         # Stop token loss
@@ -566,8 +567,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true.get("mel_lengths")
             )
             losses["stop_loss"] = _safe("stop_loss", stop_l)
-            total_loss += self.stop_loss_weight * stop_l
-            weighted_contrib["stop_loss"] = _safe("w_stop_loss", self.stop_loss_weight * stop_l)
+            stop_l_safe = losses["stop_loss"]
+            total_loss += self.stop_loss_weight * stop_l_safe
+            weighted_contrib["stop_loss"] = _safe("w_stop_loss", self.stop_loss_weight * stop_l_safe)
 
         # Attention loss (if attention weights available)
         if ("attention_weights" in y_pred and 
@@ -579,8 +581,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["mel_lengths"]
             )
             losses["attention_loss"] = _safe("attention_loss", attn_l)
-            total_loss += self.attention_loss_weight * attn_l
-            weighted_contrib["attention_loss"] = _safe("w_attention_loss", self.attention_loss_weight * attn_l)
+            attn_l_safe = losses["attention_loss"]
+            total_loss += self.attention_loss_weight * attn_l_safe
+            weighted_contrib["attention_loss"] = _safe("w_attention_loss", self.attention_loss_weight * attn_l_safe)
 
         # Duration loss (if duration predictions available)
         if ("duration_pred" in y_pred and 
@@ -592,8 +595,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["text_lengths"]
             )
             losses["duration_loss"] = _safe("duration_loss", dur_l)
-            total_loss += self.duration_loss_weight * dur_l
-            weighted_contrib["duration_loss"] = _safe("w_duration_loss", self.duration_loss_weight * dur_l)
+            dur_l_safe = losses["duration_loss"]
+            total_loss += self.duration_loss_weight * dur_l_safe
+            weighted_contrib["duration_loss"] = _safe("w_duration_loss", self.duration_loss_weight * dur_l_safe)
 
         # Pitch loss (if pitch predictions available)
         if ("pitch_output" in y_pred and 
@@ -605,8 +609,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["mel_lengths"]
             )
             losses["pitch_loss"] = _safe("pitch_loss", pitch_l)
-            total_loss += self.pitch_loss_weight * pitch_l
-            weighted_contrib["pitch_loss"] = _safe("w_pitch_loss", self.pitch_loss_weight * pitch_l)
+            pitch_l_safe = losses["pitch_loss"]
+            total_loss += self.pitch_loss_weight * pitch_l_safe
+            weighted_contrib["pitch_loss"] = _safe("w_pitch_loss", self.pitch_loss_weight * pitch_l_safe)
 
         # Energy loss (if energy predictions available)
         if ("energy_output" in y_pred and 
@@ -618,8 +623,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["mel_lengths"]
             )
             losses["energy_loss"] = _safe("energy_loss", energy_l)
-            total_loss += self.energy_loss_weight * energy_l
-            weighted_contrib["energy_loss"] = _safe("w_energy_loss", self.energy_loss_weight * energy_l)
+            energy_l_safe = losses["energy_loss"]
+            total_loss += self.energy_loss_weight * energy_l_safe
+            weighted_contrib["energy_loss"] = _safe("w_energy_loss", self.energy_loss_weight * energy_l_safe)
 
         # Prosody pitch loss on text-level prosody predictor
         if ("prosody_pitch" in y_pred and
@@ -631,8 +637,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["text_lengths"]
             )
             losses["prosody_pitch_loss"] = _safe("prosody_pitch_loss", prosody_pitch_l)
-            total_loss += self.prosody_pitch_loss_weight * prosody_pitch_l
-            weighted_contrib["prosody_pitch_loss"] = _safe("w_prosody_pitch_loss", self.prosody_pitch_loss_weight * prosody_pitch_l)
+            prosody_pitch_safe = losses["prosody_pitch_loss"]
+            total_loss += self.prosody_pitch_loss_weight * prosody_pitch_safe
+            weighted_contrib["prosody_pitch_loss"] = _safe("w_prosody_pitch_loss", self.prosody_pitch_loss_weight * prosody_pitch_safe)
 
         if ("prosody_energy" in y_pred and
             "prosody_energy_target" in y_true and
@@ -643,8 +650,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["text_lengths"]
             )
             losses["prosody_energy_loss"] = _safe("prosody_energy_loss", prosody_energy_l)
-            total_loss += self.prosody_energy_loss_weight * prosody_energy_l
-            weighted_contrib["prosody_energy_loss"] = _safe("w_prosody_energy_loss", self.prosody_energy_loss_weight * prosody_energy_l)
+            prosody_energy_safe = losses["prosody_energy_loss"]
+            total_loss += self.prosody_energy_loss_weight * prosody_energy_safe
+            weighted_contrib["prosody_energy_loss"] = _safe("w_prosody_energy_loss", self.prosody_energy_loss_weight * prosody_energy_safe)
 
         if ("prosody_speaking_rate" in y_pred and
             "prosody_speaking_rate_target" in y_true and
@@ -655,8 +663,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true["text_lengths"]
             )
             losses["speaking_rate_loss"] = _safe("speaking_rate_loss", speaking_rate_l)
-            total_loss += self.speaking_rate_loss_weight * speaking_rate_l
-            weighted_contrib["speaking_rate_loss"] = _safe("w_speaking_rate_loss", self.speaking_rate_loss_weight * speaking_rate_l)
+            speaking_rate_safe = losses["speaking_rate_loss"]
+            total_loss += self.speaking_rate_loss_weight * speaking_rate_safe
+            weighted_contrib["speaking_rate_loss"] = _safe("w_speaking_rate_loss", self.speaking_rate_loss_weight * speaking_rate_safe)
 
         # Voice similarity loss (contrastive speaker loss)
         if ("speaker_embedding" in y_pred and 
@@ -666,8 +675,9 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_pred["speaker_embedding"]
             )
             losses["voice_similarity_loss"] = _safe("voice_similarity_loss", voice_sim_l)
-            total_loss += self.voice_similarity_loss_weight * voice_sim_l
-            weighted_contrib["voice_similarity_loss"] = _safe("w_voice_similarity_loss", self.voice_similarity_loss_weight * voice_sim_l)
+            voice_sim_safe = losses["voice_similarity_loss"]
+            total_loss += self.voice_similarity_loss_weight * voice_sim_safe
+            weighted_contrib["voice_similarity_loss"] = _safe("w_voice_similarity_loss", self.voice_similarity_loss_weight * voice_sim_safe)
 
         # Diffusion loss (for diffusion-based decoders)
         if ("diffusion_noise_pred" in y_pred and 
@@ -678,16 +688,18 @@ class XTTSLoss(tf.keras.losses.Loss):
                 y_true.get("mel_lengths")
             )
             losses["diffusion_loss"] = _safe("diffusion_loss", diff_l)
-            total_loss += self.diffusion_loss_weight * diff_l
-            weighted_contrib["diffusion_loss"] = _safe("w_diffusion_loss", self.diffusion_loss_weight * diff_l)
+            diff_l_safe = losses["diffusion_loss"]
+            total_loss += self.diffusion_loss_weight * diff_l_safe
+            weighted_contrib["diffusion_loss"] = _safe("w_diffusion_loss", self.diffusion_loss_weight * diff_l_safe)
 
         # Gradient participation regularization: Ensure all model outputs participate in gradients
         # This prevents the "Gradients do not exist for variables" warning by adding a small
         # regularization term for outputs that don't have corresponding targets
         gradient_reg_loss = tf.cast(self._ensure_gradient_participation(y_pred, y_true), tf.float32)
         losses["gradient_participation_loss"] = _safe("gradient_participation_loss", gradient_reg_loss)
-        total_loss += gradient_reg_loss
-        weighted_contrib["gradient_participation_loss"] = _safe("w_gradient_participation_loss", gradient_reg_loss)
+        grad_reg_safe = losses["gradient_participation_loss"]
+        total_loss += grad_reg_safe
+        weighted_contrib["gradient_participation_loss"] = _safe("w_gradient_participation_loss", grad_reg_safe)
 
         # Apply loss smoothing and spike detection (optional)
         raw_total_loss = total_loss
