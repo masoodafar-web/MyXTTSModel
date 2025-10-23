@@ -112,6 +112,11 @@ class XTTSTrainer:
         self._val_dataset_raw = None
         self._spectrogram_logging_disabled_warned = False
         
+        # Initialize training samples logging
+        self.training_samples_dir = getattr(training_cfg, 'training_samples_dir', 'training_samples') if training_cfg else 'training_samples'
+        self.training_samples_log_interval = max(0, getattr(training_cfg, 'training_samples_log_interval', 100)) if training_cfg else 100
+        self._last_training_samples_log_step = 0
+        
         # Configure GPUs before any TensorFlow device queries
         try:
             memory_fraction = getattr(config.training, 'max_memory_fraction', 0.9)
@@ -1849,6 +1854,136 @@ class XTTSTrainer:
         except Exception as err:
             self.logger.debug(f"TensorBoard logging skipped for {prefix}: {err}")
 
+    def _log_training_samples_to_tensorboard(self, step: int) -> None:
+        """
+        Log images and audio files from training_samples directory to TensorBoard.
+        
+        This method scans the training_samples folder for:
+        - Image files (.png, .jpg, .jpeg) - logs as images
+        - Audio files (.wav, .mp3, .flac) - logs as audio
+        
+        Args:
+            step: Current training step for logging
+        """
+        if not self.summary_writer:
+            return
+            
+        # Check if we should log at this step
+        if self.training_samples_log_interval <= 0:
+            return
+        if step <= 0:
+            return
+        if step == self._last_training_samples_log_step:
+            return
+        if step % self.training_samples_log_interval != 0:
+            return
+            
+        # Check if training_samples directory exists
+        samples_path = Path(self.training_samples_dir)
+        if not samples_path.exists():
+            self.logger.debug(f"Training samples directory not found: {samples_path}")
+            return
+            
+        try:
+            # Define supported file extensions
+            image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif'}
+            audio_extensions = {'.wav', '.mp3', '.flac', '.ogg'}
+            
+            # Collect files
+            image_files = []
+            audio_files = []
+            
+            for file_path in samples_path.iterdir():
+                if file_path.is_file():
+                    ext = file_path.suffix.lower()
+                    if ext in image_extensions:
+                        image_files.append(file_path)
+                    elif ext in audio_extensions:
+                        audio_files.append(file_path)
+            
+            # Log images to TensorBoard
+            if image_files:
+                self.logger.info(f"📸 Logging {len(image_files)} images from {self.training_samples_dir} to TensorBoard")
+                with self.summary_writer.as_default():
+                    for img_path in sorted(image_files):
+                        try:
+                            # Read and decode image
+                            img_bytes = tf.io.read_file(str(img_path))
+                            
+                            # Decode based on extension
+                            ext = img_path.suffix.lower()
+                            if ext == '.png':
+                                img_tensor = tf.image.decode_png(img_bytes, channels=3)
+                            elif ext in ['.jpg', '.jpeg']:
+                                img_tensor = tf.image.decode_jpeg(img_bytes, channels=3)
+                            elif ext == '.bmp':
+                                img_tensor = tf.image.decode_bmp(img_bytes, channels=3)
+                            elif ext == '.gif':
+                                img_tensor = tf.image.decode_gif(img_bytes)
+                                img_tensor = img_tensor[0]  # Take first frame
+                            else:
+                                continue
+                            
+                            # Add batch dimension
+                            img_tensor = tf.expand_dims(img_tensor, axis=0)
+                            
+                            # Log to TensorBoard
+                            tag = f"training_samples/image/{img_path.stem}"
+                            tf.summary.image(tag, img_tensor, step=step)
+                            
+                        except Exception as e:
+                            self.logger.debug(f"Failed to log image {img_path.name}: {e}")
+            
+            # Log audio files to TensorBoard
+            if audio_files:
+                self.logger.info(f"🔊 Logging {len(audio_files)} audio files from {self.training_samples_dir} to TensorBoard")
+                with self.summary_writer.as_default():
+                    for audio_path in sorted(audio_files):
+                        try:
+                            # Read audio file
+                            ext = audio_path.suffix.lower()
+                            
+                            if ext == '.wav':
+                                # Read WAV file using TensorFlow
+                                audio_bytes = tf.io.read_file(str(audio_path))
+                                audio_tensor, sample_rate = tf.audio.decode_wav(audio_bytes, desired_channels=1)
+                                sample_rate = int(sample_rate.numpy())
+                            elif sf is not None:
+                                # Use soundfile for other formats
+                                audio_data, sample_rate = sf.read(str(audio_path), always_2d=True)
+                                # Convert to mono if stereo
+                                if audio_data.shape[1] > 1:
+                                    audio_data = np.mean(audio_data, axis=1, keepdims=True)
+                                audio_tensor = tf.constant(audio_data, dtype=tf.float32)
+                            else:
+                                # Skip non-WAV files if soundfile is not available
+                                self.logger.debug(f"Skipping {audio_path.name}: soundfile library not available")
+                                continue
+                            
+                            # Ensure correct shape for TensorBoard: [batch, frames, channels]
+                            if len(audio_tensor.shape) == 2:
+                                audio_tensor = tf.expand_dims(audio_tensor, axis=0)
+                            elif len(audio_tensor.shape) == 1:
+                                audio_tensor = tf.reshape(audio_tensor, [1, -1, 1])
+                            
+                            # Log to TensorBoard
+                            tag = f"training_samples/audio/{audio_path.stem}"
+                            tf.summary.audio(tag, audio_tensor, sample_rate=sample_rate, step=step)
+                            
+                        except Exception as e:
+                            self.logger.debug(f"Failed to log audio {audio_path.name}: {e}")
+                    
+                    self.summary_writer.flush()
+            
+            # Update last logged step
+            self._last_training_samples_log_step = step
+            
+            if image_files or audio_files:
+                self.logger.info(f"✅ Training samples logged to TensorBoard at step {step}")
+                
+        except Exception as e:
+            self.logger.debug(f"Failed to log training samples: {e}")
+
     def _should_log_spectrogram(self, step: int, prefix: str) -> bool:
         if not self.summary_writer or self.spectrogram_log_interval <= 0:
             return False
@@ -2379,6 +2514,9 @@ class XTTSTrainer:
                 
                 # Check if text-to-audio evaluation should be performed
                 self._maybe_eval_text2audio()
+                
+                # Log training samples from directory (images and audio)
+                self._log_training_samples_to_tensorboard(self.current_step)
         
         except tf.errors.OutOfRangeError:
             # End of dataset reached

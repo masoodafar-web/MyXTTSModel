@@ -1387,6 +1387,20 @@ def main():
         action="store_true",
         help="Run TensorFlow functions eagerly for debugging"
     )
+    
+    # Training samples logging controls
+    parser.add_argument(
+        "--training-samples-dir",
+        type=str,
+        default="training_samples",
+        help="Directory containing training sample images/audio to log to TensorBoard (default: training_samples)"
+    )
+    parser.add_argument(
+        "--training-samples-log-interval",
+        type=int,
+        default=100,
+        help="Log training samples every N steps, 0 to disable (default: 100)"
+    )
 
     # Static shapes optimization for GPU utilization (CRITICAL FIX)
     parser.add_argument(
@@ -1645,6 +1659,12 @@ def main():
         setattr(config.training, 'tensorboard_log_dir', args.tensorboard_log_dir)
     if args.enable_eager_debug:
         setattr(config.training, 'enable_eager_debug', True)
+    
+    # Set training samples logging configuration
+    if args.training_samples_dir:
+        setattr(config.training, 'training_samples_dir', args.training_samples_dir)
+    if hasattr(args, 'training_samples_log_interval'):
+        setattr(config.training, 'training_samples_log_interval', args.training_samples_log_interval)
 
     # Log final configuration summary
     logger.info("=== Final Training Configuration ===")

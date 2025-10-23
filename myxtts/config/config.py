@@ -366,6 +366,10 @@ class TrainingConfig:
     text2audio_speaker_id: Optional[int] = None  # Speaker ID for multi-speaker models
     text2audio_log_tensorboard: bool = True  # Log audio to TensorBoard
     
+    # Training samples logging (for external images and audio)
+    training_samples_dir: str = "training_samples"  # Directory containing training sample images/audio
+    training_samples_log_interval: int = 100  # Log training samples every N steps (0 disables)
+    
     def __post_init__(self):
         if self.scheduler_params is None:
             self.scheduler_params = {}

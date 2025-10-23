@@ -230,3 +230,8 @@ tmp_runtime/
 spectral_analysis*.png
 spectral_analysis*.npy
 *_analysis*.npy
+
+# Training samples (keep directory, ignore files except README)
+training_samples/*
+!training_samples/README.md
+!training_samples/.gitkeep
