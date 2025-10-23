@@ -58,6 +58,51 @@ The training script now comes with sensible defaults that work out of the box:
 
 You can override any of these with command-line arguments!
 
+## 📊 TensorBoard Monitoring (New!)
+
+**Track training progress visually with images and audio!**
+
+This feature allows you to monitor training by logging:
+- 🖼️ **Images** from `training_samples` directory (spectrograms, visualizations)
+- 🔊 **Audio samples** from `training_samples` directory
+- 🎵 **Generated audio** samples during training
+- 📈 **Training metrics** and loss curves
+
+### Quick Setup
+
+```bash
+# 1. Create samples directory and add your files
+mkdir training_samples
+cp your_spectrograms/*.png training_samples/
+cp your_reference_audio/*.wav training_samples/
+
+# 2. Start training (samples logged automatically)
+python train_main.py --train-data ../dataset/dataset_train
+
+# 3. View in TensorBoard
+tensorboard --logdir=logs  # or ./checkpointsmain/tensorboard
+```
+
+Then open `http://localhost:6006` to see:
+- **IMAGES tab**: Your sample images and spectrograms
+- **AUDIO tab**: Your audio files and generated samples
+
+📖 **Full Guide**: See [TENSORBOARD_SAMPLES_GUIDE.md](TENSORBOARD_SAMPLES_GUIDE.md) for complete documentation
+🇮🇷 **راهنمای فارسی**: [TENSORBOARD_SAMPLES_GUIDE_FA.md](TENSORBOARD_SAMPLES_GUIDE_FA.md)
+
+### Configuration Options
+
+```bash
+# Custom samples directory
+python train_main.py --training-samples-dir ./my_samples
+
+# Change logging frequency (default: every 100 steps)
+python train_main.py --training-samples-log-interval 50
+
+# Custom TensorBoard directory
+python train_main.py --tensorboard-log-dir ./logs
+```
+
 ## 📁 Project Structure
 
 ```
