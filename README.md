@@ -30,7 +30,11 @@ cd MyXTTSModel
 # Install dependencies
 pip install -r requirements.txt
 
-# Validate your setup (recommended!)
+# 🆕 Validate your setup with diagnostic tools (recommended!)
+python utilities/diagnose_functional_issues.py --config configs/config.yaml
+python utilities/diagnose_gpu_issues.py --check-config configs/config.yaml
+
+# Or use the comprehensive validation script
 ./validate_setup.sh configs/config.yaml
 
 # Basic training - NOW WITH SMART DEFAULTS! 🎯
@@ -240,6 +244,24 @@ python3 train_main.py \
 
 ## 🔧 Troubleshooting
 
+### 🆕 Automatic Issue Diagnosis
+
+**NEW!** Use our diagnostic tools to automatically identify and fix issues:
+
+```bash
+# Check overall configuration for functional issues
+python utilities/diagnose_functional_issues.py --config config.yaml
+
+# Analyze convergence from training logs
+python utilities/diagnose_convergence.py --log-file training.log
+
+# Check GPU configuration and utilization
+python utilities/diagnose_gpu_issues.py --check-config config.yaml
+```
+
+📖 **See**: [DIAGNOSTIC_TOOLS_GUIDE.md](DIAGNOSTIC_TOOLS_GUIDE.md) for detailed usage  
+📖 **See**: [FUNCTIONAL_EVALUATION.md](FUNCTIONAL_EVALUATION.md) for comprehensive issue analysis
+
 ### Loss Plateau Issues
 
 If your loss plateaus and stops decreasing (e.g., stuck at 2.8):
@@ -333,6 +355,10 @@ python3 utilities/memory_optimizer.py
 ## 📚 Documentation
 
 Comprehensive guides available in the `docs/` directory:
+
+### 🆕 Diagnostic and Troubleshooting
+- **[Diagnostic Tools Guide](DIAGNOSTIC_TOOLS_GUIDE.md)** - Quick reference for automatic issue detection
+- **[Functional Evaluation](FUNCTIONAL_EVALUATION.md)** - Comprehensive functional issue analysis and solutions
 
 ### Validation and Testing
 - **[Validation Guide](docs/VALIDATION_GUIDE.md)** - Complete validation and testing guide
